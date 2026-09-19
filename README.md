@@ -4,7 +4,7 @@
 >
 > 原名 `dsh-session-link-pro`（0.2.4 及之前），**GitHub 仓库已于 2026-09-18 改名为 `dsh-team-link`**（旧地址由 GitHub 自动重定向）。历史会话日志里的旧工具名 `session_link_pro_*` 与消息 id 前缀 `slp-` 保持原样——它们是取证链，不做回写。
 
-[![tests](https://img.shields.io/badge/tests-675%20%2B%20138%20assertions-brightgreen)](#十测试)
+[![tests](https://img.shields.io/badge/tests-735%20%2B%20138%20assertions-brightgreen)](#十测试)
 [![version](https://img.shields.io/badge/version-0.3.7-blue)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
@@ -79,7 +79,7 @@ flowchart TB
     subgraph Shell["DSH shell（web profile）"]
         direction TB
         subgraph Host["宿主半边 · lib/index.js"]
-            T["8 个工具 + 1 条 /team_session 命令<br/>list / export / send / watch<br/>roster / team_read / team_append / rotate"]
+            T["8 个工具 + 2 条 / 命令<br/>list / export / send / watch<br/>roster / team_read / team_append / rotate<br/>/team_session · /team_rotate"]
             R["HTTP 路由<br/>GET /team-link/export"]
             W["看门狗巡逻定时器<br/>+ 换届到期清扫"]
             DL["深链解析（上游功能）<br/>dsh://session/&lt;id&gt;"]
@@ -167,7 +167,7 @@ sequenceDiagram
 | `team_link_roster` | 团队身份注册表（get / upsert-team / set-role / retire） |
 | `team_link_team_read` | 一次读齐 roster + decisions 末 20 条 + discipline 全文 + 两个 baseHash |
 | `team_link_team_append` | 写黑板：`decisions` 只追加 / `discipline` 整文件替换（乐观锁） |
-| `team_link_rotate` | 两阶段换届（prepare / claim），一次性令牌 + 域限定迁移 |
+| `team_link_rotate` | 两阶段换届（prepare / claim），一次性令牌 + 域限定迁移；`successor:"auto"` = 插件自建继任者 + 写交接文档 + followup 投递（§11.2） |
 
 > `team_link_export` 走 `sessionQuery` 读会话；`team_link_send` 走 `agents` 投递。两者都不需要目标会话正在被 UI 打开——但**目标必须有活动代理**（见第一节的 A4 诚实声明）。
 
@@ -534,7 +534,7 @@ sequenceDiagram
 - **令牌**：`randomUUID()`，绑定三元组 `(team, role, successor)`，**30 分钟**有效、成功认领即作废；
 - **快照**：把 prepare 时刻的 `pairs` / `trustedSenders` / `rememberTargets` / roster 全量写进 `rotationBackup`（对称撤销的还原依据）；
 - **广播**：向团队全部在任成员投递 `[rotation-freeze]` 冻结清单（停哨兵/后台 job → 确认无在飞动作 → 状态冻结回报 → 等待交接结果通知）；
-- **返回**：令牌明文（**唯一一次**）+ 掩码形式 + 交接指引（30 分钟有效、「交接内容由模型起草，机制与判断分离」、上任首动作建议 `/goal resume` 或建新 goal、错峰默认、半自动兜底）。
+- **返回**：令牌明文（**唯一一次**）+ 掩码形式 + 交接指引（30 分钟有效、「交接内容由模型起草，机制与判断分离」、上任首动作建议 `/goal resume` 或建新 goal、错峰默认、以及 **`successor:"auto"` 的自建路径**——§3.6.4 的手工兜底始终保留，见下一节）。
 
 ### claim（Phase B，只能由 pending 指定的继任者会话凭令牌发起）
 
@@ -560,6 +560,50 @@ sequenceDiagram
 **投递侧另有独立守门**：`expiresAt` 一到，该 pair 立刻不再算配对（`pairRecordBetween` 视过期 provisional 记录为无 pair），投递当场退回正常双门——不必等清扫真的删掉那一行。**过期 pairs 的删除也不依赖角色记账**：doomed pairs 的计算与删除排在角色记账判据之前，所以即使用户在设置 UI 手删了 `roles[].provisional` 窗口（甚至整行角色/团队），过期通道照样会被清除。
 
 **补批准**入口是设置 UI：24h 内把该 pair 的 `provisional` 置为 `false` 即转正式（**唯一口径**——不要用删 `expiresAt` 的方式：那会留下 `provisional: true` 且永不过期的记录，可见面文案与通道事实不一致）；已回退后不再复得。补批准只改 pair、不改 `roles[].provisional` 窗口——窗口到点时若域内已无待回退的 pair，它就静默关闭。
+
+### 自动换届（③）：`successor:"auto"`、交接文档与 `/team_rotate`
+
+换届机制（令牌 / 域限定迁移 / 对称撤销 / 24h 回退 / 到期清扫）早已发布；③ 消掉的是它**唯一的人工前提**——继任者会话原本必须先在壳里建好。两条入口：
+
+| 入口 | 谁发起 | 做什么 |
+| --- | --- | --- |
+| `team_link_rotate action=prepare, successor:"auto"[, handoff]` | 现任模型（工具调用） | 自建继任者 + 写交接文档 + 铸令牌 + 广播 freeze + **followup** 把令牌与交接正文投给继任者 |
+| `/team_rotate <role> [team=<name>]` | 人类（命令） | 校验发起者确为该角色现任 → 向该会话 followup 一条指令（起草交接并调用上面的工具）→ 返回摘要给 UI |
+
+`/team_rotate` **只做机制**：`CommandResult` 的文本由派发它的 UI 渲染、**进不了模型上下文**，所以命令**无法**自己产出交接正文——那必须由模型起草。命令也**不建任何会话**（零创建、零 `pending`、不改信任）；真正的新建 + 交班在工具侧，且**必过一次确认框**。命令与工具入口并存，工具入口是兜底。
+
+**确认（§11.4.1）**：新建会话 + 交班是爆炸半径大的动作，工具路径在建会话之前必过一次 `userQuestions.ask`，框内写明**新建几个会话（`successor:"auto"` 每次恰 1 个，§11.2 逐角色）、新会话 id、cwd、模型情形（本路径不指定 provider/model/preset）、保守成本口径、将触碰的信任面、取消 = 零副作用**。**无确认服务 → fail-closed**（不建、不铸令牌、不广播 freeze）。
+
+**自建继任者（§11.4.2）**：与 `/team_session` 完全同源——**根会话**（`meta` 只放 `cwd`，`origin` / `parentSession` / `delegationDepth` / `parentAgent` 一律不写）、id 形如 `team-link-<team>-<role>-<uuid8>`、**从插件根 ctx 创建并由插件持有 handle**（所以 §10.2.5 的生命周期代价同样适用）；`cwd` 取**发起会话**的工作目录，取不到就拒绝——绝不用宿主进程的 `process.cwd()` 顶替。
+
+**交接文档（§11.4.3 / §11.9.6）**：插件写 `<workspace>/team/<name>/handoff-<role>-<YYYYMMDD-HHmmss>.md`，三层结构——
+
+| 层 | 谁写 | 内容 |
+| --- | --- | --- |
+| 头 | 插件 | `schema` / team / role / 前后任 id / `preparedAt` / `claimedAt` / **令牌掩码** / `rotationStatus` / 完整性判定 |
+| 事实段 | 插件 | 与 **claim 返回文案同一事实源**（同一个构造器渲染迁移/未迁移/对称撤销行，同一常量给 freeze 正文，同一函数给 provisional 回退窗口）——「不可两处口径」 |
+| 正文 | 旧任模型 | 五个硬节 + 软节 |
+
+正文的**五个硬节**逐字为 `mission` / `in-flight` / `commitments` / `unknowns` / `task-and-goal`（软节 `first-actions` / `team-map` / `conventions`）。**缺项阶梯**（验证点在任何副作用之前）：
+
+| 情形 | 处置 |
+| --- | --- |
+| `successor:"auto"` + 正文缺失/空 | **拒绝于工具入口**：零建会话、零令牌、零 freeze，错误文案给出五硬节脚手架 |
+| 正文在场但硬节缺 / 空 | 拒绝并**点名**缺哪些节 |
+| 软节缺 | 放行 + 警告（头部记录） |
+| 显式 `successor` + 无正文 | 放行 + 警告（那个会话有自己的生命与上下文，M4 现语义不收紧） |
+| 文档写入失败（auto 路径） | **abort-before-prepare**：不铸令牌、不广播 freeze，已建会话如实报为孤儿 |
+| claim 时 | **不复验文档**（它是审计件，不是执行件） |
+
+> **诚实原则（写在契约里）**：插件只把关**结构**（节在场 / 非空 / 有界），**不把关内容质量**——五个节全写 `TODO` 也能过。presence 门防**遗忘**，不防**敷衍**。
+
+**投递（§11.4.5）**：令牌明文（**只此一次**，此后一律掩码）+ 交接正文 + 「立即 `claim`」用 `followup` 发给继任者（**不是 `inject`**——任务需要驱动），消息 `source` 仍**恰三成员** `{kind, form, senderSessionId}`。
+
+**claim 一步未省（§11.6 红线）**：自动化**不得**跳过 claim / 令牌 / 域限定迁移 / 对称吊销——信任迁移仍要继任者在 claim 时逐项勾选（无人值守则 provisional + 24h 回退），本次确认框**不迁移任何 pairs**。
+
+**失败与孤儿（§11.5）**：① 令牌 30 分钟未认领 → 既有 `rotation-cancelled`（旧任仍为 `current`、解除冻结），**并额外点名本次插件自建的那个继任者**（「仍存活但未认领，可收编或关闭」）——否则它会变成一个没人知道的孤儿；② 崩溃在 create 与 prepare 之间 → 复用 §10.2.6 的 `pending-create` 意图（TTL + 启动清扫 + 可收编清单）；③ **部分成功不回滚**：会话已在盘上、可能已被打开，一律如实报告。
+
+> **写文档的时机（一处需要读者知道的设计张力）**：§11.9.6 要求「写文档失败 → 不铸令牌、不广播 freeze」，而头部又要带**令牌掩码**、事实段要带 **freeze 投递摘要**——后两者在写文档那一刻还不存在。本实现取前者**严格成立**：令牌**先在内存里铸出**（只为拿到掩码）→ 写文档 → 走 prepare（令牌落盘、freeze 广播、投出）；写文档失败时那次铸出的令牌**从不落盘、从不投出、prepare 不进入**，可观测意义上仍是「零令牌、零 freeze」。事实段里 prepare 之后才产生的类目（迁移清单、对称吊销明细、freeze 逐目标结果）**如实标为「待 claim 落定 / 本文件先于广播写入」**，落定后以 claim 返回为准——文档不追写。
 
 ### 内部通知
 
@@ -779,12 +823,12 @@ DSH 默认装配均有。
 ## 十、测试
 
 ```
-npm test                    # host 675 项 + client 138 项（合计 813 项）
+npm test                    # host 735 项 + client 138 项（合计 873 项）
 node host-half.test.mjs     # 宿主半边，stub 风格（真 cordis Context）
 node client-half.test.mjs   # 浏览器半边
 ```
 
-断言总数由两个套件**各自在结尾打印**（`assertion total: 675 (failed: 0)` / `assertion total: 138 (failed: 0)`），文档里的计数即取自这两行——改测试后请同步本行、下面的徽章与 `CHANGELOG.md`。**不要从「上一版计数 ± 本轮新增条数」反推**：② 收口轮的 WIP 就被这样算成了 640，而那次提交自带的实测是 **639**（`506 + 133`）。
+断言总数由两个套件**各自在结尾打印**（`assertion total: 735 (failed: 0)` / `assertion total: 138 (failed: 0)`），文档里的计数即取自这两行——改测试后请同步本行、下面的徽章与 `CHANGELOG.md`。**不要从「上一版计数 ± 本轮新增条数」反推**：② 收口轮的 WIP 就被这样算成了 640，而那次提交自带的实测是 **639**（`506 + 133`）。
 
 **覆盖地图**（按能力划分）：
 
@@ -805,6 +849,7 @@ node client-half.test.mjs   # 浏览器半边
 | **U14 发送方工具行（§10.1.1 A）** | 槽位 key **逐字** `team_link_send`（近形键不占该行）；有回执 → **A 面**（极简标签「工具名 + 目标数」+ 逐目标行「目标（`expr` 或短 id）+ outcome + detail + busy」），**且不含**标题/时间/正文/汇总/信封；空目标表仍出标签（0 个目标）；无回执（在飞 / 无 meta / 形状不认识 / 别的工具的 meta / 抛异常的 getter）→ 纯文本行并显示模型可见文案；12 种坏形状都不成卡且不抛错；**`targets` 超过 `SEND_CARD_ROW_LIMIT`（24）的回执照常成卡，但 A 面行数封顶 24 并在卡上标注「已截断——仅显示前 24 行」，标签的总数仍是真的**（round-1 🔵 #2；对照：恰 24 行全画且无标注、普通 3 目标卡不受影响）；**该渲染期判据的触发条件是回执自身超过 24 行，而宿主侧自 §10.1.2 修正轮起就在制卡时裁到 24，所以它现在只在异构实现或手改日志的 `meta` 上生效**；宿主自产的 24 行卡带 `targetsTruncated` 字段，A 面**读它**（2026-09-19 收尾轮补的跨轮读路径）——24 行 + `{shown:24,total:30}` 的宿主形回执照常出标注且标签显示**真值 30**，而标签永远显示的是**真值**、不是画出的行数；zh/en 字典键集一致 |
 | **U15 顶层节点（§10.1.3 D）** | 视图与接收方 `key:"context"` **同槽不同键**并存；definition 只认既有 `tool/call`（名字逐字）与带本插件回执的 `tool/result`，其余事件类型一律不认；顶层节点产出（key/kind/id/target/anchorSeq/location/visibility/data）；**D 面**（标题 + 发送方/时间 + 信封 + 正文 + 截断标注 + 汇总计数）**且无逐目标行、无目标身份**；**窗口截断回退**（tool/call 不在窗口仍出节点、别的工具的 meta 不出）；无回执 / 在飞 / 形状坏 → 不渲染；**审计 F1**：两面可见文本取并集后任一语句**恰好出现一次**（任一面把另一面的块搬回来即红）；**审计 F3**：模块级 `inject` 只有 `slots`/`sessions`/`locale` 三项，`uiConversation` 走 `ctx.inject` 动态注入——缺服务 / callback 从不触发 / ctx 无 `inject` 三种坏境下 `apply()` 都不抛、其余四条注册照常落地，**只丢顶层卡**；**审计 B3**：**四条**槽位注册（header 按钮条 + 三条 §10.1）各自加护栏，任一条 `slots.register`（或 `slots.inject`）抛错都只丢那一行、其余照常，且不牵连 definition——含 header 按钮条（round-1 🔵 #3：它跑在四条最前，未过护栏时一条拒绝会带走其后全部注册） |
 | 换届 M4 | 令牌绑定与 TTL、rotationBackup 快照、速率限制、冻结清单、多选对话框逐项勾选、域限定迁移、对称撤销、落定与版本史、令牌掩码、四种拒绝、到期清扫与取消/回退、provisional 可见面、幂等重放、内部广播被屏蔽拦截、`goals.resume` **零调用**红线 |
+| **§11 ③a 自动换届（U20–U24 / U28）** | **契约层（§11.9.6）**：五硬节 + 三软节的名单、脚手架、提示语与测试样例是**同一套名字**（名单改一个名字即红）；标题层级/大小写/下划线/尾冒号都折成同一节名；**缺项阶梯逐条断言**——auto + 正文缺失/空 → 拒绝并给出脚手架；**五个硬节各缺一次、每次只点名缺的那个**；硬节在场但为空也拒绝；软节缺 → 放行 + 点名警告；五节全 `TODO` 也放行（**内容质量不被检查**，诚实原则写进断言）；显式 `successor` + 无正文 → 放行 + 警告。**文档三层**：头部九项字段齐全、只给掩码（明文令牌不进任何落盘文件）、`claimedAt` 位置写明「写于 prepare 之前 / claim 不复验 / 不追写」；事实段与 claim **同源**（freeze 正文用投出去的那条常量、迁移/未迁移/对称撤销行用同一个构造器、provisional 回退窗口用同一个函数，且**四类行模板在 `lib/index.js` 里各只出现一次**这一条由源码级断言锁住）；正文原样保留；时间戳文件名 → 第二份把上一份路径写进事实段；头部的完整性判定与校验器读数同源。**auto 编排**：确认框内容（id / cwd / 模型情形 / 保守成本 / 信任面 / 取消=零副作用 / 不迁移任何 pairs）；建出**根会话**（`meta` 恰 `{cwd}`、id 语法、handle 由插件持有）；令牌绑定到自建 id；文档落盘且头部指向前后任；冻结未被跳过；**followup（非 inject）**、正文含令牌明文 + claim 调用 + 文档路径 + 交接正文，`source` **恰三成员**；pending-create 意图回填；**auto + 空正文 → 零建会话/零令牌/零 freeze/零文档/连确认框都不弹**（读提供方侧的 `agents.create` 计数与 `pending`/成员投递数）；无确认服务 → fail-closed；取消 → 零副作用；**30 分钟未认领 → rotation-cancelled + 额外点名自建继任者**（并有一条对照：手工路径不点名）；create 失败 → 意图留在盘上并被启动清扫报进可收编清单；文档写失败 → **abort-before-prepare**（不铸令牌、不 freeze、会话如实报为孤儿）；**一次完整 auto → claim**：域限定迁移 + 对称吊销 + roster 落定 + `rotation-done`，且宿主动作日志只有 `create`/`followup` 两种（无新日志事件类型）。**`/team_rotate`**：可选 seam 注册（descriptor/hint/`recordInput`）、文法的四类拒绝、现任校验与点名、未知团队、同名角色多团队消歧、速率限制窗口不空转、**命令零副作用**（零创建 / 零 pending / 零 pairs）、投出的指令教的语法就是工具接受的那条（五硬节标题 + `successor="auto"` + `handoff=`）、H3 诚实面、无服务/迟到服务两种降级的行数与其余工具面 |
 | §9 收尾修复 | **U9** settings 时序回归锁（先 apply 后 active）、**U10** 创建即认领与不可劫持、**U11** 降级红线与「有且仅有一行」warn、**F1** 两条到达路径共用一次性门；**U9 扩展（差异审计修复轮 🟡-1）**：内存窗口并入的**写面完整性**——两个 provider 都迟到时，一批 `/team_session`（第 2 个 create 故意失败）在内存窗口内写完 roster + pair + `pending-create` 意图，attach 后并入必须**逐字段带上那条未回填的意图**（修复前必红：并入后 `pendingCreates` 消失），且并入恰是 policy 的**八个** key |
 | 字符串安全 | emoji 走遍 0..120 **每一个**切割偏移（其中恰好一个偏移在旧代码上留下半截 emoji）、生产边界、预污染源、导出切点、两处批准提问、投递 banner、深链快照注入、poisoned targetId 回显、**回执卡的全部字符串成员**（正文 + `sessionId` / `expr` / `detail` + `senderSessionId` + 信封 `ref`，按 `JSON.stringify(card)` 判定） |
 
@@ -835,6 +880,8 @@ node client-half.test.mjs   # 浏览器半边
 
 **文法面收尾轮（代码评审的 3 🟡 + 2 🔵，当次实测 `675 (failed: 0)` / `138 (failed: 0)`）**：两条 🟡 是**同一个文法面的两个缺口**，同批修——① `bare` 只收集不消费（`readTeamSessionCommand` 把位置参数收进 `value.bare`，`teamSessionPlan` 只读 `roles`/`n`/`team`，于是 hint / description / 报错文案宣传的「位置参数写角色名」端到端不可用：照着报错提示再输一次，会得到同一个报错）；② `task=` 的注释写「取到行尾」而实现按空白切分，未加引号的多词任务把 `the`/`bug` **静默丢进被忽略的 `bare`**（与 ① 叠加成静默丢数据），带引号的任务又把引号字符留在值里。**修复取「让位置参数真正生效」**（而不是删宣传）：`bare` 折进 `roles`，`team=` 仍是必需 key（首个裸 token **不**兼作团队名——否则「首 token 当团队名」与「用户忘了 team=」无法区分，宁可报错也不猜）；`task=` 的取值读到行尾，遇到下一个**已知 key=** 才收界（所以 `task=… model=… preset=…` 这个从旧版就在的次序照旧成立），整段加一对引号时以闭引号收界且**闭引号之后不得再有内容**（否则报错，不静默丢）；`key="value"` 统一剥引号（半引号一律拒绝）。扫描器的正则另有一处**必须是自己的组**的坑：`(?:a|b|c)+` 的 `+` 只作用于最后一支，`team="t"` 会被切成两个 token。**红绿证据**：把 HEAD 的 `lib/index.js` 导出到 `.test-tmp/old-grammar/`（`git show` 取原始字节，落在仓库内**已 gitignore** 的临时目录里，不碰工作树、不提交）用**同一组断言**对比——红相 `roles=undefined` / 计划报「需要角色列表」、`task="fix"` 且 `bare=["the","bug"]`、`task` 值是 `"fix the bug"`（含两个引号字符）、`team="t"` 原样带引号；绿相全部反转。新增断言 **恰 11 条**（`674 − 663`；那 674 是修好实现后套件的**首跑全绿**读数，此后只再补了 1 条 `plannedId` 的按 role 取 id 断言，终态 `675`）。两道禁令内的取舍：`CHANGELOG.md` 本轮**未同步**（任务明令不得改），计数同步只落 README 三处。
 
+**§11 ③a 自动换届主路径轮（`successor:"auto"` + 交接文档契约 + `/team_rotate`，当次实测 `735 (failed: 0)` / `138 (failed: 0)`，基线 `675`）**：本轮新增 **60 条**断言（`735 − 675`），分三批落盘、每批跑完全绿再往下（交接文档契约 → auto 编排 → 命令与文档面）。**红相不藏**：契约批首跑 `696 (failed: 3)`，三条一次都没猜中——① 头部 `team:` 是 `undefined`、② freeze 正文里的团队名是空的——**两条根因其实是同一个**（`writeHandoffDocument` 没有把 `team.name` 注进渲染器），③ 「事实源锁」读到「对称撤销」前缀在 `rotationFactRows` 的两个分支里各出现一次（把共同前缀抽成 `revokedHead` 后计数=1）；auto 批首跑 `719 (failed: 2)`，两条也都是**测试自己写错**：预期 pairs 字符串把 `a`/`b` 顺序写反、以及另加的对端对压根没进 fixture。**本轮与既有断言的三处「同改」**（都是清单/计数随新面增长，逐条改并留证）：① 第二个命令走进**同一个 `commands` seam** 后，「迟到服务挂上一条命令」变为两条（`definitions.length === 1 → 2`）；② 同因导致 U19 的 info 行数从 3 变 4——那条断言顺势改成**按种类点名**（`attach,chain,cmd-rotate,cmd-session`），比原来的裸计数更紧：多出**任何一类**新 info 行仍会红；③ `rotateEnv` 转发 `omitCommands`/`lateCommands`/`failCreateAt` 三个 fixture 开关。**红线回归照旧全绿**：模块级 `inject` 仍 4 项、`source` 恰三成员、policy 命名空间仍恰 8 键、全模块 `agents.create(` 仍**恰一处**（auto 路径复用同一个 `createRootAgent`）、一次完整 auto → claim 的宿主动作日志只有 `create`/`followup`。**边界**：`CHANGELOG.md` 本轮未同步（任务明令不得改），计数同步只落 README（徽章 + 测试节两处）。
+
 ---
 
 ## 设计文档索引
@@ -842,7 +889,7 @@ node client-half.test.mjs   # 浏览器半边
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/team-upgrade-design-2026-09-17.md`](docs/team-upgrade-design-2026-09-17.md) | **实施级设计（v1.4）**：M1–M5 机制、伪代码与 schema、安全边界与红线、验收标准（U1–U11 + 集成演练）、§9 收尾修复设计、会诊 #27 与清单闭合台账 |
-| [`docs/collab-enhancements-design-2026-09-19.md`](docs/collab-enhancements-design-2026-09-19.md) | **协作增强设计**：§10 ① 发送方可见性 **A+D**（已实施，U13–U15 见上）/ ② `/team_session` 自动建队（**已实现**，U16–U19 见上）——**两项都未发布、未真机验证**（宿主半边要等 DSH 重启批准）；§11 自动换届交接（未实施）。会诊 #37 纪要见 `docs/consult-minutes/2026-09-19-consult-37-minutes.md` |
+| [`docs/collab-enhancements-design-2026-09-19.md`](docs/collab-enhancements-design-2026-09-19.md) | **协作增强设计**：§10 ① 发送方可见性 **A+D**（已实施，U13–U15 见上）/ ② `/team_session` 自动建队（**已实现**，U16–U19 见上）/ §11 ③a 自动换届主路径（**已实现**，U20–U24 / U28 见上；③b 的恢复工具 `team_link_recover` 见 §11.9.4，**未实施**）——**三项都未发布、未真机验证**（宿主半边与 H1/H3/H4 要等 DSH 重启窗口）。会诊 #37 纪要见 `docs/consult-minutes/2026-09-19-consult-37-minutes.md`，会诊 #43（§11.9 的裁定）见 `docs/consult-minutes/2026-09-20-consult-43-minutes.md` |
 | [`docs/team-upgrade-research-2026-09-17.md`](docs/team-upgrade-research-2026-09-17.md) | 调研：一次 16+ 小时真实多会话联调的复盘，与升级提案（**其 §5 已被设计取代**，以设计文档为准） |
 | [`docs/consult-minutes/`](docs/consult-minutes/) | 多模型会诊纪要（含裁定层：逐条采纳/不采纳与理由、分歧父侧裁定、教训、不可验清单） |
 
@@ -850,12 +897,13 @@ node client-half.test.mjs   # 浏览器半边
 
 ## Changelog
 
-完整变更史见 **[CHANGELOG.md](CHANGELOG.md)**。未发布内容（三条）与最近一次发布：
+完整变更史见 **[CHANGELOG.md](CHANGELOG.md)**。未发布内容（四条）与最近一次发布：
 
 - **0.3.7**（当前版本）— 修两个在真实部署中**实测**到的功能性阻塞：**settings 持久化静默失效**（团队状态一直在进程内存里，从未落盘）与**建队引导死锁**（团队建了却永远写不进首任协调者）。前者是本次最贵的教训：它**静默了整整一天**，还让「改名迁移已完成」这个错误结论进了交付报告。
 - **未发布 · §10.2 ② `/team_session` 自动建队** — 一条命令建 N 个 worker 根会话（N ≤ 8、每队成员 ≤ 24，**代码常量**，刻意不进 settings）、驱动、按 role 幂等登记进 roster、并与主会话建立 pairs 双向免确认通道；批量动作前有一次写明**数量 / 模型 / cwd / 成本口径 / 将建立的信任**的确认框，取消即零创建零 pairs。命令走**可选** `ctx.inject(["commands"])`（模块级 `inject` 仍 4 项），创建的会话是**根会话**（`meta` 只放 `cwd`/`agentPreset`，`origin` / `parentSession` / `delegationDepth` / `parentAgent` 一律不写），`AgentHandle` 由插件自身持有。prepare 的「本插件不能编程创建会话（V9 未验证）」文案同批改为「`agents.create` 公开可用；ownership 语义见 §10.2.5」。
 - **未发布 · 同一轮的唯一 schema 新增与「谓词 / 写面同批」修复** — ② 新增**一个**持久化 key：`PolicyConfig.pendingCreates`（§10.2.6 的 pending-create 意图）。没有它，意图只活在内存里、重启后的启动清扫永远扫不到东西；它是本设计**唯一**允许的新增 key，§10.3 原文「schema 均不改」已改准为「**既有 key 的语义与形状不改；新增须为设计明确要求的闭环所需并在设计文档与 CHANGELOG 记录**」（既有八个 key 的名字、形状与语义一字未动）。**同一轮修掉一个同源缺陷**：许可「整份写入当前命名空间」的谓词 `policyIsAtDefaults` 加上了 `pendingCreates`，而**兄弟写面**——内存窗口并入（`adoptMemoryWindow`）交给 `update()` 的那笔补丁——仍是先前七个 key，于是**在启动窗口内写下的 pending-create 意图在并入时被丢掉**，下一次启动的清扫清单里就没有这条本该被交还给人的孤儿记录。判据是「**谓词与它许可的整份写入必须同名同一批 key**」：谓词说「命名空间是空的」，写面就写**全部八个**。修复前必红、修复后全绿（见「测试」一节的实测）。
 - **未发布 · §10.2.5 生命周期：插件卸载/重载 = 全队 teardown，恢复路径是「在侧边栏逐个打开」** — 这是设计**明确要求写进文档**的事实，不是事故：`/team_session` 建的会话，其 `AgentHandle` 由插件持有（§10.2.5），所以**卸载或重载本插件会连同这些代理一起拆掉，而会话本身仍在盘上**。恢复路径（三步，不新增任何机制）：① `team_link_list_sessions` 会把「盘上有会话但无活代理」如实读成 `✕ 未运行` + `verdict=dead`（对齐公理 A4，与既有巡检面同源）；② 在侧边栏**逐个打开**这些会话，把它们拉回活的代理；③ 再用 `team_link_roster action=set-role` 按 roster 重新登记。命令的汇总输出里也有同一条提示（`/team_session` 返回文案的「生命周期（§10.2.5）」一行）。同一事实对**插件重载**同样成立：重载后这些会话不会自动复活。
+- **未发布 · §11 ③a 自动换届主路径（`successor:"auto"` / 交接文档契约 / `/team_rotate`）** — 一次显式发起完成「自建继任者 → 写交接文档 → 令牌 → 投递 → 它 claim → 旧任退场」，消掉换届**唯一的人工前提**（继任者会话必须先存在）。工具侧 `successor:"auto"`：确认框（fail-closed，无服务不执行）→ 写 `<workspace>/team/<name>/handoff-<role>-<时间戳>.md`（头部 + 事实段 + 正文三层，事实段与 claim 返回**同一事实源**）→ 走既有 prepare 全套（令牌 / rotationBackup / freeze / 速率限制，**一步未省**）→ 用 `followup` 把令牌明文与交接正文投给继任者（**非 inject**，`source` 仍恰三成员）。交接正文的**五个硬节**（`mission` / `in-flight` / `commitments` / `unknowns` / `task-and-goal`）是 auto 路径的硬门槛：正文缺失/空、或硬节缺/空 → **拒绝于工具入口（零建会话零令牌零 freeze）**；软节缺只警告；文档写失败 → abort-before-prepare。`/team_rotate <role> [team=<name>]` 是人的入口，**只做机制**（校验现任 → followup 指令 → 回摘要），命令本身零创建、正文由模型起草。30 分钟未认领 → 既有 `rotation-cancelled` **并额外点名插件自建的继任者**；崩溃窗口复用 `pending-create` 意图；部分成功不回滚。**③b（`team_link_recover`，§11.9.4）本轮不做**；**H3（命令 handler 驱动自身会话）与 H1/H4 的真机验证排在同一次重启窗口**。
 
 ---
 

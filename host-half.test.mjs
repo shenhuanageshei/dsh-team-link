@@ -2074,7 +2074,7 @@ const rotRoles = () => [
  * and the trust state a rotation operates on. `receiveMode: accept` keeps notice
  * delivery out of the receiver dialog; the notice cases set their mode explicitly.
  */
-function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams } = {}) {
+function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false } = {}) {
 	const env = setup({
 		sessions: [],
 		useSettings: true,
@@ -2082,6 +2082,13 @@ function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trus
 		omitUserQuestions,
 		selfCwd: TEAM_WS,
 		goals,
+		// §11.2's auto path calls agents.create; `failCreateAt` is the §11.5 crash
+		// window fixture (a create that never settles must keep its intent).
+		failCreateAt,
+		// Both commands ride the same optional `commands` seam: these two flags are
+		// the §11.2 degradation / late-provider fixtures.
+		omitCommands,
+		lateCommands,
 		extraAgents: [
 			{ id: "session-worker-a", status: "idle" },
 			{ id: "session-worker-b", status: "idle" },
@@ -2620,8 +2627,356 @@ const rotGoalClaim = await rotGoalEnv.rotate.execute({ action: "claim", team: "n
 check("M4 红线: a whole rotation never calls goals.resume — the successor is only ADVISED (§3.7 合规回路)", rotResumeCalls === 0 && rotGoalClaim.includes("换届完成") && rotGoalPrep.includes("/goal resume"));
 
 // ---------------------------------------------------------------------------
+// §11.9.6 交接文档契约（③a）：三层结构 · 五硬节缺项阶梯 · 与 claim 同一事实源
+// ---------------------------------------------------------------------------
+//
+// 这一组只钉「契约层」：纯校验器、渲染器与写入器。工具入口处的端到端证明
+// （auto + 空正文 ⇒ 零建会话零令牌零 freeze，用提供方侧计数读数）属于 §11 的
+// auto 编排，落在下一组断言里——本组先把「阶梯怎么判、文档长什么样」锁住。
+
+const HANDOFF_WS = path.join(TEAM_TMP, "handoff-ws");
+/** 本组自己的源码读数（`hostSource` 在文件末尾才定义，这里不能借它：顶层 const
+ * 的 TDZ 会让整跑直接崩）。 */
+const handoffSource = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
+
+/** 每个节的正文样例行，测试侧的单一来源：**硬节与软节的名单改一个名字，这里就
+ * 必须同改**（下面第一条断言就是这把锁）。 */
+const HANDOFF_LINE = {
+	mission: "角色对团队负责什么：把夜班协调职责交到下一位手上，保证在飞事项不丢。",
+	"in-flight": "- 夜间巡检脚本（session-worker-a）：已跑 3 轮，下一步补日志。",
+	commitments: "- 答应 session-worker-b 周三前给出信任现状说明。",
+	unknowns: "- 不知道 session-worker-c 是否还在跑：没有人回报过。",
+	"task-and-goal": "- 当前 goal：phase=active、activation=disarmed（没有 armed 的 goal 可续）→ 上任第一件事 /goal resume。",
+	"first-actions": "- 先 /goal resume，再读 decisions.md 末 20 条。",
+	"team-map": "- coordinator / worker-a / worker-b；worker-c 状态未知。",
+	conventions: "- 黑板 decisions.md 只追加；换届只走 team_link_rotate。",
+};
+
+/** 按 §11.9.6 的正文写法拼一份交接正文，`omit` 里的节整个不写。 */
+function handoffBody(omit = [], override = {}) {
+	const lines = [];
+	for (const [name, line] of Object.entries(HANDOFF_LINE)) {
+		if (omit.includes(name)) continue;
+		lines.push(`## ${name}`, override[name] ?? line, "");
+	}
+	return lines.join("\n");
+}
+
+const handoffAll = handoffBody();
+
+check("§11.9.6 同改锁: 硬节/软节名单、脚手架、提示语与测试样例是同一套名字（名单改一个名字，这条就红）", (() => {
+	const declared = [...__testing.HANDOFF_HARD_SECTIONS, ...__testing.HANDOFF_SOFT_SECTIONS];
+	const scaffold = __testing.handoffScaffold();
+	return sameJson(declared, Object.keys(HANDOFF_LINE))
+		&& __testing.HANDOFF_HARD_SECTIONS.every((name) => typeof __testing.HANDOFF_SECTION_HINTS[name] === "string" && __testing.HANDOFF_SECTION_HINTS[name] !== "")
+		&& sameJson(Object.keys(__testing.HANDOFF_SECTION_HINTS), [...__testing.HANDOFF_HARD_SECTIONS])
+		&& declared.every((name) => scaffold.includes(`## ${name}`))
+		&& __testing.HANDOFF_HARD_SECTIONS.every((name) => scaffold.includes(__testing.HANDOFF_SECTION_HINTS[name]));
+})());
+
+check("§11.9.6 解析: 标题层级 / 大小写 / 下划线 / 尾冒号都折成同一个节名（模型真写了就不该因样式被拒）", (() => {
+	const names = ["## Task and Goal:", "### task_and_goal", "# TASK-AND-GOAL", "  ##   task-and-goal  "].map((heading) => {
+		const parsed = __testing.parseHandoffBody(`${heading}\n正文一行`);
+		return parsed.sections.length === 1 ? parsed.sections[0].name : `（未识别：${heading}）`;
+	});
+	const homed = __testing.parseHandoffBody("开场白一段\n\n## mission\n职责");
+	return names.every((name) => name === "task-and-goal") && homed.preamble.join("").includes("开场白") && homed.sections[0].name === "mission" && homed.sections[0].lines.join("").trim() === "职责";
+})());
+
+// --- 缺项阶梯（§11.9.6 的第一张表） -----------------------------------------
+
+const handoffMissing = __testing.readHandoffArgument(undefined, { auto: true });
+check("§11.9.6 阶梯: auto + 正文缺失 → 拒绝（工具入口），文案给出五硬节脚手架并明说零建会话/零令牌/零 freeze", handoffMissing.error !== undefined && handoffMissing.error.includes("零建会话、零令牌、零 freeze") && __testing.HANDOFF_HARD_SECTIONS.every((name) => handoffMissing.error.includes(`## ${name}`)) && __testing.HANDOFF_SOFT_SECTIONS.every((name) => handoffMissing.error.includes(`## ${name}`)));
+
+const handoffBlank = ["", "   ", "\n\t\n"].map((value) => __testing.readHandoffArgument(value, { auto: true }));
+check("§11.9.6 阶梯: auto + 正文为空或纯空白 → 同样拒绝（空白正文等于没有正文）", handoffBlank.every((result) => result.error !== undefined && result.error.includes("交接正文缺失或为空")));
+
+const handoffHardGaps = __testing.HANDOFF_HARD_SECTIONS.map((name) => {
+	const result = __testing.readHandoffArgument(handoffBody([name]), { auto: true });
+	const head = (result.error ?? "").split("\n")[0];
+	const others = __testing.HANDOFF_HARD_SECTIONS.filter((other) => other !== name);
+	return result.error !== undefined && head.includes(`${name}（缺）`) && !others.some((other) => head.includes(other)) && head.includes("零建会话、零令牌、零 freeze");
+});
+check(`§11.9.6 阶梯: 硬节缺 → 逐条点名（五个硬节各缺一次，每次只点名缺的那个：${handoffHardGaps.filter(Boolean).length}/5 通过）`, handoffHardGaps.every(Boolean));
+
+const handoffEmptySection = __testing.readHandoffArgument(handoffBody([], { unknowns: "   " }), { auto: true });
+check("§11.9.6 阶梯: 硬节在场但正文为空 → 同样拒绝（结构门查的是「在场 / 非空 / 有界」）", handoffEmptySection.error !== undefined && (handoffEmptySection.error.split("\n")[0]).includes("unknowns（空）") && !(handoffEmptySection.error.split("\n")[0]).includes("mission"));
+
+const handoffSoftGap = __testing.readHandoffArgument(handoffBody(["team-map", "conventions"]), { auto: true });
+check("§11.9.6 阶梯: 软节缺 → 放行 + 警告（点名缺哪些软节）", handoffSoftGap.error === undefined && handoffSoftGap.body === handoffBody(["team-map", "conventions"]) && handoffSoftGap.warnings.some((line) => line.includes("缺软节：team-map、conventions")));
+
+const handoffComplete = __testing.readHandoffArgument(handoffAll, { auto: true });
+check("§11.9.6 阶梯: 五个硬节齐全 → 放行，警告行如实说「结构完整」", handoffComplete.error === undefined && handoffComplete.warnings.some((line) => line.includes("结构完整") && line.includes("硬节 5/5") && line.includes("软节 3/3")));
+
+const handoffTodo = __testing.readHandoffArgument(handoffBody([], Object.fromEntries(__testing.HANDOFF_HARD_SECTIONS.map((name) => [name, "TODO"]))), { auto: true });
+check("§11.9.6 诚实原则: 内容质量不被检查——五节全是 TODO 也放行（presence 门防遗忘、不防敷衍）", handoffTodo.error === undefined && handoffTodo.warnings.some((line) => line.includes("结构完整")));
+
+const handoffExplicit = __testing.readHandoffArgument(undefined, { auto: false });
+check("§11.9.6 阶梯: 显式 successor + 无正文 → 放行 + 警告（M4 现语义不收紧：那个会话有自己的生命与上下文）", handoffExplicit.error === undefined && handoffExplicit.body === "" && handoffExplicit.warnings.some((line) => line.includes("显式指定的继任者有自己的会话与上下文")));
+
+// --- 文档定位与三层渲染 ------------------------------------------------------
+
+const handoffEnv = rotateEnv({ teams: [{ name: "night-shift", createdAt: 1_700_000_000_000, workspace: HANDOFF_WS, policy: { writer: "coordinator" }, roles: rotRoles() }] });
+const HANDOFF_TOKEN = "11111111-2222-3333-4444-555555555555";
+const HANDOFF_NOW = Date.now();
+const handoffFacts = __testing.rotationFactRows({
+	retiree: ROT_SELF,
+	successor: SUCCESSOR,
+	candidates: [{ pair: { a: ROT_SELF, b: "session-worker-a", createdAt: 1 }, other: "session-worker-a" }],
+	dropped: [{ pair: { a: ROT_SELF, b: ROT_OUTSIDE, createdAt: 1 }, other: ROT_OUTSIDE, reason: "对端不在本团队域内（§3.6.1 原则 2）" }],
+	removedCount: 3,
+	trustedSenderCount: 1,
+	rememberTargetCount: 1,
+});
+const handoffDocPath = __testing.handoffDocumentPath(handoffEnv.team(), "coordinator", HANDOFF_NOW);
+check("§11.9.6 定位: 文档落在黑板目录、文件名 handoff-<role>-<时间戳>.md（时间戳即天然不冲突，故不需要 baseHash 锁）", path.dirname(handoffDocPath) === path.join(HANDOFF_WS, "team", "night-shift") && /^handoff-coordinator-\d{8}-\d{6}\.md$/u.test(path.basename(handoffDocPath)));
+
+const handoffWrite = await __testing.writeHandoffDocument(handoffEnv.team(), {
+	roleName: "coordinator",
+	previous: ROT_SELF,
+	successor: SUCCESSOR,
+	token: HANDOFF_TOKEN,
+	preparedAt: HANDOFF_NOW,
+	body: handoffAll,
+	report: __testing.handoffBodyReport(handoffAll),
+	facts: handoffFacts,
+});
+check("§11.9.6 写入: 交接文档落盘（整文件写；黑板单行 500 码点上限不适用于契约文档）", handoffWrite.ok === true && handoffWrite.path === handoffDocPath && existsSync(handoffDocPath));
+const handoffText = await readFile(handoffDocPath, "utf8");
+const HANDOFF_HEADER_NEEDLES = ["schema: team-link/handoff/1", "team: night-shift", "role: coordinator", `previous: ${ROT_SELF}`, `successor: ${SUCCESSOR}`, "preparedAt: ", "claimedAt: ", `tokenMask: tok-${HANDOFF_TOKEN.slice(0, 4)}…${HANDOFF_TOKEN.slice(-4)}`, "rotationStatus: ", "integrity: 结构完整：硬节 5/5"];
+const handoffHeaderMissing = HANDOFF_HEADER_NEEDLES.filter((line) => !handoffText.includes(line));
+check(`§11.9.6 头部: schema / team / role / 前后任 id / preparedAt / claimedAt / 令牌掩码 / rotationStatus / 完整性判定 一项不少${handoffHeaderMissing.length === 0 ? "" : `（缺：${JSON.stringify(handoffHeaderMissing)}）`}`, handoffHeaderMissing.length === 0);
+check("§11.9.6 头部: 头部只给掩码——明文令牌不进任何落盘文件（§3.6.2 评审 #3 的纪律）", !handoffText.includes(HANDOFF_TOKEN) && handoffText.includes("tok-1111…5555"));
+check("§11.9.6 头部: claimedAt 位置说明「本文件写于 prepare 之前、claim 时不复验、不追写」", handoffText.includes("本文件写于 prepare 之前") && handoffText.includes("claim 时不复验文档，本文件不追写"));
+const HANDOFF_FACT_NEEDLES = [
+	__testing.freezeNotice("night-shift", "coordinator", ROT_SELF, SUCCESSOR, HANDOFF_NOW),
+	...handoffFacts.migration,
+	...handoffFacts.dropped,
+	handoffFacts.revocation[0],
+	__testing.provisionalGuidance({ now: HANDOFF_NOW, successor: SUCCESSOR, provisional: true, status: "" }),
+];
+const handoffFactMissing = HANDOFF_FACT_NEEDLES.filter((line) => !handoffText.includes(line));
+check(`§11.9.6 事实段: 与 claim 同一事实源——freeze 正文用投出去的那条常量、迁移/未迁移/对称吊销行用同一个构造器、provisional 回退窗口用同一个函数${handoffFactMissing.length === 0 ? "" : `（缺：${JSON.stringify(handoffFactMissing)}）`}`, handoffFactMissing.length === 0);
+check("§11.9.6 事实段: 写于 prepare 之前的那几行如实标注（freeze 投递结果 / 上一份交接文档 / 下一份尚未写入）", handoffText.includes("本文件先于广播写入") && handoffText.includes("上一份：（无——这是本团队本角色落盘的第一份交接文档）") && handoffText.includes("下一份：（尚未写入"));
+check("§11.9.6 正文: 模型的判断被原样保留（插件不删改写）", handoffText.includes(HANDOFF_LINE.mission) && handoffText.includes(HANDOFF_LINE["task-and-goal"]) && handoffText.includes("/goal resume"));
+
+const handoffWrite2 = await __testing.writeHandoffDocument(handoffEnv.team(), {
+	roleName: "coordinator",
+	previous: SUCCESSOR,
+	successor: "session-newer",
+	token: "99999999-8888-7777-6666-555555555555",
+	preparedAt: HANDOFF_NOW + 60000,
+	body: handoffAll,
+	report: __testing.handoffBodyReport(handoffAll),
+	facts: handoffFacts,
+});
+const handoffText2 = await readFile(handoffWrite2.path, "utf8");
+check("§11.9.6 事实段: 第二份文档把上一份的路径写进事实段（时间戳文件名天然不冲突）", handoffWrite2.ok === true && handoffWrite2.path !== handoffWrite.path && handoffText2.includes(`上一份：${handoffDocPath}`) && handoffWrite2.previousDocument === handoffDocPath);
+
+const handoffSoftDoc = await readFile(handoffWrite2.path, "utf8");
+check("§11.9.6 跨轮一致: 头部的完整性判定与校验器的读数同源——软节缺谁，头部与警告行说的是同一批名字", (() => {
+	const report = __testing.handoffBodyReport(handoffBody(["team-map"]));
+	const warning = __testing.readHandoffArgument(handoffBody(["team-map"]), { auto: true }).warnings.join("\n");
+	const integrity = __testing.handoffIntegrityLine(report);
+	return integrity.includes("硬节 5/5") && integrity.includes("软节缺 1/3（team-map）") && warning.includes("team-map") && !warning.includes("conventions");
+})() && handoffSoftDoc.length > 0);
+
+// --- 「不可两处口径」的源码级锁 ----------------------------------------------
+// §11.9.6 要求事实段与 claim 返回文案同一事实源。行为上两者在同一次换届里被
+// 一起断言（下一组），这里钉的是**结构**：这些行模板在模块里只准出现一次。
+check("§11.9.6 同源锁: 迁移/未迁移/对称撤销/回退窗口四类行模板在 lib/index.js 里各只出现一次（写第二处口径就跑红）", ["→ 未迁移（未勾选）→ 已随退役清理；今后该对端走正常首问门。", "对称撤销（§3.6.1 原则 3）：退役者 ", "provisional 回退窗口：", "（域内没有待迁移的 pairs）"].every((needle) => (handoffSource.split(needle).length - 1) === 1));
+
+// ---------------------------------------------------------------------------
+// §11.2 successor:"auto"（③a 主路径）：自建继任者 · 写交接文档 · 铸令牌 · followup 投递
+// ---------------------------------------------------------------------------
+
+/** 这一组自己的 policy 门面（文件后面那一个定义在更晚处，顶层 const 的 TDZ 让这里
+ * 借不到它）：形状与它逐字相同——只有 get/update，够 sweep 与启动清扫用。 */
+const handoffPolicy = (env) => ({
+	get: () => ({ ...env.ns.data, teams: env.ns.data.teams ?? [], pairs: env.ns.data.pairs ?? [], watchdogs: env.ns.data.watchdogs ?? [], trustedSenders: env.ns.data.trustedSenders ?? [], blockedSenders: env.ns.data.blockedSenders ?? [], rememberTargets: env.ns.data.rememberTargets ?? [], receiveMode: env.ns.data.receiveMode ?? "ask", pendingCreates: env.ns.data.pendingCreates ?? [] }),
+	update: async (patch) => { Object.assign(env.ns.data, structuredClone(patch)); },
+});
+const handoffTeam = (workspace) => [{ name: "night-shift", createdAt: 1_700_000_000_000, workspace, policy: { writer: "coordinator" }, roles: rotRoles() }];
+
+const autoEnv = rotateEnv({ askScript: ["创建并交班"], pairs: [rotPair("session-worker-a"), rotPair("session-worker-b"), rotPair(ROT_OUTSIDE)], trustedSenders: [ROT_SELF], rememberTargets: [ROT_SELF] });
+const autoOut = await autoEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoEnv.senderAgent));
+const autoId = autoEnv.role().pending?.session ?? "（没有 pending）";
+// A session born from `agents.create` is not one of the setup's pre-built stubs, so
+// its message log lives in the factory's own record (`created[i].calls`) — reading
+// it from `env.calls()` would report "nothing was delivered" for a session that
+// was driven. The §10.2 batch cases use the same accessor.
+const autoCreatedCalls = autoEnv.created[0]?.calls;
+const autoDoc = await __testing.latestHandoffDocument(autoEnv.team(), "coordinator");
+const autoDocText = autoDoc.path === null ? "" : await readFile(autoDoc.path, "utf8");
+const autoFollowup = autoCreatedCalls?.followedup?.[0];
+
+check("U22 确认: 自动换届必过一次确认框（新建 1 个会话 + 交班的爆炸半径：id / cwd / 模型情形 / 保守成本口径 / 信任面 / 取消=零副作用）", (() => {
+	const ask = autoEnv.uq.requests[0];
+	if (ask === undefined || ask.questions.length !== 1) return false;
+	const question = ask.questions[0];
+	const text = `${question.question}\n${question.detail}`;
+	return question.id === "rotation-auto"
+		&& question.options.map((option) => option.label).join(",") === "创建并交班,取消"
+		&& text.includes(autoId) && text.includes(TEAM_WS) && text.includes("保守成本口径") && text.includes("零创建、零令牌、零 freeze")
+		&& text.includes("本次确认不迁移任何 pairs");
+})());
+check("U20 自建继任者: 一个根会话被建出来，id 形如 team-link-<team>-<role>-<uuid8>，meta 只有 cwd（不含 origin/parentSession/delegationDepth/parentAgent）", autoEnv.creates.length === 1 && /^team-link-night-shift-coordinator-[A-Za-z0-9_-]{8}$/u.test(autoId) && sameJson(Object.keys(autoEnv.creates[0].meta).sort(), ["cwd"]) && autoEnv.creates[0].meta.cwd === TEAM_WS);
+check("U20 生命周期: AgentHandle 由插件持有（§10.2.5——它是「插件自建」这句话的可检事实，也是 §11.5 点名孤儿会话的判据）", __testing.teamSessionFor(autoEnv.ctx).hasHandle(autoId) === true && autoEnv.agentFor(autoId) !== undefined && autoCreatedCalls !== undefined);
+check("U20 令牌: 令牌绑定到插件自建的继任者（pending.session 就是它），30 分钟 TTL", autoEnv.role().pending !== null && autoEnv.role().pending.session === autoId && autoEnv.role().pending.team === "night-shift" && autoEnv.role().pending.role === "coordinator" && autoEnv.role().pending.expiresAt - autoEnv.role().pending.createdAt === 30 * 60000);
+check("U20 交接文档: 已落盘（团队 workspace 的黑板目录）且头部指向前任/继任者、令牌只以掩码出现", autoDoc.path !== null && path.dirname(autoDoc.path) === path.join(TEAM_WS, "team", "night-shift") && autoDocText.includes(`previous: ${ROT_SELF}`) && autoDocText.includes(`successor: ${autoId}`) && autoDocText.includes(`tokenMask: tok-${autoEnv.role().pending.token.slice(0, 4)}…${autoEnv.role().pending.token.slice(-4)}`) && !autoDocText.includes(autoEnv.role().pending.token));
+check("U20 交接文档: 正文就是这次调用提供的五个硬节（模型写判断、插件写机制）", autoDocText.includes(HANDOFF_LINE.mission) && autoDocText.includes(HANDOFF_LINE.unknowns) && autoOut.includes(autoDoc.path));
+const autoFreezeProbe = {
+	freezeA: autoEnv.calls("session-worker-a").followedup.length,
+	freezeB: autoEnv.calls("session-worker-b").followedup.length,
+	notice: (autoEnv.calls("session-worker-a").followedup[0]?.content?.[0]?.text ?? "").includes("[rotation-freeze]"),
+	backup: autoEnv.team().rotationBackup !== null,
+	pairs: pairSummary(autoEnv),
+};
+check(`U20 冻结未被跳过: 既有 M4 机制原样走完（rotation-freeze 到其余成员、rotationBackup 快照、pairs 一条未动——信任迁移仍要 claim）`
+	+ (autoFreezeProbe.freezeA === 1 && autoFreezeProbe.freezeB === 1 && autoFreezeProbe.notice && autoFreezeProbe.backup && autoFreezeProbe.pairs === "session-self↔session-outside session-self↔session-worker-a session-self↔session-worker-b" ? "" : `（实测：${JSON.stringify(autoFreezeProbe)}）`),
+autoFreezeProbe.freezeA === 1 && autoFreezeProbe.freezeB === 1 && autoFreezeProbe.notice && autoFreezeProbe.backup && autoFreezeProbe.pairs === "session-self↔session-outside session-self↔session-worker-a session-self↔session-worker-b");
+check("U21 投递: followup 驱动（不是 inject），正文含令牌明文与「立即 claim」，并带上交接正文与文档路径", autoFollowup !== undefined && autoCreatedCalls.injected.length === 0 && autoCreatedCalls.followedup.length === 1 && autoFollowup.content[0].text.includes(autoEnv.role().pending.token) && autoFollowup.content[0].text.includes("team_link_rotate action=claim") && autoFollowup.content[0].text.includes(autoDoc.path) && autoFollowup.content[0].text.includes(HANDOFF_LINE["task-and-goal"]) && autoFollowup.content[0].text.includes("/goal resume"));
+check("U21 红线: 交接消息的 source 仍恰三成员 {kind, form, senderSessionId}，发送方是旧任", sameJson(Object.keys(autoFollowup.source).sort(), ["form", "kind", "senderSessionId"]) && autoFollowup.source.kind === "agent-message" && autoFollowup.source.form === "relay" && autoFollowup.source.senderSessionId === ROT_SELF);
+check("U24 无新日志事件: 整条自动路径只经 settings 写 + agents.create + followup 三个出口（提供方侧动作日志里没有第四种动作）", autoEnv.actionLog.every((entry) => entry === "create" || entry === "followup") && autoEnv.actionLog.includes("create") && autoEnv.actionLog.includes("followup"));
+check("U20 意图闭环: prepare 成功后台账里的 pending-create 意图被回填（否则启动清扫会把已就位的继任者当成孤儿）", (autoEnv.ns.data.pendingCreates ?? []).length === 0 && (autoEnv.ns.data.pendingCreates ?? []).every((entry) => entry.sessionId !== autoId));
+
+// --- U22: 拒/取消/无确认服务 —— 三条都是「零副作用」 ---------------------------
+
+const autoRefuseEnv = rotateEnv({ askScript: ["创建并交班"], teams: handoffTeam(path.join(HANDOFF_WS, "refuse")) });
+const autoRefuse = await autoRefuseEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto" }, execFor(autoRefuseEnv.senderAgent));
+check("U28 阶梯（入口）: auto + 正文缺失 → 拒绝于工具入口：零建会话（提供方侧 create 计数）/ 零令牌（pending 为 null）/ 零 freeze（成员零投递）/ 零文档 / 连确认框都不弹", autoRefuse.includes("零建会话、零令牌、零 freeze") && __testing.HANDOFF_HARD_SECTIONS.every((name) => autoRefuse.includes(`## ${name}`)) && autoRefuseEnv.creates.length === 0 && autoRefuseEnv.role().pending === null && autoRefuseEnv.calls("session-worker-a").followedup.length === 0 && autoRefuseEnv.calls("session-worker-b").followedup.length === 0 && autoRefuseEnv.uq.requests.length === 0 && (autoRefuseEnv.ns.data.pendingCreates ?? []).length === 0 && !existsSync(path.join(HANDOFF_WS, "refuse")));
+
+const autoNoConfirmEnv = rotateEnv({ omitUserQuestions: true, teams: handoffTeam(path.join(HANDOFF_WS, "noconfirm")) });
+const autoNoConfirm = await autoNoConfirmEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoNoConfirmEnv.senderAgent));
+check("U22 无确认服务: fail-closed——不建、不铸令牌、不 freeze（确认框是必经之门，不是可选提示）", autoNoConfirm.includes("确认服务（userQuestions）不可用") && autoNoConfirm.includes("fail-closed") && autoNoConfirmEnv.creates.length === 0 && autoNoConfirmEnv.role().pending === null && autoNoConfirmEnv.calls("session-worker-a").followedup.length === 0 && !existsSync(path.join(HANDOFF_WS, "noconfirm")));
+
+const autoCancelEnv = rotateEnv({ askScript: ["取消"], teams: handoffTeam(path.join(HANDOFF_WS, "cancel")) });
+const autoCancel = await autoCancelEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoCancelEnv.senderAgent));
+check("U22 取消: 零创建、零令牌、零 freeze、零交接文档（选「取消」就是什么都不做）", autoCancel.includes("未自动换届") && autoCancel.includes("零创建、零令牌、零 freeze、零交接文档") && autoCancelEnv.creates.length === 0 && autoCancelEnv.role().pending === null && autoCancelEnv.calls("session-worker-a").followedup.length === 0 && (autoCancelEnv.ns.data.pendingCreates ?? []).length === 0 && !existsSync(path.join(HANDOFF_WS, "cancel")));
+
+// --- U23: 30 分钟未认领 / 崩溃窗口 / 文档写失败 --------------------------------
+
+const autoSweep = await autoEnv.rotation.sweep({ now: Date.now() + 31 * 60000 });
+check("U23 未认领: 30 分钟超时走既有 rotation-cancelled（旧任仍为现任、冻结解除），并额外点名插件自建的继任者", autoSweep.cancelled.length === 1 && autoSweep.cancelled[0].caller === autoId && autoEnv.role().current === ROT_SELF && autoEnv.role().pending === null && autoSweep.lines.some((line) => line.includes(autoId) && line.includes("可收编或关闭") && line.includes("§11.5")) && autoEnv.calls("session-worker-a").followedup.at(-1).content[0].text.includes("[rotation-cancelled]"));
+
+const manualUnclaimedEnv = rotateEnv({ askScript: [], pairs: [rotPair("session-worker-a")] });
+const manualUnclaimedPrep = await manualUnclaimedEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: SUCCESSOR }, execFor(manualUnclaimedEnv.senderAgent));
+const manualUnclaimedSweep = await manualUnclaimedEnv.rotation.sweep({ now: Date.now() + 31 * 60000 });
+check("U23 对照: 手工路径（显式 successor）的取消报告不点名任何「插件新建的会话」——那句话只在插件真的建过会话时出现", manualUnclaimedPrep.includes("换届包已就绪") && manualUnclaimedSweep.cancelled.length === 1 && manualUnclaimedSweep.cancelled[0].caller === SUCCESSOR && !manualUnclaimedSweep.lines.some((line) => line.includes("可收编或关闭")));
+
+const autoCrashEnv = rotateEnv({ askScript: ["创建并交班"], failCreateAt: 0 });
+const autoCrash = await autoCrashEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoCrashEnv.senderAgent));
+const autoCrashRow = (autoCrashEnv.ns.data.pendingCreates ?? [])[0];
+check("U23 崩溃窗口: create 失败即止——未铸令牌、未 freeze，pending-create 意图留在盘上（§11.5 复用 §10.2.6 的意图）", autoCrash.includes("继任者会话创建失败") && autoCrash.includes("意图保留") && autoCrashEnv.role().pending === null && autoCrashEnv.calls("session-worker-a").followedup.length === 0 && autoCrashRow !== undefined && autoCrashRow.team === "night-shift" && autoCrashRow.role === "coordinator" && autoCrashRow.expiresAt > autoCrashRow.createdAt);
+const autoCrashSweep = await __testing.sweepPendingCreates(autoCrashEnv.ctx, handoffPolicy(autoCrashEnv), Date.now() + 6 * 60000);
+check("U23 崩溃窗口: 该意图被启动清扫报进「可收编清单」（含 id 与手工收编指引），且报告即记录（行被清除）", autoCrashSweep.reported.length === 1 && autoCrashSweep.lines[0].includes(autoCrashRow.sessionId) && autoCrashSweep.lines[0].includes("打开收编") && (autoCrashEnv.ns.data.pendingCreates ?? []).length === 0);
+
+const blockedDocRoot = path.join(TEAM_TMP, "blocked-handoff-root");
+await writeFile(blockedDocRoot, "not a directory", "utf8");
+const autoDocFailEnv = rotateEnv({ askScript: ["创建并交班"], teams: handoffTeam(blockedDocRoot) });
+const autoDocFail = await autoDocFailEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoDocFailEnv.senderAgent));
+const autoDocFailId = autoDocFailEnv.creates[0]?.sessionId;
+check("U28 文档写失败: abort-before-prepare——不铸令牌（pending 为 null）、不广播 freeze（成员零投递），已建会话如实报为孤儿且不回滚", autoDocFail.includes("abort-before-prepare") && autoDocFail.includes("如实报为孤儿") && autoDocFail.includes(autoDocFailId) && autoDocFailEnv.role().pending === null && autoDocFailEnv.calls("session-worker-a").followedup.length === 0 && autoDocFailEnv.creates.length === 1 && (autoDocFailEnv.ns.data.pendingCreates ?? []).length === 1);
+
+// --- U20/U21/U24: 一次完整的自动换届（auto → claim），信任迁移一步未跳 ---------
+const autoFullEnv = rotateEnv({ askScript: ["创建并交班", ["session-worker-a"]], pairs: [rotPair("session-worker-a"), rotPair("session-worker-b"), rotPair(ROT_OUTSIDE), { a: "session-worker-a", b: "session-worker-b", createdAt: 2 }], trustedSenders: [ROT_SELF], rememberTargets: [ROT_SELF] });
+const autoFullPrep = await autoFullEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoFullEnv.senderAgent));
+const autoFullId = autoFullEnv.role().pending?.session ?? "（没有 pending）";
+const autoFullDoc = await __testing.latestHandoffDocument(autoFullEnv.team(), "coordinator");
+const autoFullDocText = autoFullDoc.path === null ? "" : await readFile(autoFullDoc.path, "utf8");
+const autoFullClaim = await autoFullEnv.rotate.execute({ action: "claim", team: "night-shift", role: "coordinator", token: tokenOf(autoFullPrep) }, autoFullEnv.exec(autoFullId));
+check("U20/U21 同源: 同一份事实同时出现在交接文档（prepare 时刻）与 claim 返回（落定时刻）——候选行→迁移行说的是同一个对端，行模板出自同一个构造器", autoFullDocText.includes(`session-worker-a ↔ ${ROT_SELF} → 待 claim 逐项勾选（域内候选；迁移与否在继任者 ${autoFullId} 认领时落定）`) && autoFullDocText.includes(`session-outside ↔ ${ROT_SELF} → 未迁移（对端不在本团队域内（§3.6.1 原则 2））→ 已随退役清理。`) && autoFullClaim.includes(`session-worker-a ↔ ${ROT_SELF} → 已迁移为 session-worker-a ↔ ${autoFullId}（正式通道）`) && autoFullClaim.includes(`session-worker-b ↔ ${ROT_SELF} → 未迁移（未勾选）→ 已随退役清理；今后该对端走正常首问门。`) && autoFullClaim.includes(`session-outside ↔ ${ROT_SELF} → 未迁移（对端不在本团队域内（§3.6.1 原则 2））→ 已随退役清理。`));
+// The migrated pair is stored with the successor first (`a`), exactly as
+// `applyRotationTrust` writes it — the expectation is computed here instead of
+// hard-coded so a diff can never be mistaken for an ordering difference.
+const autoFullExpectedPairs = [`${autoFullId}↔session-worker-a`, "session-worker-a↔session-worker-b"].sort().join(" ");
+const autoFullProbe = {
+	asks: autoFullEnv.uq.requests.length,
+	claimId: autoFullEnv.uq.requests[1]?.questions?.[0]?.id,
+	multi: autoFullEnv.uq.requests[1]?.questions?.[0]?.multiSelect,
+	pairs: pairSummary(autoFullEnv),
+	expected: autoFullExpectedPairs,
+	retireeGone: !autoFullEnv.ns.data.pairs.some((pair) => pair.a === ROT_SELF || pair.b === ROT_SELF),
+	trusted: autoFullEnv.ns.data.trustedSenders.includes(ROT_SELF),
+	remembered: autoFullEnv.ns.data.rememberTargets.includes(ROT_SELF),
+	current: autoFullEnv.role().current === autoFullId,
+	pending: autoFullEnv.role().pending,
+	done: (autoFullEnv.calls("session-worker-a").followedup.at(-1)?.content?.[0]?.text ?? "").includes("[rotation-done]"),
+};
+check(`U24 红线: 自动换届没有跳过 claim 的任何一步——令牌校验 + 单个多选对话框 + 域限定迁移 + 对称吊销 + roster 落定 + rotation-done`
+	+ (autoFullProbe.asks === 2 && autoFullProbe.claimId === "rotation-migrate" && autoFullProbe.multi === true && autoFullProbe.pairs === autoFullExpectedPairs && autoFullProbe.retireeGone && !autoFullProbe.trusted && !autoFullProbe.remembered && autoFullProbe.current && autoFullProbe.pending === null && autoFullProbe.done ? "" : `（实测：${JSON.stringify(autoFullProbe)}）`),
+autoFullProbe.asks === 2 && autoFullProbe.claimId === "rotation-migrate" && autoFullProbe.multi === true && autoFullProbe.pairs === autoFullExpectedPairs && autoFullProbe.retireeGone && !autoFullProbe.trusted && !autoFullProbe.remembered && autoFullProbe.current && autoFullProbe.pending === null && autoFullProbe.done);
+check("U24 无新日志事件: 一次完整的自动换届（prepare + claim）里，宿主动作仍只有 create/followup 两种（settings 写不在这个日志里，它是另一个出口）", autoFullEnv.actionLog.every((entry) => entry === "create" || entry === "followup"));
+
+// --- §11.2 宣传面 = 实现面（命令/描述教的语法必须真能用） ----------------------
+const autoTool = autoEnv.tool("team_link_rotate");
+const autoToolDesc = autoTool.description;
+const autoNoSuccessorEnv = rotateEnv();
+const autoNoSuccessorText = await autoNoSuccessorEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator" }, execFor(autoNoSuccessorEnv.senderAgent));
+check("§11.2 宣传面=实现面: description / successor 参数说明 / 「缺 successor」的拒绝文案三处教的都是实现支持的那条语法（successor:\"auto\" + handoff 五硬节），没有一处教用户用不支持的写法", autoToolDesc.includes('successor 可以写 "auto"') && autoToolDesc.includes("handoff") && autoToolDesc.includes("§11.9.6") && autoTool.parameters.properties.successor.description.includes('"auto"') && autoTool.parameters.properties.handoff !== undefined && autoTool.parameters.properties.handoff.description.includes("mission") && autoNoSuccessorText.includes('"auto"') && autoNoSuccessorText.includes("§11.2") && autoNoSuccessorText.includes("§3.6.4"));
+
+// ---------------------------------------------------------------------------
+// §11.2 `/team_rotate <role>`（③a 的人类入口）：命令只做机制，正文由模型起草
+// ---------------------------------------------------------------------------
+
+const cmdRotEnv = rotateEnv({ askScript: [] });
+const cmdRotDefinition = cmdRotEnv.commands.command("team_rotate");
+check("§11.2 命令面: /team_rotate 通过同一个可选 commands seam 注册（描述写明命令只做机制、正文由模型起草、新建会话仍要过确认框）", cmdRotDefinition !== undefined && cmdRotDefinition.description.includes("§11.2") && cmdRotDefinition.description.includes("正文必须由模型起草") && cmdRotDefinition.description.includes("§11.4.1") && cmdRotDefinition.input.hint.includes("<role>") && cmdRotDefinition.recordInput === true);
+check("§11.2 命令面: 注册留一行 info（与 /team_session 同一条 seam，各自一行）", cmdRotEnv.log.lines.info.some((line) => line.includes("/team_rotate registered through the optional commands service")));
+
+const cmdRotParsed = __testing.readTeamRotateCommand("coordinator team=night-shift");
+// 宣传面 → 实现面：hint 里写到的每一个 `key=` 都必须真的被解析器接受（上一轮的教训
+// 是反方向：hint 教了一条端到端不可用的写法）。这条把 hint 变成被断言的对象。
+const cmdRotHintKeys = [...cmdRotDefinition.input.hint.matchAll(/([a-z]+)=/gu)].map((match) => match[1]);
+const cmdRotHintAcceptable = cmdRotHintKeys.length > 0 && cmdRotHintKeys.every((key) => __testing.readTeamRotateCommand(`coordinator ${key}=x`).error === undefined);
+check("§11.2 文法: /team_rotate <role> [team=<name>] 解析成两部分；缺角色名、多角色名、未知 key、带引号的值都被拒绝（拒绝文案只列真正支持的语法），且 hint 里写的每个 key 都真被接受", cmdRotParsed.value.role === "coordinator" && cmdRotParsed.value.team === "night-shift" && cmdRotHintAcceptable && __testing.readTeamRotateCommand("").error.includes("/team_rotate <role>") && __testing.readTeamRotateCommand("a b").error.includes("只接受一个角色名") && __testing.readTeamRotateCommand("coordinator n=2").error.includes("未知参数") && __testing.readTeamRotateCommand("coordinator n=2").error.includes("team=<name>（可选）") && __testing.readTeamRotateCommand('coordinator team="night-shift"').error.includes("不要带引号"));
+
+const cmdRotOut = await cmdRotDefinition.handler(cmdRotEnv.invoke("coordinator", cmdRotEnv.senderAgent));
+const cmdRotFollowup = cmdRotEnv.senderCalls.followedup[0];
+check("§11.2 命令: 现任执行 → 用 followup 驱动自己的会话（H3 的自身唤醒），并把摘要回报给 UI", cmdRotOut.kind === "success" && cmdRotEnv.senderCalls.followedup.length === 1 && cmdRotOut.text.includes("已把") && cmdRotOut.text.includes("team_rotate"));
+check("§11.2 命令: 命令本身零副作用——没有建会话、没有 pending、没有 pairs 改动、没有写黑板（机制全在工具侧）", cmdRotEnv.creates.length === 0 && cmdRotEnv.role().pending === null && (cmdRotEnv.ns.data.pairs ?? []).length === 0 && cmdRotOut.text.includes("确认之前不会创建任何会话、不铸令牌、不广播 freeze"));
+check("§11.2 命令: 投出去的指令教的语法就是工具真正接受的那条——五个硬节标题 + successor=\"auto\" + handoff= + 立即确认框；源仍恰三成员", cmdRotFollowup !== undefined && __testing.HANDOFF_HARD_SECTIONS.every((name) => cmdRotFollowup.content[0].text.includes(`## ${name}`)) && cmdRotFollowup.content[0].text.includes('action="prepare"') && cmdRotFollowup.content[0].text.includes('successor="auto"') && cmdRotFollowup.content[0].text.includes("handoff=") && cmdRotFollowup.content[0].text.includes("确认框") && sameJson(Object.keys(cmdRotFollowup.source).sort(), ["form", "kind", "senderSessionId"]) && cmdRotFollowup.source.senderSessionId === "session-self");
+check("§11.2/H3 诚实面: 摘要与指令都说清 H3 尚未真机验证，并指向工具入口兜底（不把未验的东西说成已验）", cmdRotOut.text.includes("H3 待验") && cmdRotOut.text.includes("工具入口") && cmdRotFollowup.content[0].text.includes("§11.9.6"));
+
+const cmdRotGuestOut = await cmdRotDefinition.handler(cmdRotEnv.invoke("coordinator", cmdRotEnv.agentFor("session-worker-a")));
+check("§11.2 命令: 非现任发起 → 拒绝并点名真正的现任（工具侧的 rotateGate 会再判一次）", cmdRotGuestOut.kind === "error" && cmdRotGuestOut.text.includes("不是该角色的现任") && cmdRotGuestOut.text.includes("现任是 session-self") && cmdRotEnv.senderCalls.followedup.length === 1);
+
+const cmdRotUnknownTeam = await cmdRotDefinition.handler(cmdRotEnv.invoke("coordinator team=no-such"));
+const cmdRotEmptyEnv = rotateEnv({ teams: [] });
+const cmdRotEmptyRegistry = await cmdRotEmptyEnv.commands.command("team_rotate").handler(cmdRotEmptyEnv.invoke("coordinator"));
+check("§11.2 命令: 未知团队 → 拒绝并给出下一步（upsert-team）；空注册表是另一件事（不写成「团队 undefined 不存在」）", cmdRotUnknownTeam.kind === "error" && cmdRotUnknownTeam.text.includes("不在注册表中") && cmdRotUnknownTeam.text.includes("upsert-team") && cmdRotEmptyRegistry.kind === "error" && cmdRotEmptyRegistry.text.includes("还没有注册任何团队") && !cmdRotEmptyRegistry.text.includes("undefined"));
+
+const cmdRotMultiEnv = rotateEnv({ teams: [...handoffTeam(TEAM_WS), { name: "day-shift", createdAt: 1_700_000_000_000, workspace: TEAM_WS, policy: { writer: "coordinator" }, roles: rotRoles() }] });
+const cmdRotMultiOut = await cmdRotMultiEnv.commands.command("team_rotate").handler(cmdRotMultiEnv.invoke("coordinator"));
+check("§11.2 命令: 同名角色在多个团队都现任 → 拒绝并要求 team=<name>（不猜）", cmdRotMultiOut.kind === "error" && cmdRotMultiOut.text.includes("请用 team=<name>") && cmdRotMultiOut.text.includes("night-shift") && cmdRotMultiOut.text.includes("day-shift"));
+const cmdRotPickOut = await cmdRotMultiEnv.commands.command("team_rotate").handler(cmdRotMultiEnv.invoke("coordinator team=day-shift"));
+check("§11.2 命令: team=<name> 消歧后正常投递（指令里的团队名就是指定的那一个）", cmdRotPickOut.kind === "success" && cmdRotPickOut.text.includes("团队 day-shift") && cmdRotMultiEnv.senderCalls.followedup.at(-1).content[0].text.includes('team="day-shift"'));
+
+const cmdRotLimitedEnv = rotateEnv({ askScript: [], pairs: [rotPair("session-worker-a")] });
+await cmdRotLimitedEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: SUCCESSOR }, execFor(cmdRotLimitedEnv.senderAgent));
+const cmdRotLimitedOut = await cmdRotLimitedEnv.commands.command("team_rotate").handler(cmdRotLimitedEnv.invoke("coordinator"));
+check("§11.2 命令: 速率限制窗口内不空转——直接说清原因（复用 rotationRateLimited 的同一句话）且不投递任何指令", cmdRotLimitedOut.kind === "error" && cmdRotLimitedOut.text.includes("换届速率限制窗口") && cmdRotLimitedOut.text.includes("该角色已有 pending") && cmdRotLimitedOut.text.includes("本命令未投递任何指令") && cmdRotLimitedEnv.senderCalls.followedup.length === 0);
+
+const cmdRotNoServiceEnv = rotateEnv({ omitCommands: true });
+check("§11.2 命令降级: 没有 commands 服务时两个命令都不注册、整跑仍只留一行 seam warn，其余工具面照常", cmdRotNoServiceEnv.commands.definitions.length === 0 && cmdRotNoServiceEnv.log.lines.warn.filter((line) => line.includes("commands service unavailable at activation")).length === 1 && ["team_link_list_sessions", "team_link_send", "team_link_roster", "team_link_rotate"].every((toolName) => cmdRotNoServiceEnv.tool(toolName) !== undefined));
+
+const cmdRotLateEnv = rotateEnv({ lateCommands: true });
+check("§11.2 命令降级: 迟到的 commands 提供方经 ordered injection 一次挂上两条命令，窗口内不再多留一行", cmdRotLateEnv.commands.definitions.length === 0 && cmdRotLateEnv.log.lines.warn.filter((line) => line.includes("commands service unavailable at activation")).length === 1);
+await cmdRotLateEnv.provideCommands();
+check("§11.2 命令降级: 服务到位后 /team_session 与 /team_rotate 都注册（同一个 seam，一次恢复）", cmdRotLateEnv.commands.command("team_session") !== undefined && cmdRotLateEnv.commands.command("team_rotate") !== undefined && cmdRotLateEnv.commands.definitions.length === 2 && cmdRotLateEnv.log.lines.warn.filter((line) => line.includes("commands service unavailable")).length === 1);
+
+// --- §11.2 文档面 = 实现面（README 教的语法必须在实现里存在，反之亦然） --------
+// 上一轮的真实教训：hint / 报错文案宣传的「位置参数写角色名」曾经端到端不可用。
+// 这条把 README 也纳入同一判据——命令名、auto 语法、五个硬节、诚实原则四样都在
+// 实现里有着落，改名字改语法时忘掉文档就会在这里红。
+const handoffReadme = await readFile(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
+check("§11.2 文档面=实现面: README 写的两条入口与 auto 语法都能在实现里找到对应物（/team_rotate 文法 · successor:\"auto\" · handoff · 五个硬节 · 「不把关内容质量」的诚实原则）", handoffReadme.includes("`/team_rotate <role> [team=<name>]`") && handoffReadme.includes('successor:"auto"') && handoffReadme.includes("handoff") && __testing.HANDOFF_HARD_SECTIONS.every((name) => handoffReadme.includes(name)) && handoffReadme.includes("不把关内容质量") && cmdRotDefinition !== undefined && cmdRotDefinition !== undefined);
+
+// ---------------------------------------------------------------------------
 // §9 收尾修复（0.3.7）: U9 settings 时序锁 / U10 创建即认领 / U11 降级红线
 // ---------------------------------------------------------------------------
+
+
 
 // --- U9: the settings seam is a TIMING contract, not a snapshot (§9.1.3) -----
 // Every environment above provides `settings` BEFORE `apply()`, so all of them
@@ -2964,7 +3319,7 @@ check("U16 降级: ... and the rest of the tool surface is untouched (all eight 
 const lateCmdEnv = teamSessionEnv({ lateCommands: true });
 check("U16 降级: a late commands provider is picked up by the ordered injection (the command appears, no extra warn for the resolved window)", lateCmdEnv.commands.definitions.length === 0 && lateCmdEnv.log.lines.warn.filter((line) => line.includes("commands service unavailable")).length === 1);
 await lateCmdEnv.provideCommands();
-check("U16 降级: ... and it registers exactly once when it arrives", lateCmdEnv.commands.command("team_session") !== undefined && lateCmdEnv.commands.definitions.length === 1);
+check("U16 降级: ... and BOTH commands of the shared seam register exactly once when it arrives (§11.2 的 /team_rotate 与 /team_session 走同一个可选 seam，各自注册一次)", lateCmdEnv.commands.command("team_session") !== undefined && lateCmdEnv.commands.command("team_rotate") !== undefined && lateCmdEnv.commands.definitions.length === 2);
 
 // --- U16b: parsing — the grammar the hint advertises -------------------------
 const { readTeamSessionCommand, teamSessionPlan, teamSessionDialogText, teamSessionId, withTeamSessionPairs } = __testing;
@@ -3248,7 +3603,14 @@ await u19ConcurrencyEnv.commands.command("team_session").handler(u19ConcurrencyE
 const u19Creates = u19ConcurrencyEnv.creates.length;
 const u19Followups = u19ConcurrencyEnv.created.reduce((total, item) => total + item.calls.followedup.length, 0);
 const u19Replayed = await ctx_waterfall(u19ConcurrencyEnv.ctx, { messages: [{ id: "u19", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "参考 dsh://session/session-abc123 继续" }] }], turn: 1, step: 1 });
-check("U19 日志事件: one real batch (2 workers) writes nothing new to any session log — the only state it leaves is the settings namespace, the creates and the followups", u19Creates === 2 && u19Followups === 2 && (u19ConcurrencyEnv.settings.namespaces.get("team-link").data.pairs ?? []).length === 2 && u19Replayed.kind === "enter" && u19Replayed.messages.length === 2 && u19ConcurrencyEnv.log.lines.warn.length === 0 && u19ConcurrencyEnv.log.lines.info.length === 3 && u19ConcurrencyEnv.log.lines.error.length === 0);
+const u19InfoKinds = u19ConcurrencyEnv.log.lines.info.map((line) => line.includes("/team_session registered through the optional commands service") ? "cmd-session"
+	: line.includes("/team_rotate registered through the optional commands service") ? "cmd-rotate"
+		: line.includes('policy store attached to settings namespace "team-link"') ? "attach"
+			: line.includes("post-attach policy chain finished") ? "chain"
+				: `unexpected: ${line}`).sort().join(",");
+check(`U19 日志事件: one real batch (2 workers) writes nothing new to any session log — the only state it leaves is the settings namespace, the creates and the followups`
+	+ (u19Creates === 2 && u19Followups === 2 && (u19ConcurrencyEnv.settings.namespaces.get("team-link").data.pairs ?? []).length === 2 && u19Replayed.kind === "enter" && u19Replayed.messages.length === 2 && u19ConcurrencyEnv.log.lines.warn.length === 0 && u19InfoKinds === "attach,chain,cmd-rotate,cmd-session" && u19ConcurrencyEnv.log.lines.error.length === 0 ? "" : `（实测：creates=${u19Creates} followups=${u19Followups} warn=${u19ConcurrencyEnv.log.lines.warn.length} info=${u19InfoKinds}）`),
+u19Creates === 2 && u19Followups === 2 && (u19ConcurrencyEnv.settings.namespaces.get("team-link").data.pairs ?? []).length === 2 && u19Replayed.kind === "enter" && u19Replayed.messages.length === 2 && u19ConcurrencyEnv.log.lines.warn.length === 0 && u19InfoKinds === "attach,chain,cmd-rotate,cmd-session" && u19ConcurrencyEnv.log.lines.error.length === 0);
 
 // --- G2 (§10.2.6 并发): create 与 followup 串行（或 ≤2） ----------------------
 // The bound is read from the PROVIDER side (the `agents` service stub), which is
