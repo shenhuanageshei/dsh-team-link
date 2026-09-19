@@ -2676,6 +2676,33 @@ check("U9 对照 (数据一致性): a write inside the startup window is served 
 await memWindowEnv.provideSettings();
 check("U9 对照 (数据一致性): the window's write is folded into the settings namespace at attach instead of being dropped, with one line saying so", (memWindowEnv.settings.namespaces.get("team-link")?.data.teams ?? []).length === 1 && memWindowEnv.log.lines.warn.some((line) => line.includes("memory-only startup window")) && memWindowEnv.log.lines.info.filter((line) => line.includes("policy store attached")).length === 1);
 
+// 差异审计修复轮 · 🟡-1: the SAME fold, on the ONE policy key the ② round added.
+// `policyIsAtDefaults` (lib/index.js) names all eight `DEFAULT_POLICY` keys, so it
+// licenses the wholesale write above — but a predicate is only half of a write
+// surface: the patch `adoptMemoryWindow` hands to `update()` is the other half, and
+// it still carried the seven pre-② keys. The window's own comment already says
+// 「Fields added to DEFAULT_POLICY belong here in the same change」; the sibling
+// write surface did not follow it, so a §10.2.6 `pending-creates` intent written in
+// the startup window was dropped at the fold — exactly the durable row the next
+// boot's sweep exists to report (the audit's probe read `pendingCreates=undefined`
+// here, and the sweep then had nothing to hand over). This case is that window
+// end-to-end: plugin first, settings AND commands afterwards, one failed create
+// leaves an unresolved intent in the memory engine, then the provider arrives.
+const pendingFoldEnv = setup({ sessions: [], lateSettings: true, lateCommands: true, askScript: ["创建"], selfCwd: TEAM_WS, failCreateAt: 1 });
+check("U9 对照 (pendingCreates): both providers are late, so the whole batch runs inside the memory-only window (one line per seam, nothing registered, no command yet)", pendingFoldEnv.log.lines.warn.length === 2 && pendingFoldEnv.log.lines.warn[0].includes("settings not active at activation") && pendingFoldEnv.log.lines.warn[1].includes("commands service unavailable at activation") && pendingFoldEnv.settings.namespaces.size === 0 && pendingFoldEnv.commands.command("team_session") === undefined);
+await pendingFoldEnv.provideCommands();
+check("U9 对照 (pendingCreates) 前置: the late commands seam registers through the same ordered injection, with no extra line for the window", pendingFoldEnv.commands.command("team_session") !== undefined && pendingFoldEnv.log.lines.warn.length === 2);
+const pendingFoldOut = await pendingFoldEnv.commands.command("team_session").handler(pendingFoldEnv.invoke("n=2 team=night-shift roles=worker-a,worker-b task=窗口内建队"));
+const pendingFoldId = pendingFoldEnv.creates[1].sessionId;
+check("U9 对照 (pendingCreates) 前置: worker-b's create fails, so its intent is never resolved — the write the fold has to carry is the ONLY in-memory intent", pendingFoldEnv.creates.length === 2 && pendingFoldOut.kind === "error" && pendingFoldEnv.settings.namespaces.size === 0);
+await pendingFoldEnv.provideSettings();
+await tick();
+const pendingFoldNs = pendingFoldEnv.settings.namespaces.get("team-link");
+check("U9 对照 (pendingCreates) 前置: the fold itself happened — the window's roster write reached the namespace (so a missing intent below cannot be blamed on a fold that never ran)", (pendingFoldNs?.data.teams ?? []).map((team) => team.name).join(",") === "night-shift" && pendingFoldEnv.log.lines.warn.some((line) => line.includes("memory-only startup window")));
+check("U9 对照 (pendingCreates): a §10.2.6 intent written inside the startup window SURVIVES the fold into the settings namespace — the durable orphan record the next boot's sweep reports is not dropped by adopting the window", (pendingFoldNs?.data.pendingCreates ?? []).length === 1 && (pendingFoldNs?.data.pendingCreates ?? [])[0].sessionId === pendingFoldId && (pendingFoldNs?.data.pendingCreates ?? [])[0].role === "worker-b" && (pendingFoldNs?.data.pendingCreates ?? [])[0].team === "night-shift");
+check("U9 对照 (pendingCreates): the folded rows are the window's own normalized rows — every field of the intent survived, not just its presence", (pendingFoldNs?.data.pendingCreates ?? []).length === 1 && (pendingFoldNs?.data.pendingCreates ?? []).every((entry) => entry.createdAt > 0 && entry.expiresAt > entry.createdAt && entry.by === "session-self" && Object.keys(entry).sort().join(",") === "by,createdAt,expiresAt,role,sessionId,team"));
+check("U9 对照 (pendingCreates): the fold is the wholesale write {@link policyIsAtDefaults} licenses, so it carries all EIGHT policy keys — the new one beside the seven that pre-date ②, with the window's roster and the pair granted for the one worker that WAS created inside them", sameJson(Object.keys(pendingFoldNs?.data ?? {}).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"]) && (pendingFoldNs?.data.teams ?? []).length === 1 && (pendingFoldNs?.data.pairs ?? []).length === 1 && (pendingFoldNs?.data.pairs ?? [])[0].b === pendingFoldEnv.creates[0].sessionId);
+
 // --- U10 (§3.3.2 创建即认领 / §9.2.2): bootstrap, no hijack, gates untouched ---
 const u10Env = teamEnv({ teams: [] });
 const u10Roster = u10Env.tool("team_link_roster");
@@ -3149,11 +3176,19 @@ check("U18 文档漂移: prepare's fallback text no longer claims 「本插件�
 //   3) 模块级 `inject` 仍 4 项；
 //   4) 既有 schema 与投递双门零改动。
 //
-// L1 的判据（自选，理由写在这里）：**源码级「无写入面」+ 运行时「状态只落既有出口」双证据**。
-// 理由：插件**没有**任何 `ctx.session` / append 面——`ctx.*` 全表的唯一会话接触是
-// `ctx.sessionQuery.readSession / readSurface / readTitleSnapshots`（都是**读**），所以
-// 「不产生新的日志事件类型」可以被**静态证明**，而不必去猜某个事件名。运行时再证明 ② 的
-// 整条路径只经 settings 命名空间 + `agents.create` + `agent.followup` 三个**既有**出口。
+// L1 的判据（自选，理由写在这里；差异审计修复轮 🔵-1 把措辞改成诚实版，断言一字未改）：
+// **源码级「本模块自己不动日历」+ 运行时「状态只落既有出口」双证据**。措辞的三处更正：
+//   ① 插件对会话**确有**写入面——`ctx.agents.create`（本文件的 create 桩即是它的形状）与
+//      `agent.followup`；所以断言锁的是「本模块**自己**没有 append/emit 面」，不是「插件不写会话」；
+//   ② `ctx.*` 全表的会话接触是 `ctx.sessionQuery` 的**四个读**方法
+//      （`listSessions` / `readSession` / `readSurface` / `readTitleSnapshots`——此前写作三个，漏了
+//      第一个），它们**都是读**；
+//   ③ 结论仍成立，但理由不是「静态正则证明得了这一点」——正则**证明不了**上游那两条路径用的是什么
+//      事件类型。红线之所以不破，是因为那两条路径产生的事件类型由**上游定义**（`agents.create` 与
+//      `followup` 的形状是上游 API，不是本插件拼的事件信封），本插件无从发明一个新类型；这条断言
+//      的作用是**锁**住「本模块不得自己长出写入面」，审计的变异 M6（往模块里放一个日志写入 API →
+//      1 红）证明的正是这个锁真的会咬。运行时那条读的是**桩**，结构上观察不到新事件类型——它是
+//      旁证（路径确实只经 settings + create + followup），不是新类型的判据。
 // The host module is read from the test file's OWN location (`import.meta.url`),
 // not from `import.meta.resolve("./lib/index.js")` — the latter resolves against
 // the process cwd, so the run would silently read nothing under another cwd.
@@ -3164,13 +3199,18 @@ const HOST_IMPORTS = ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-to
 // `appendFile(`/`writeFile(` are deliberately NOT in this list: they are the
 // blackboard's own file writes (`team/<name>/decisions.md`), not session log
 // writes — the red line is about event types, not about the plugin touching disk.
-check("U19 日志事件: the host half has no log-write surface at all — no `ctx.session` (only the read-only `sessionReferenceResolver` / `sessionQuery` seams), no `session.append` / appendEvent / writeEvent / logEvent / `ctx.emit` anywhere in the module (静态证明)", !/ctx\.session(?![A-Za-z])/u.test(hostSource) && !/\.append(Event)?\(/u.test(hostSource) && !/\b(appendEvent|writeEvent|logEvent|emitEvent)\b/u.test(hostSource) && !/\bctx\.emit\(/u.test(hostSource) && !/\bsession\.append/u.test(hostSource));
+check("U19 日志事件: the host module itself never appends or emits a session-log event — no `ctx.session` write seam (the only `ctx.*` session contact is the read-only `sessionQuery`, `sessionReferenceResolver` and `agents`), no `session.append` / appendEvent / writeEvent / logEvent / `ctx.emit` anywhere in the module (源码级锁；插件间接写会话只经上游的 `agents.create` / `agent.followup`)", !/ctx\.session(?![A-Za-z])/u.test(hostSource) && !/\.append(Event)?\(/u.test(hostSource) && !/\b(appendEvent|writeEvent|logEvent|emitEvent)\b/u.test(hostSource) && !/\bctx\.emit\(/u.test(hostSource) && !/\bsession\.append/u.test(hostSource));
 check("U19 日志事件: ... and the module's whole import surface is the six audited modules — a whitelist, so a new dependency cannot slip a log-write API in (`@deepseek-ai/dsh-session-reference` is upstream's deep-link parser, not a session-log writer)", sameJson(importList, HOST_IMPORTS) && importList.every((specifier) => HOST_IMPORTS.includes(specifier)));
 // The runtime half, on a REAL batch (2 workers, the §10.2.6 default shape): drive
 // the command, then replay its own `agent/pre-step` listener. The listener is the
 // one seam that could inject a session-log event; it must only hand the payload
 // back (upstream deep-link behavior) and leave zero log lines. Meanwhile every
 // durable state of the run is accounted for by the two stores below.
+// 🔵-1: what this case can and cannot show — the agent side here is a STUB, so it
+// is structurally incapable of observing a NEW event type; what it pins is that the
+// whole ② path ends in exactly the two upstream outlets (settings namespace +
+// `create`/`followup`) and leaves no third one. The type-level claim rests on the
+// source lock above, not on this replay.
 const u19ConcurrencyEnv = setup({ sessions: [], useSettings: true, askScript: ["创建"], selfCwd: TEAM_WS, createDelayMs: 20 });
 await u19ConcurrencyEnv.commands.command("team_session").handler(u19ConcurrencyEnv.invoke("n=2 team=night-shift roles=worker-a,worker-b task=并发纪律"));
 const u19Creates = u19ConcurrencyEnv.creates.length;
