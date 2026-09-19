@@ -141,6 +141,8 @@ ctx.commands.register({
 });
 ```
 
+**服务获取方式（受 §10.3 红线约束的实现决定）**：`commands` **不进**模块级 `inject`——§10.3 的红线是「既有 `inject` 数组（4 项）不改」。改用与收尾修复 ③ 同款的**可选有序注入** `ctx.inject(["commands"], cb)`：服务永不出现时插件照常加载并**降级**（只是没有这条命令，其余工具面不受影响），并留**一行 warn**（沿用「每处降级都要留一行日志」的红线）。**可选依赖一律走 `ctx.inject`，不得为了新功能把模块级 `inject` 撑大。**
+
 **顶层可见是免费的**（会诊 D9）：命令本身会产生 `command/run` + `command/done` 两个**已知** log-only 事件，而客户端有**原生 CommandNode 顶层行**——`/team_session` 这条命令天然在会话里留下一条顶层可见记录，不需要额外造轮子。
 
 #### 10.2.2 创建根会话（模板 = `dsh-webhook` 的 `createWebhookSession`）
