@@ -8,6 +8,7 @@ import { existsSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { apply, __testing } from "./lib/index.js";
 
 let failures = 0;
@@ -181,16 +182,41 @@ function makeCommands() {
  * recorded (options included, which is how the lineage assertions read `meta`),
  * the returned handle's agent is a full message sink, and `failAt` makes the
  * n-th create reject — the fixture behind the §10.2.6「失败即停」case.
+ *
+ * `createDelayMs` + `inFlight` are the §10.2.6 并发 fixture (G2): each create
+ * costs a little time and the provider records how many are in the air at once,
+ * so a batch that fans out would report a peak above the ≤2 bound while the
+ * serial loop reports 1.
  */
-function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, actionLog = undefined } = {}) {
+function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, actionLog = undefined, createDelayMs = 0, inFlight = undefined } = {}) {
 	const created = [];
 	const creates = [];
+	/** In-flight bookkeeping for the §10.2.6 并发 red line (G2): the PROVIDER side
+	 * is the honest place to measure "how many `agents.create` are in the air at
+	 * once" — a counter inside the plugin would only report what the plugin
+	 * believes about itself. `inFlight.max` is the peak, `inFlight.now` the live
+	 * depth and `inFlight.calls` the sample log, so a red run can name the peak it
+	 * actually saw instead of only failing a bound. */
+	const flight = inFlight ?? { max: 0, now: 0, calls: [] };
+	async function takeFlight() {
+		flight.now += 1;
+		flight.max = Math.max(flight.max, flight.now);
+		flight.calls.push(flight.now);
+		// A little cost per create is what makes the measurement decisive: a batch
+		// that is genuinely serial still peaks at 1, while an unbounded fan-out of
+		// N creates would overlap and report N. With a synchronous stub alone a
+		// hanging bug could hide inside one microtask tick.
+		if (createDelayMs > 0) await new Promise((resolve) => { setTimeout(resolve, createDelayMs); });
+	}
 	return {
 		created,
 		creates,
+		inFlight: flight,
 		async create(options) {
 			creates.push(options);
 			actionLog?.push("create");
+			await takeFlight();
+			try {
 			if (failAt >= 0 && creates.length - 1 === failAt) throw new Error(`stub factory refused create #${failAt + 1}`);
 			const calls = { injected: [], steered: [], followedup: [] };
 			const agent = {
@@ -216,6 +242,9 @@ function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, a
 			}
 			onCreated?.(agent, options);
 			return { agent, async dispose() { const index = extraAgents.indexOf(agent); if (index >= 0) extraAgents.splice(index, 1); } };
+			} finally {
+				flight.now -= 1;
+			}
 		},
 	};
 }
@@ -276,7 +305,7 @@ const tick = () => new Promise((resolve) => { setTimeout(resolve, 0); });
  * degradation fixture (plugin loads, one warn, every other tool face unaffected)
  * and `lateCommands` + `provideCommands()` the late-provider one.
  */
-function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {	const ctx = new Context();
+function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0 } = {}) {	const ctx = new Context();
 	// Every plugin log line lands in `log.lines` instead of the console: the
 	// service-attach red line (§5.3) is asserted on the lines themselves.
 	const log = makeLogger();
@@ -324,7 +353,8 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	// worker the command just built is immediately addressable, listable and
 	// drivable — exactly as the real registry sees it after publication.
 	const createdAgents = [];
-	const agentFactory = makeAgents(createdAgents, hidden, { failAt: failCreateAt, onCreated: createdHook, actionLog });
+	const createInFlight = { max: 0, now: 0, calls: [] };
+	const agentFactory = makeAgents(createdAgents, hidden, { failAt: failCreateAt, onCreated: createdHook, actionLog, createDelayMs, inFlight: createInFlight });
 	const agents = {
 		get(id) {
 			if (hidden.has(id)) return undefined;
@@ -414,7 +444,9 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	};
 	/** One `CommandInvocation` exactly as the registry builds it (§10.2.1). */
 	const invoke = (rawInput, agent = senderAgent) => ({ commandId: "cmd-test", agent, rawInput, attachments: [], signal: new AbortController().signal });
-	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke };
+	/** G2 handle: the provider-side peak of concurrent `agents.create` calls. */
+	const maxCreateInFlight = () => createInFlight.max;
+	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight };
 }
 
 function execFor(agent) {
@@ -3106,6 +3138,95 @@ check("U18 清扫: a healthy boot stays quiet — no expired row means no line a
 const driftEnv = await rotateEnv({ pairs: [rotPair("session-worker-a")] });
 const driftPrep = await driftEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: SUCCESSOR }, execFor(driftEnv.senderAgent));
 check("U18 文档漂移: prepare's fallback text no longer claims 「本插件不能编程创建会话」 and names the real status instead", !driftPrep.includes("本插件不能编程创建会话") && driftPrep.includes("agents.create") && driftPrep.includes("§10.2.5") && driftPrep.includes("§11"));
+
+// ---------------------------------------------------------------------------
+// U19 红线回归（§10.3 / 演练 8 的准确判据）+ G2 并发纪律（§10.2.6）
+// ---------------------------------------------------------------------------
+//
+// U19 的四条不是「再跑一遍既有断言」，而是**把红线的判据本身钉成断言**：
+//   1) 本轮新增代码不往会话日志写任何自定义事件类型；
+//   2) 投递消息的 `source` 仍恰三成员；
+//   3) 模块级 `inject` 仍 4 项；
+//   4) 既有 schema 与投递双门零改动。
+//
+// L1 的判据（自选，理由写在这里）：**源码级「无写入面」+ 运行时「状态只落既有出口」双证据**。
+// 理由：插件**没有**任何 `ctx.session` / append 面——`ctx.*` 全表的唯一会话接触是
+// `ctx.sessionQuery.readSession / readSurface / readTitleSnapshots`（都是**读**），所以
+// 「不产生新的日志事件类型」可以被**静态证明**，而不必去猜某个事件名。运行时再证明 ② 的
+// 整条路径只经 settings 命名空间 + `agents.create` + `agent.followup` 三个**既有**出口。
+// The host module is read from the test file's OWN location (`import.meta.url`),
+// not from `import.meta.resolve("./lib/index.js")` — the latter resolves against
+// the process cwd, so the run would silently read nothing under another cwd.
+const hostSourcePath = fileURLToPath(new URL("./lib/index.js", import.meta.url));
+const hostSource = await readFile(hostSourcePath, "utf8");
+const importList = [...hostSource.matchAll(/^import .*? from "([^"]+)";$/gmu)].map((match) => match[1]);
+const HOST_IMPORTS = ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "schemastery", "node:crypto", "node:fs/promises", "node:path"];
+// `appendFile(`/`writeFile(` are deliberately NOT in this list: they are the
+// blackboard's own file writes (`team/<name>/decisions.md`), not session log
+// writes — the red line is about event types, not about the plugin touching disk.
+check("U19 日志事件: the host half has no log-write surface at all — no `ctx.session` (only the read-only `sessionReferenceResolver` / `sessionQuery` seams), no `session.append` / appendEvent / writeEvent / logEvent / `ctx.emit` anywhere in the module (静态证明)", !/ctx\.session(?![A-Za-z])/u.test(hostSource) && !/\.append(Event)?\(/u.test(hostSource) && !/\b(appendEvent|writeEvent|logEvent|emitEvent)\b/u.test(hostSource) && !/\bctx\.emit\(/u.test(hostSource) && !/\bsession\.append/u.test(hostSource));
+check("U19 日志事件: ... and the module's whole import surface is the six audited modules — a whitelist, so a new dependency cannot slip a log-write API in (`@deepseek-ai/dsh-session-reference` is upstream's deep-link parser, not a session-log writer)", sameJson(importList, HOST_IMPORTS) && importList.every((specifier) => HOST_IMPORTS.includes(specifier)));
+// The runtime half, on a REAL batch (2 workers, the §10.2.6 default shape): drive
+// the command, then replay its own `agent/pre-step` listener. The listener is the
+// one seam that could inject a session-log event; it must only hand the payload
+// back (upstream deep-link behavior) and leave zero log lines. Meanwhile every
+// durable state of the run is accounted for by the two stores below.
+const u19ConcurrencyEnv = setup({ sessions: [], useSettings: true, askScript: ["创建"], selfCwd: TEAM_WS, createDelayMs: 20 });
+await u19ConcurrencyEnv.commands.command("team_session").handler(u19ConcurrencyEnv.invoke("n=2 team=night-shift roles=worker-a,worker-b task=并发纪律"));
+const u19Creates = u19ConcurrencyEnv.creates.length;
+const u19Followups = u19ConcurrencyEnv.created.reduce((total, item) => total + item.calls.followedup.length, 0);
+const u19Replayed = await ctx_waterfall(u19ConcurrencyEnv.ctx, { messages: [{ id: "u19", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "参考 dsh://session/session-abc123 继续" }] }], turn: 1, step: 1 });
+check("U19 日志事件: one real batch (2 workers) writes nothing new to any session log — the only state it leaves is the settings namespace, the creates and the followups", u19Creates === 2 && u19Followups === 2 && (u19ConcurrencyEnv.settings.namespaces.get("team-link").data.pairs ?? []).length === 2 && u19Replayed.kind === "enter" && u19Replayed.messages.length === 2 && u19ConcurrencyEnv.log.lines.warn.length === 0 && u19ConcurrencyEnv.log.lines.info.length === 3 && u19ConcurrencyEnv.log.lines.error.length === 0);
+
+// --- G2 (§10.2.6 并发): create 与 followup 串行（或 ≤2） ----------------------
+// The bound is read from the PROVIDER side (the `agents` service stub), which is
+// what a real factory sees. Each create costs 20ms here, so a batch that fanned
+// out would report a peak of 2; the implementation's single awaited loop reports
+// a peak of 1 — inside the design's `≤2`, and the measured value is printed with
+// the failure so a red run names the number it saw instead of only the bound.
+check(`U19 并发: with the creates deliberately slowed, the host never has more than 2 agents.create in the air at once (measured peak ${u19ConcurrencyEnv.maxCreateInFlight()} ≤ 2, N=2 — §10.2.6 串行或 ≤2)`, u19ConcurrencyEnv.maxCreateInFlight() <= 2);
+check("U19 并发: ... and it is in fact exactly serial (peak 1): the batch is one awaited loop, so no worker's create overlaps another's", u19ConcurrencyEnv.maxCreateInFlight() === 1);
+check("U19 并发: the serial loop is visible in the source too — one call site, awaited inside the batch loop, with no parallel combinator over the creates", (hostSource.match(/agents\.create\(/gu) ?? []).length === 1 && /for \(const entry of plan\.sessions\)/u.test(hostSource) && !/Promise\.all\(plan\.sessions/u.test(hostSource));
+
+// --- U19 (2): the delivered message's `source` is still EXACTLY three members -
+check("U19 source: the batch's kickoff relay still carries exactly the three audited members — {kind, form, senderSessionId}, no fourth member", sameJson(Object.keys(kickoff.source).sort(), ["form", "kind", "senderSessionId"]) && kickoff.source.kind === "agent-message" && kickoff.source.form === "relay" && kickoff.source.senderSessionId === "session-self");
+check("U19 source: ... and the live batch's own kickoffs carry the same triple (the reused fixture and the fresh run agree)", u19ConcurrencyEnv.created.every((item) => sameJson(Object.keys(item.calls.followedup[0].source).sort(), ["form", "kind", "senderSessionId"])) && u19ConcurrencyEnv.created.every((item) => item.calls.followedup[0].source.senderSessionId === "session-self"));
+
+// --- U19 (3): the module-level inject array is still the four original entries -
+const U19_INJECT = ["sessionReferenceResolver", "tools", "sessionQuery", "agents"];
+const indexModule = await import("./lib/index.js");
+check("U19 inject: the module-level inject array is still the four original entries — ② grew it with nothing (optional deps ride ctx.inject)", sameJson(indexModule.inject, U19_INJECT));
+check("U19 inject: ... and the host module really is the four-entry shape: `apply`, the four-entry array and `__testing` (plus the plugin `name`) are its whole export surface", sameJson(Object.keys(indexModule).sort(), ["__testing", "apply", "inject", "name"]));
+
+// --- U19 (4): the existing schema and the delivery gates are untouched --------
+// Schema: the ② round declared ONE new key (`pendingCreates`, §10.2.6's durable
+// intent) beside the seven that pre-date it — the two batch bounds are code
+// constants (U16 asserts that), so the red line is that no further key appeared.
+// The declared surface is read from the REGISTERED namespace's base (what the
+// provider actually takes), not from a hand-copied list.
+const U19_POLICY_KEYS = ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"];
+const u19Base = u19ConcurrencyEnv.settings.namespaces.get("team-link").base;
+check("U19 schema: the registered policy namespace still declares exactly its eight keys — the ② round's own pendingCreates plus the seven that pre-date it, and nothing else", sameJson(Object.keys(u19Base).sort(), U19_POLICY_KEYS) && sameJson(Object.keys(u19ConcurrencyEnv.settings.namespaces.get("team-link").data).sort(), ["pairs", "pendingCreates", "teams"]));
+const sendToolU19 = u19ConcurrencyEnv.tool("team_link_send");
+const sendParams = sendToolU19.parameters;
+check("U19 schema: team_link_send's argument surface is unchanged (mutually-exclusive addressing, the message, the §3.4 envelope) — and the real key is `message`, not `text`", sameJson(Object.keys(sendParams.properties).sort(), ["message", "meta", "targetSessionId", "targets"]) && sameJson(sendParams.required, ["message"]) && sendParams.type === "object" && sendParams.properties.message.type === "string" && sendParams.properties.targets.type === "array" && sendParams.properties.targetSessionId.type === "string");
+// The read-only half of the same red line, on the OTHER module: the client face
+// cannot write a session event either — its bundle has no import at all (the
+// client-half suite asserts nothing else may be added to it).
+const clientSource = await readFile(fileURLToPath(new URL("./lib/client.js", import.meta.url)), "utf8");
+check("U19 日志事件: the client half is a pure reader too — its bundle imports nothing at all, so ① cannot reach a log-write API from there either", [...clientSource.matchAll(/^import .*$/gmu)].length === 0 && !/\bappendEvent\b/u.test(clientSource));
+// Gates: the three concrete behaviors that ARE 「投递双门」, each re-asserted
+// through the same fixtures the standalone cases use.
+check("U19 双门: a working pair still bypasses BOTH gates (second send raises no dialog at all)", pairOut2.includes("已配对") && pairOut2.includes("已投递") && pairEnv.uq.requests.length === 2 && pairEnv.targetCalls.followedup.length === 2);
+check("U19 双门: without a pair the sender-side dialog is still raised and the receiver-side dialog is still raised，两次都在（nothing was collapsed into one）", cancelEnv.uq.requests.length === 1 && cancelEnv.uq.requests[0].questions[0].id === "send-confirm" && sendEnv.uq.requests.length === 2 && sendEnv.uq.requests[1].questions[0].id === "receive-confirm");
+check("U19 双门: the receiver's ask option list still carries the pairing grant verbatim, and the sequential upgrade really takes — the send AFTER the pair asks for nothing", sendEnv.uq.requests[1].questions[0].options.map((option) => option.label).join(",") === "接收,总是接收该会话,配对：双向免确认,拒绝并屏蔽该会话");
+// The dialog count is the honest witness for "the batch's own path walks the
+// EXISTING gates": one dialog for the whole batch (the §10.2.4 confirmation),
+// and not one more — the §10.2.3 (i) pairs it writes are exactly what keeps the
+// kickoffs off the gates.
+const u19GateEnv = teamSessionEnv({ askScript: ["创建"] });
+await u19GateEnv.run("n=2 team=night-shift roles=worker-a,worker-b task=门");
+check("U19 双门: a whole batch raises exactly ONE dialog — the §10.2.4 confirmation itself; its pairs (not a new bypass) are what keeps the kickoffs off the two gates", u19GateEnv.uq.requests.length === 1 && u19GateEnv.pairs().length === 2 && u19GateEnv.created.every((item) => item.calls.followedup.length === 1));
 
 rmSync(escDir, { recursive: true, force: true });
 rmSync(TEAM_TMP, { recursive: true, force: true });
