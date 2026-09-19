@@ -201,7 +201,7 @@ handle.agent.followup(createUserMessage({
 
 - **部分失败：失败即停**（第 k 个 create 失败），**已建者保留**并如实报告清单——不静默回滚（回滚会删掉可能已被用户看到的会话）；
 - **按 role 幂等**：同 team 同 role 已存在则跳过（命令可安全重试）；
-- **孤儿防护**：先写 `pending-create` 意图（含 TTL）到 roster，成功回填、失败或超时由插件启动时的清扫报告「可收编清单」；
+- **孤儿防护**：先写 `pending-create` 意图（含 TTL）到 roster，成功回填、失败或超时由插件启动时的清扫报告「可收编清单」；**实现落为 `PolicyConfig.pendingCreates`**（roster 侧的顶层兄弟键——本项目 roster 与 policy 同属 `team-link` 命名空间）。它是本设计**唯一允许的 schema 新增 key**，见 §10.3 的措辞修正；
 - **并发**：create 与 followup 串行（或 ≤2）——N 个 agent 同时首回合 = 成本峰值；
 - **cwd 必须绝对路径**（会话边界会校验）。
 
@@ -217,7 +217,9 @@ handle.agent.followup(createUserMessage({
 - **不得伪造第一方事件**（`team/*` 等仓库内包的领地）；
 - **批量动作必须有一处人类确认**，且确认框必须写明**数量、模型、cwd、成本口径与将建立的信任**；
 - **客户端失败不得影响会话**：definition/registry 坏了只应「不渲染」；
-- 既有的 `inject` 数组（4 项）、schema、投递门、`source` 三成员语义**均不改**；
+- 既有的 `inject` 数组（4 项）、投递门、`source` 三成员语义**均不改**；**既有 schema key 的语义与形状也不改**——但**新增持久化 key 是允许的**，条件是：① 由设计明确要求的闭环所需；② 在设计文档与 CHANGELOG 中记录；③ 不改变任何既有 key 的含义。**本轮的实际新增只有 §10.2.6 的 `pendingCreates`**——它是「重启后仍能清扫孤儿意图」的必要条件：没有它，`pending-create` 只会活在内存里、启动清扫永远扫不到东西。
+
+  > **措辞修正（2026-09-20，② 收口轮触发）**：本条原文写「schema 均不改」。实现方按 §10.2.6 落了 `pendingCreates` 后**主动上报了这个矛盾**（而不是悄悄绕过）。父侧判定：原文措辞过宽，**真实意图是「既有 key 不被破坏」**，不是「禁止一切新增」；已按上款改准，并**不回退实现**（回退会破坏 U18 的 pending-create 闭环）。
 - ② 创建的会话**不得**标 `origin: 'subagent'`（用户明确要求：算根会话）。
 
 ### 10.4 验收增量
