@@ -2939,9 +2939,14 @@ function teamSessionEnv({ teams = [], askScript = [], omitUserQuestions = false,
 	};
 }
 
-const TEAM_SESSION_ROLES = ["worker-a", "worker-b"];
-/** The id the plan builds for one role, recomputed the same way the plugin does. */
-const plannedId = (env, role, index = 0) => env.creates[index]?.sessionId;
+/**
+ * The session id a run created for one ROLE. The lookup is by role — the id
+ * grammar is `team-link-<team>-<role>-<uuid8>`, so the role segment is what
+ * identifies the row — instead of by position in `creates`, which silently
+ * returns whatever was created first and would keep passing if the batch were
+ * reordered (a positional helper that names itself after the role misleads).
+ */
+const plannedId = (env, team, role) => env.creates.find((options) => new RegExp(`^team-link-${team}-${role}-[0-9a-f]{8}$`, "u").test(options.sessionId))?.sessionId;
 
 // --- U16a (§10.2.1): the command face is registered through the OPTIONAL seam --
 const cmdEnv = teamSessionEnv();
@@ -2966,7 +2971,17 @@ const { readTeamSessionCommand, teamSessionPlan, teamSessionDialogText, teamSess
 const parsedFull = readTeamSessionCommand("n=2 team=night-shift roles=worker-a,worker-b task=做接口 model=deepseek/deepseek-v4 preset=coder");
 check("U16 解析: the full form parses into its parts (n / team / roles / task / model split into provider+model / preset)", parsedFull.error === undefined && parsedFull.value.n === 2 && parsedFull.value.team === "night-shift" && parsedFull.value.roles.join(",") === "worker-a,worker-b" && parsedFull.value.task === "做接口" && parsedFull.value.provider === "deepseek" && parsedFull.value.model === "deepseek-v4" && parsedFull.value.preset === "coder");
 const parsedBare = readTeamSessionCommand("night-shift worker-a worker-b");
-check("U16 解析: positional role names around team= are accepted, and a bare task without | applies to every worker", parsedBare.error === undefined && parsedBare.value.bare.join(",") === "night-shift,worker-a,worker-b" && readTeamSessionCommand("team=t task=统一任务").value.task === "统一任务");
+check("U16 解析: positional role names are collected into `bare` AND folded into `roles`, in the order written", parsedBare.error === undefined && parsedBare.value.bare.join(",") === "night-shift,worker-a,worker-b" && parsedBare.value.roles.join(",") === "night-shift,worker-a,worker-b" && readTeamSessionCommand("team=t task=统一任务").value.task === "统一任务");
+// The gaps this batch closes, at the parser level. Both were RED before:
+// positional names reached `bare` and stopped there (the plan never read it), and
+// `task=` was split on whitespace with only a whole-token quote pair stripped.
+check("U16 解析: the positional bucket is not a dead end — `team=t worker-a worker-b` puts both roles in the request the plan reads", (() => { const parsed = readTeamSessionCommand("team=t worker-a worker-b"); return parsed.roles === undefined && parsed.value.roles.join(",") === "worker-a,worker-b"; })());
+check("U16 解析: `task=` runs to the END OF THE LINE, so an unquoted multi-word task is not truncated (pre-fix: task=「fix」 and the words `the`/`bug` landed in the ignored bare bucket)", (() => { const parsed = readTeamSessionCommand("team=t roles=a task=fix the bug"); return parsed.error === undefined && parsed.value.task === "fix the bug" && parsed.value.bare.length === 0; })());
+check("U16 解析: a quoted task value is unwrapped — `task=\"fix the bug\"` carries no quote characters (pre-fix: the value kept both quotes)", (() => { const parsed = readTeamSessionCommand("team=t roles=a task=\"fix the bug\""); return parsed.error === undefined && parsed.value.task === "fix the bug" && !parsed.value.task.includes("\""); })());
+check("U16 解析: the unwrapping covers every key — `team=\"t\" roles=\"a,b\"` reads like the unquoted form (pre-fix: both values kept their quotes, and roles split to `\"a`/`b\"`)", (() => { const parsed = readTeamSessionCommand("team=\"t\" roles=\"a,b\""); return parsed.error === undefined && parsed.value.team === "t" && parsed.value.roles.join(",") === "a,b"; })());
+check("U16 解析: a half-quoted value is REFUSED, never guessed at (task= both sides of the closing quote)", readTeamSessionCommand("team=t roles=a task=\"a\"b").error.includes("引号不成对"));
+check("U16 解析: team= stays REQUIRED — a line of positional role names alone is refused by the plan with the missing team named, not silently seated under the first name", (() => { const parsed = readTeamSessionCommand("worker-a worker-b"); const planned = teamSessionPlan(parsed.value, []); return parsed.error === undefined && parsed.value.roles.join(",") === "worker-a,worker-b" && planned.error.includes("需要 team（团队名）"); })());
+check("U16 解析: `key=` with nothing after it is refused per key (the value may not be empty)", readTeamSessionCommand("team=t task=").error.includes("task= 后面缺少取值") && readTeamSessionCommand("team=t roles= task=x").error.includes("roles= 后面缺少取值"));
 const parsedAliases = readTeamSessionCommand("count=2 team=t role=a,b");
 check("U16 解析: count=/role= are accepted aliases of n=/roles= (a human types either)", parsedAliases.error === undefined && parsedAliases.value.n === 2 && parsedAliases.value.roles.join(",") === "a,b");
 const parsedBareModel = readTeamSessionCommand("team=t n=1 roles=a model=deepseek-v4");
@@ -3028,6 +3043,23 @@ check("U16 端到端: the pairs declared in the dialog are the pairs actually wr
 check("U16 端到端: roster carries one row per created role seated on that worker's session id, plus the creation-path coordinator claim", okEnv.store()[0].roles.map((entry) => `${entry.role}=${entry.current}`).sort().join(",") === [...okIds.map((id) => `${id.split("-").slice(4, -1).join("-")}=${id}`), "coordinator=session-self"].sort().join(",") && okEnv.store()[0].roles.every((entry) => entry.history.length === 1 && entry.history[0].until === null));
 check("U16 端到端: the summary reports the created ids, the roster write and the pairs, and claims no rollback", okOut.kind === "success" && okIds.every((id) => okOut.text.includes(id)) && okOut.text.includes("已登记 2 个角色") && okOut.text.includes("建立/确认 2 条双向免确认通道") && okOut.text.includes("一律保留、不回滚"));
 check("U16 端到端: a run with a CLI-entered model= reaches both agentOptions and the dialog's model line", okEnv.creates.every((options) => options.agentOptions?.provider === "deepseek" && options.agentOptions?.model === "deepseek-v4") && okEnv.creates.every((options) => options.meta.agentPreset === "coder") && okEnv.uq.requests[0].questions[0].question.includes("model=deepseek-v4"));
+
+// --- U16 端到端（文法面）: a REAL command, through the handler ----------------
+// The gaps of this batch are end-to-end or they are nothing: the parser's
+// positional bucket was never read by the plan, so a plan-level assertion is the
+// only honest one. Each case below enters the real command face and asserts on
+// what the run actually created.
+const grammarEnv = teamSessionEnv({ askScript: ["创建"] });
+const grammarOut = await grammarEnv.run("team=night-shift worker-a worker-b task=fix the bug");
+check("U16 端到端文法: positional role names alone create exactly those sessions (pre-fix: the plan refused with 「需要角色列表」 and nothing was created)", grammarEnv.creates.length === 2 && grammarEnv.creates.map((options) => options.sessionId).every((id) => /^team-link-night-shift-worker-[ab]-[0-9a-f]{8}$/u.test(id)) && grammarEnv.store()[0].roles.map((entry) => entry.role).sort().join(",") === "coordinator,worker-a,worker-b" && grammarOut.kind === "success");
+check("U16 端到端文法: the unquoted multi-word task reaches the kickoff message whole (pre-fix: the worker was driven with 「fix」)", grammarEnv.created.length === 2 && grammarEnv.created.every((item) => item.calls.followedup.length === 1 && item.calls.followedup[0].content[0].text.includes("fix the bug")));
+const quotedRunEnv = teamSessionEnv({ askScript: ["创建"] });
+await quotedRunEnv.run("team=night-shift roles=worker-a task=\"fix the bug\"");
+check("U16 端到端文法: a quoted task value reaches the kickoff message with no quote characters left in it", quotedRunEnv.created.length === 1 && quotedRunEnv.created[0].calls.followedup[0].content[0].text.includes("fix the bug") && !quotedRunEnv.created[0].calls.followedup[0].content[0].text.includes("\"fix the bug\""));
+check("U16 端到端文法: the confirmation dialog body carries the same whole task text (the human sees what the workers will be told)", quotedRunEnv.uq.requests[0].questions[0].question.includes("fix the bug"));
+// The role→id lookup is by ROLE, not by position (a positional helper that is
+// named after the role keeps passing on a reordered batch and hides the swap).
+check("U16 端到端文法: each role resolves to its own session id (the lookup reads the id's role segment, not the create order)", plannedId(grammarEnv, "night-shift", "worker-a") === grammarEnv.creates[0].sessionId && plannedId(grammarEnv, "night-shift", "worker-b") === grammarEnv.creates[1].sessionId && plannedId(grammarEnv, "night-shift", "worker-a") !== plannedId(grammarEnv, "night-shift", "worker-b"));
 
 // --- U18: 血统 (the meta carries cwd/agentPreset and nothing else) -----------
 check("U18 血统: meta carries exactly {cwd, agentPreset} — no origin / parentSession / delegationDepth", okEnv.creates.every((options) => Object.keys(options.meta).sort().join(",") === "agentPreset,cwd") && okEnv.creates.every((options) => options.meta.origin === undefined && options.meta.parentSession === undefined && options.meta.delegationDepth === undefined && options.meta.isSeeded === undefined));
