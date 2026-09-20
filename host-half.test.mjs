@@ -619,7 +619,8 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	const uq = makeUserQuestions([...askScript]);
 	const settings = useSettings || lateSettings
 		? makeSettings(pendingSeed === undefined ? settingsSeed : { ...(settingsSeed ?? {}), "team-link": { ...((settingsSeed ?? {})["team-link"] ?? {}), pendingCreates: [...((settingsSeed ?? {})["team-link"]?.pendingCreates ?? []), ...(Array.isArray(pendingSeed) ? pendingSeed : [pendingSeed])] } }, { settingsRegisterThrows, legacyRegisterThrows, legacyGetThrows })
-		: undefined;	ctx.provide("sessionReferenceResolver", resolver);
+		: undefined;
+	ctx.provide("sessionReferenceResolver", resolver);
 	ctx.provide("tools", { register(tool) { registeredTools.push(tool); return () => {}; } });
 	const query = makeQuery(sessions, eventsBySession, surfaceReadHook);
 	ctx.provide("sessionQuery", query);
