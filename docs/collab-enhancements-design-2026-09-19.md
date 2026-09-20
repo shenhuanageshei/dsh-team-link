@@ -198,7 +198,9 @@ const handle = await ctx.agents.create({          // ⚠ 必须从【插件根 c
 
 > **⚠️ 给「故意不做」清单加的纪律（2026-09-20，DEFECT-3 之后）**：上表每一条「故意不做」都是**一条判断**，与代码一样需要被判据支撑——**「我认为宿主会兜底」不是判据**。⇒ 凡列入本清单的条目，必须**在真机上被证伪过**（即：确实不做也正确），否则必须显式标注为「**未验证的假设**」并给出验证步骤。**DEFECT-1（preset 源）与 DEFECT-3（模型选择）是同一份清单上的同一次失误的两次爆发**：都写在「故意不做」里，都在真机上炸了。
 
-**本设计的实际创建落点（与上面的伪代码同批改准）**：`createRootAgent(ctx, rootCtx, plan, entry, cwd)` 是**唯一**的创建入口，它把模板的完整时序收成一处：① `workspaceRegistry.create(cwd)` → ② `meta.cwd = workspace.path`（**registry 归一化后的路径**，因为 attach 会拿它校验）→ ③ `agents.create(...)` → ④ `attachSession(sessionId)` → ⑤ 失败则 `detachSession` + `dispose` + 原错误照抛（各步失败一行 warn）。**② 批量建队与 ③a 自建继任者共用它**，所以两条路径的工作区归属一致。
+**本设计的实际创建落点（与上面的伪代码同批改准）**：`createRootAgent(ctx, rootCtx, plan, entry, cwd)` 是**唯一**的创建入口，它把模板的完整时序收成一处：① `workspaceRegistry.create(cwd)` → ② `meta.cwd = workspace.path`（**registry 归一化后的路径**，因为 attach 会拿它校验）→ ③ **preset：缺省也 `resolve` + `standingKeyFor` + 写 `meta.agentPreset`** → ④ **模型选择：未给（或只给了一半）时用 `ctx.agentDefaultModel.currentSelection()` 解析/补齐，写进 `agentOptions`** → ⑤ `agents.create(...)` → ⑥ `setup` 里 `agentPresets.mount` **无条件**执行 + 把同一份模型选择交给 `installTeamSessionModelSelection`（模板第 9 步）→ ⑦ `attachSession(sessionId)` → ⑧ 失败则 `detachSession` + `dispose` + 原错误照抛（各步失败一行 warn）。**② 批量建队与 ③a 自建继任者共用它**，所以两条路径的工作区归属、preset 与模型选择都一致。
+
+> **这两步（③ preset、④ 模型选择）都曾是「故意不做」，也都在真机上炸了**：DEFECT-1（缺 preset ⇒ 缺 persona-prefix 组装源）与 DEFECT-3（缺模型选择 ⇒ `{{model}}` 无值）。**DEFECT-3 的机制证明**：`{{model}}` 的值来自 **agent 自己的 `options.model`**（`dsh-agent-loop/lib/index.js:1534` 的 `ctx.systemPrompt.variable("model", (context) => context.agent?.options.model)`），**宿主缺省根本不在那条路径上**——「宿主会兜底」在机制上就不可能成立。
 
 > **一处待跟进的同源风险（实现方主动上报）**：roster 的 `team.workspace` 仍取自调用方的**原始 cwd**，而会话 `meta.cwd` 现在用 registry **归一化**后的路径 ⇒ 若真实 registry 会归一化（realpath / 大小写 / 尾斜杠），**黑板的落点与工作区记录可能不同源**。这正是今晚反复出现的那类「同一事实两处各自计算」——列为下一轮的核查项。
 

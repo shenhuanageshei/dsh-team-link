@@ -25,10 +25,13 @@
 - **③b 恢复工具 `team_link_recover`**——**恰两个封闭动词**：`revive`（复活**同一**会话：身份 / roster / 信任**零改动**；**只对插件自建会话**，人类自建只输出深链指引）与 `reappoint`（**人类对话授权的 prepare**：候选由**插件**从 live 成员算出、**模型不得指定** → 逐字走既有 prepare + claim）。**attended-only：刻意不设 provisional / 无人值守变体**（pair 迁移可被 sweep 自动回退，**incumbency 不可**），无确认服务 → fail-closed。**八条反后门约束全部落成断言**：封闭动词 / 候选插件算 / `revive` 只绑当前 `current` / `writerGate` 原样不动 / **绝不把 `writer` 降级为 `any`** / 限速 + 三处留痕 / 进入先跑过期清扫 / TOCTOU 双复检（对话框弹出时与落笔前各重查活性）。
 - **③b 活性诊断面**：三道门（`writerGate` / `rotateGate` / `retireGate`）**本体仍是纯函数**，由**有 ctx 的工具层**富化拒绝文案（旧文案对死现任是误导性的）；`roster get` 现任行加注记；启动清扫新增「current 无活代理的角色」一行；**`roster.md` 刻意不加**（落盘文件不烙活性读数）。两个派生词 `vacant`（刻意空缺，`current=null`）与 `seated-dead`（悬空指针）**不落盘**。
 
-### 🐞 真机验证暴露的两个缺陷（均已修，待下次重启窗口复验）
+### 🐞 真机验证暴露的三个缺陷（均已修，待复验窗口）
 - **DEFECT-1（高）**：编程创建的会话**跑不起来**——`prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix")`。根因：`buildTeamSessionCreateOptions` 只在给了 `preset=` 时才写 `meta.agentPreset` 并 mount ⇒ **缺省时新建 agent 没有 persona-prefix 组装源**；而官方模板 `createWebhookSession` 是「**总是** resolve（缺省也解析）并 mount」。修法：对齐模板（缺省也解析 + 无条件 mount；服务缺席降级为一行 warn 且不阻断创建）。**H4 假设由此被真机推翻**（**会建 ≠ 能用**）。
 - **DEFECT-2（中高）**：编程创建的会话**未挂进工作区** ⇒ 用户侧边栏看不到（须手动切工作区）。根因：模板在 `agents.create` 后调 `await workspace.attachSession(sessionId)`，我们**全库 0 处**。
 - **两个缺陷是同一个模式**：**模板有一组「创建后必须做的事」，实现只做了一部分**（漏了 preset 解析/挂载、漏了 workspace 挂载）。
+- **DEFECT-3（高）**：**DEFECT-1 只修了一半**——补上了 preset（组装源），却**没给装配里引用的 `{{model}}` 赋值**。**机制证明**：`{{model}}` 取的是 **agent 自己的 `options.model`**（`dsh-agent-loop/lib/index.js:1534` 的 `ctx.systemPrompt.variable("model", (context) => context.agent?.options.model)`）⇒ **宿主缺省根本不在那条路径上**；而 `buildTeamSessionCreateOptions` 在未给 model 时让 `agentOptions` 为空、`installTeamSessionModelSelection` 首行返回 ⇒ 编程创建的 agent **没有任何模型选择** ⇒ 首回合报 `prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix")`。**这一处「故意不做」是父侧批准的**（理由写的是「缺省时宿主自己的 defaultModel 已生效」）——**真机把它推翻了**。
+  **修法**：对齐模板 `resolveRequest:30-36`——未给（或**只给了一半**）时用 `ctx.agentDefaultModel.currentSelection()` **解析/补齐**并写进 `agentOptions`，再把同一份选择交给 `installTeamSessionModelSelection`；服务缺席 ⇒ **拒绝创建**（fail-visible——宁可不建，也不建一个跑不起来的会话）。**② 与 ③a 两条路径各自断言**（`successor:"auto"` 建的继任者同样受影响，而那是**信任迁移路径**）。
+  **教训（已写进设计 §10.2.2）**：凡列入「故意不做」清单的条目都是**判断**，必须**在真机上被证伪过**、否则显式标注为「未验证的假设」。**「我认为宿主会兜底」不是判据。** DEFECT-1 与 DEFECT-3 是**同一份清单上的同一次失误的两次爆发**。
 - **教训（已写进设计 §12）**：① **模板引用必须带「时序清单」**，不能只引形状——§10.2.2 只写了 `meta` 的形状，实现逐字写对却漏了后续步骤；② **断言可能成为缺陷的同谋**——修复删掉的那条旧断言「无 `agentPresets` ⇒ 会话照常可用」正把缺陷固化成了期望行为；③ **探针的前置条件本身也要被验证**——H1 默认「会话已经能被看到」，而真机暴露的正是它根本不在该工作区的列表里。
 
 ### 🔧 修复（差异审计与代码评审发现）
@@ -61,7 +64,7 @@
 - **A 面改从结构化字段渲染一句人话**（用户决定）：A 面**不再原样搬运模型可见的报告句**（含「已投递到 …」「目标处于空闲」「steer 注入当前回合」这类**投递机制电报**，让人看的卡片偏机制而非结论，且一个目标就占 2–3 行），改由 `outcome` / `busy` / 目标身份渲染短句；`detail` **仍留在 meta 里**（模型可见文本的事实源 + 降级兜底）。原「卡内行 == 报告首行」的字符串等式锁**作废**，换成**跨半边行为锁**（新增 `outcome` 枚举值而无客户端短语 → 必红）。
 
 ### 🧪 验证
-- `node host-half.test.mjs` → **836**（failed: 0）；`node client-half.test.mjs` → **146**（failed: 0）（**0.3.8 收口时点**；合计 **982**）。基线演进：host 506 → … → 675 → 831 → **836**；client 46 → … → 138 → **146**。
+- `node host-half.test.mjs` → **848**（failed: 0）；`node client-half.test.mjs` → **146**（failed: 0）（**0.3.8 收口时点**；合计 **994**）。基线演进：host 506 → … → 675 → 831 → 848；client 46 → … → 138 → **146**。
   > **计数口径**：一律以套件**自报的那两行**为准；本文件历轮的时点计数（如 675 / 813）保留原文不改，最新值见本行与 README 徽章、第十节。
 - **U19 红线回归**（② 收口轮补，**17 条**断言——此前误记为 16，差异审计修复轮 🔵-4 已改；判据是在 U19 小节内逐个数 `check(` 调用点（修复轮**之外**另加的 7 条见下一条，两者不要相加））：① 无新增日志事件类型；② 投递 `source` 恰三成员；③ 模块级 `inject` 仍 4 项；④ 既有 schema 形状与投递双门零改动（含「整批恰弹一次对话框」）。① 的判据经差异审计修复轮 🔵-1 改写为**诚实版**：插件对会话的写入面**存在**（`ctx.agents.create` / `agent.followup`），`sessionQuery` 是**四个**读方法（`listSessions` / `readSession` / `readSurface` / `readTitleSnapshots`），所以那条源码断言锁的是「**本模块不得自己长出写入面**」（审计变异 M6：往模块里放一个日志写入 API → 1 红），而**不是**「静态正则证明了事件类型」——那两条路径的事件类型由**上游**定义，正则证明不了这一点；运行时那条读的是**桩**，结构上观察不到新事件类型，是旁证而非判据。
 - **并发纪律**：§10.2.6 要求 create 与 followup 串行（或 ≤2）——实测**已在树上**（单条 `await` 串行循环、`agents.create(` 全模块恰一调用点），故未新增队列，只补断言：提供方侧在飞峰值 **实测 1 ≤ 2**。
