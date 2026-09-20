@@ -6,11 +6,11 @@
 
 ---
 
-## 未发布 — ① 发送方可见性（设计 §10.1 A+D）与 ② `/team_session` 自动建队（设计 §10.2）
+## 未发布 — ① 发送方可见性（§10.1）· ② `/team_session` 自动建队（§10.2）· ③ 自动换届交接（§11）
 
-> ① 让**发送方自己**也看到自己发出的跨会话消息卡片（此前只有接收方有卡片，发送方只看到一行藏在可折叠工具树里的灰字）。② 一条命令建 N 个 worker 根会话并登记进 roster。设计与裁决记录：`docs/collab-enhancements-design-2026-09-19.md` §10.1 / §10.2、`docs/consult-minutes/2026-09-19-consult-37-minutes.md`。
+> ① 让**发送方自己**也看到自己发出的跨会话消息卡片（此前只有接收方有卡片，发送方只看到一行藏在可折叠工具树里的灰字）。② 一条命令建 N 个 worker 根会话并登记进 roster。③ 让换届能自动建继任者并交接，另加一个**两动词、attended-only** 的团队恢复工具与活性诊断面。设计与裁决记录：`docs/collab-enhancements-design-2026-09-19.md` §10.1 / §10.2 / §11 / **§12（真机验证结果）**、`docs/consult-minutes/2026-09-19-consult-37-minutes.md`、`2026-09-20-consult-43-minutes.md`。
 >
-> **未发布状态**：两项的宿主半边都需 DSH 重启才在真机生效，演练 8（①）与演练 9（②）**尚未执行**。
+> **未发布状态**：三项的宿主半边都需 DSH 重启才在真机生效。**演练 8（①）已通过真机验证**（§12.1）；演练 9（②）与演练 10（③）待 DEFECT-1/2 的修复生效后重跑。
 
 ### ✨ 新增
 - **A：`tool.call.toolview`（key 逐字 `team_link_send`）**——发送方的工具行从通用灰行变成与接收方同款的出站卡片（逐目标 outcome / detail / busy）。
@@ -19,6 +19,17 @@
 - **② `/team_session`（设计 §10.2）**——一条命令建 N 个 worker **根会话**（N ≤ 8、每队成员 ≤ 24，两个**代码常量**，刻意不进 settings schema）→ 逐个 create 后 `followup` 投递启动任务 → 按 role 幂等登记进 roster → 与主会话建立 pairs 双向免确认通道。批量动作前有**一次**写明「数量 / 模型 / 预设 / cwd / 保守成本口径 / 将建立的信任」的确认框，**取消即零创建零 pairs**，无确认服务即 fail-closed。命令走**可选** `ctx.inject(["commands"])`（模块级 `inject` 仍 4 项），**服务缺席 / 迟到 / 无 `register()`** 三种降级都只丢这条命令。会话 `meta` 恰 `{cwd, agentPreset}`（`origin` / `parentSession` / `delegationDepth` / `parentAgent` 一律不写 ⇒ 根会话），`AgentHandle` 由**插件根 ctx** 的控制器持有。
 - **② schema 新增（唯一一处，已裁定）**：`PolicyConfig.pendingCreates`——§10.2.6 的 pending-create 意图必须持久化，否则重启后启动清扫扫不到任何东西。§10.3 原文「schema 均不改」措辞过宽，已改准为「**既有 key 的语义与形状不改；新增须为设计明确要求的闭环所需并在文档与 CHANGELOG 记录**」；既有八个 key 的名字、形状与语义一字未动。
 - **② 生命周期（设计 §10.2.5，设计要求必须写进文档）**：**插件卸载/重载 = 全队 teardown**——`AgentHandle` 由插件持有，拆插件即拆掉这些代理，**而会话仍在盘上**。这不是事故，是生命周期事实。恢复路径三步、不新增机制：`team_link_list_sessions` 如实读成 `✕ 未运行` + `verdict=dead` → 在侧边栏**逐个打开**把会话拉回活的代理 → 用 `team_link_roster action=set-role` 重新登记。`/team_session` 的返回文案也带同一条提示。README 的 ② 段落与本条同批补齐。
+
+### ✨ 新增（③ 自动换届交接 · 设计 §11）
+- **③a 主路径**：`team_link_rotate action=prepare` 新增 **`successor:"auto"`**（+ 可选 `handoff` 正文）——插件自建**根会话**续任、写**三层交接文档**（头 YAML / 事实段（**与 claim 返回文案同一事实源**）/ 正文 **5 硬节** `mission`·`in-flight`·`commitments`·`unknowns`·`task-and-goal`），再把令牌与正文 **followup** 投给继任者、由它自行 **claim**（**claim 逐字未动**，未新增令牌类型）。**缺项阶梯**：auto + 空正文 → **拒绝于工具入口（零建会话 / 零令牌 / 零 freeze）**；硬节缺 → 拒绝并点名；软节缺 → 放行 + 警告；显式 successor 无正文 → 放行 + 警告；文档写失败 → **abort-before-prepare**。便捷命令 **`/team_rotate <role>`**（走可选 `commands` 注入，**只对现任开放**）。
+- **③b 恢复工具 `team_link_recover`**——**恰两个封闭动词**：`revive`（复活**同一**会话：身份 / roster / 信任**零改动**；**只对插件自建会话**，人类自建只输出深链指引）与 `reappoint`（**人类对话授权的 prepare**：候选由**插件**从 live 成员算出、**模型不得指定** → 逐字走既有 prepare + claim）。**attended-only：刻意不设 provisional / 无人值守变体**（pair 迁移可被 sweep 自动回退，**incumbency 不可**），无确认服务 → fail-closed。**八条反后门约束全部落成断言**：封闭动词 / 候选插件算 / `revive` 只绑当前 `current` / `writerGate` 原样不动 / **绝不把 `writer` 降级为 `any`** / 限速 + 三处留痕 / 进入先跑过期清扫 / TOCTOU 双复检（对话框弹出时与落笔前各重查活性）。
+- **③b 活性诊断面**：三道门（`writerGate` / `rotateGate` / `retireGate`）**本体仍是纯函数**，由**有 ctx 的工具层**富化拒绝文案（旧文案对死现任是误导性的）；`roster get` 现任行加注记；启动清扫新增「current 无活代理的角色」一行；**`roster.md` 刻意不加**（落盘文件不烙活性读数）。两个派生词 `vacant`（刻意空缺，`current=null`）与 `seated-dead`（悬空指针）**不落盘**。
+
+### 🐞 真机验证暴露的两个缺陷（均已修，待下次重启窗口复验）
+- **DEFECT-1（高）**：编程创建的会话**跑不起来**——`prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix")`。根因：`buildTeamSessionCreateOptions` 只在给了 `preset=` 时才写 `meta.agentPreset` 并 mount ⇒ **缺省时新建 agent 没有 persona-prefix 组装源**；而官方模板 `createWebhookSession` 是「**总是** resolve（缺省也解析）并 mount」。修法：对齐模板（缺省也解析 + 无条件 mount；服务缺席降级为一行 warn 且不阻断创建）。**H4 假设由此被真机推翻**（**会建 ≠ 能用**）。
+- **DEFECT-2（中高）**：编程创建的会话**未挂进工作区** ⇒ 用户侧边栏看不到（须手动切工作区）。根因：模板在 `agents.create` 后调 `await workspace.attachSession(sessionId)`，我们**全库 0 处**。
+- **两个缺陷是同一个模式**：**模板有一组「创建后必须做的事」，实现只做了一部分**（漏了 preset 解析/挂载、漏了 workspace 挂载）。
+- **教训（已写进设计 §12）**：① **模板引用必须带「时序清单」**，不能只引形状——§10.2.2 只写了 `meta` 的形状，实现逐字写对却漏了后续步骤；② **断言可能成为缺陷的同谋**——修复删掉的那条旧断言「无 `agentPresets` ⇒ 会话照常可用」正把缺陷固化成了期望行为；③ **探针的前置条件本身也要被验证**——H1 默认「会话已经能被看到」，而真机暴露的正是它根本不在该工作区的列表里。
 
 ### 🔧 修复（差异审计与代码评审发现）
 - **F2（仓库自身良构红线）**：`targets[].sessionId` / `expr` / `senderSessionId` / 信封 `type|pri|ref` **未经 `wellFormed`**——会把孤立代理项写进会话日志。已全部过闸 + 6 条回归锁（此前代码注释与 README 的「永远良构」自述**不成立**，已改）。
