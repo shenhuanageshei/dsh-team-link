@@ -159,6 +159,24 @@ const handle = await ctx.agents.create({          // ⚠ 必须从【插件根 c
 
 **为什么「全省略」就是根会话**：`meta.origin` 的类型是 `'subagent' | undefined`，且运行时校验 `origin !== undefined && origin !== 'subagent'` 抛错 ⇒ **`undefined` 是唯一合法的非子代理取值**；不写 `parentAgent` 即无父。两个官方先例（`dsh-webhook` 的 `createWebhookSession`、UI 自身的 `createOrAdopt`）都只放 `cwd`/`agentPreset`。
 
+> **⚠️ 模板的完整动作时序（2026-09-20 补：真机因此暴露过两个缺陷）**
+>
+> **引用模板不能只引它的形状。** 上面那段伪代码只展示了 `agents.create` 的**参数形状**，而 `createWebhookSession` 实际做的是一**串**动作。2026-09-20 的真机验证里，实现「照形状逐字写对」却**漏了两步**，各自造成一个真机缺陷（§12）：
+
+| # | 模板动作（`dsh-webhook/lib/index.js`） | 漏掉的后果 |
+|---|---|---|
+| 1 | `ctx.workspaceRegistry.create(绝对路径)`（`:96`） | — |
+| 2 | `cwd: workspace.path`（cwd 取自 registry，而非裸字符串）（`:103`） | — |
+| 3 | `agentPresets.resolve(...)` + `standingKeyFor(preset.id)`——**缺省也解析**（`:93-94`） | **DEFECT-1**：没有 persona-prefix 组装源 ⇒ 首回合报 `{{model}} has no value`，**会话跑不起来** |
+| 4 | `ctx.agents.create({ sessionId, meta, agentOptions, setup })`（`:99-111`） | — |
+| 5 | `setup` 里 `await agentPresets.mount(agentCtx, preset.id)`——**无条件挂载**（`:108`） | 同 DEFECT-1 |
+| 6 | **`await workspace.attachSession(sessionId)`**（`:115`） | **DEFECT-2**：会话没有 workspace 归属 ⇒ **侧边栏看不到** |
+| 7 | 失败回滚：`await workspace.detachSession(sessionId)`（`:137`） | 半成品残留 |
+| 8 | `permissionPresets.resolve/set`、`sessionTitle.rename`、`followup(prompt)`（`:92/:118-120`） | 权限/标题/首回合缺失 |
+
+>
+> **实现要求（通用纪律）**：凡在本设计中「采用某模板」，实现前必须把该模板函数**通读并列出它的全部动作**，逐条标注「已做 / 不做（附理由）」；**漏步必须显式声明，不许静默跳过**。设计侧的教训见 §12.3。
+
 #### 10.2.3 启动任务：`create` resolve 之后 `followup`
 
 ```js
