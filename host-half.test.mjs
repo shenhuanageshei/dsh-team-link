@@ -271,6 +271,37 @@ function presetServiceWarns(env) {
 	return env.log.lines.warn.filter((line) => line.includes("agentPresets service unavailable"));
 }
 
+/** The host's default model selection as this fixture models it (真机缺陷 #3). */
+const STUB_DEFAULT_PROVIDER = "deepseek";
+const STUB_DEFAULT_MODEL = "deepseek-chat";
+
+/**
+ * `agentDefaultModel` 服务桩 —— 真机缺陷 #3 的判据面（§10.2.2 模板 `resolveRequest`
+ * 的**缺省分支**，`dsh-webhook/lib/index.js:30-36`）。官方模板在调用方**没给** model 时
+ * 也解析：`currentSelection()` ⇒ `agentOptions = {provider, model}`，并把它装成初始模型
+ * 选择（模板第 9 步 `installInitialModelSelection`）。
+ *
+ * 为什么这不是「装了没有」的同义反复：`{{model}}`（`deployment:persona-prefix` 引用的
+ * 那个变量）的取值就是 `agent.options.model` —— `dsh-agent-loop` 用
+ * `ctx.systemPrompt.variable("model", (context) => context.agent?.options.model)` 注册它
+ * （`dsh-agent-loop/lib/index.js:1534`）。所以「`currentSelection()` 的返回值」「写进
+ * `agentOptions` 的那一对」「装在 setup 上的模型选择」**必须是同一对**；缺任何一处，
+ * 新建的会话照样死在 `prompt variable "{{model}}" has no value`。
+ *
+ * `calls` 记录的是**服务侧**读数（插件到底问过没有），`provider`/`model` 可被 fixture
+ * 覆盖成空串，从而造出「服务在、但读不出可用的 provider/model」那一档。
+ */
+function makeAgentDefaultModel({ provider = STUB_DEFAULT_PROVIDER, model = STUB_DEFAULT_MODEL, reasoningEffort = undefined } = {}) {
+	const calls = [];
+	const service = {
+		currentSelection() {
+			calls.push({ provider, model });
+			return { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) };
+		},
+	};
+	return { service, calls };
+}
+
 /**
  * `workspaceRegistry` service stub —— 真机缺陷 #2 的判据面。插件照
  * `dsh-webhook` 的 `createWebhookSession` 那样用它：`create(cwd)` 在
@@ -339,6 +370,40 @@ function workspaceBoundOnce(env) {
 /** The one NAMED degradation line of the workspace face, per created session. */
 function workspaceServiceWarns(env) {
 	return env.log.lines.warn.filter((line) => line.includes("workspaceRegistry service unavailable"));
+}
+
+/** DEFECT-3 的端到端读数，按**会话 id** 配对（不按位置）：每个新建会话拿到的那一对
+ * provider/model 是不是 `currentSelection()` 那一刻的读数，以及创建时装上的模型选择钩子
+ * 是不是挂在**这个会话自己**的 setup 上下文上（`agents.create` 的 `setup` 真的被工厂
+ * await 过——桩照做了）。①②③a 三条路径共用这一个判据，判据只写一处。 */
+function modelSelectionOf(env) {
+	return env.creates.map((options) => {
+		const created = env.created.find((item) => item.agent.id === options.sessionId);
+		return {
+			id: options.sessionId,
+			provider: options.agentOptions?.provider,
+			model: options.agentOptions?.model,
+			// 装上了就是 `"function"`，没装就是 `"undefined"` —— 存的是 typeof 的读数本身，
+			// 免得调用点再套一层 `typeof`（那是「永远为假」的空锁）。
+			hook: typeof created?.agent?.setupCalls?.["agent/request"],
+			setupAgentId: created?.agent?.setupCtx?.agentId,
+		};
+	});
+}
+/** The whole reading: every creation carries `expected` AND installed the hook. */
+function modelSelectionBoundOnce(env, expected = { provider: STUB_DEFAULT_PROVIDER, model: STUB_DEFAULT_MODEL }) {
+	return env.creates.length > 0 && modelSelectionOf(env).every((row) => row.provider === expected.provider && row.model === expected.model && row.hook === "function");
+}
+/** 模型选择钩子的**行为**读数：把创建时装上的那个 `agent/request` 监听器喂一份「继承来的」
+ * 配置，看它是否按创建时就定下的那一对收敛。`dsh-webhook` 模板的
+ * `installInitialModelSelection` 就是这个语义（首份持久 header 之前，继承来的
+ * reasoningEffort 被创建时的选择覆盖；路由不同则原样放行）。钩子不在 ⇒ `installed:false`
+ * ——这条读数因此能区分「装了」与「没装」，而不是只看源码里有没有那句话。 */
+async function probeModelHook(agent, resolved) {
+	const hook = agent?.setupCalls?.["agent/request"];
+	if (typeof hook !== "function") return { installed: false };
+	const out = await hook({ agent: { session: { requestHeader: () => undefined } } }, async () => resolved);
+	return { installed: true, out };
 }
 
 /**
@@ -533,7 +598,7 @@ const tick = () => new Promise((resolve) => { setTimeout(resolve, 0); });
  * the DEFECT-1 degradation fixture: it is the ONE branch that may skip the preset
  * face, and it has to leave one warn per created session when it does.
  */
-function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0 } = {}) {	const ctx = new Context();
+function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0 } = {}) {	const ctx = new Context();
 	// Every plugin log line lands in `log.lines` instead of the console: the
 	// service-attach red line (§5.3) is asserted on the lines themselves.
 	const log = makeLogger();
@@ -660,6 +725,13 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	// 「meta.cwd 真的来自 registry 的 path」的可观测 fixture。
 	const workspaceRegistry = makeWorkspaceRegistry(workspaceRegistryOptions ?? {});
 	if (!omitWorkspaceRegistry) ctx.provide("workspaceRegistry", workspaceRegistry.service);
+	// §10.2.2 模板的**第三块**（真机缺陷 #3）：`resolveRequest` 在调用方没给 model 时
+	// **也**解析宿主的缺省模型选择，把它写进 `agentOptions` 并装成初始模型选择（模板
+	// 第 9 步）。同一款可选服务：默认提供（真宿主有它），`omitAgentDefaultModel` 是
+	// 「服务缺席 ⇒ 拒绝创建」的 fixture，`agentDefaultModelOptions` 造「服务在、但读不出
+	// 可用的 provider/model」那一档。
+	const agentDefaultModel = makeAgentDefaultModel(agentDefaultModelOptions ?? {});
+	if (!omitAgentDefaultModel) ctx.provide("agentDefaultModel", agentDefaultModel.service);
 	apply(ctx);
 	const tool = (name) => registeredTools.find((candidate) => candidate.name === name);
 	/** U9 handle: the settings provider going active AFTER the plugin loaded. */
@@ -701,7 +773,7 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	const invoke = (rawInput, agent = senderAgent) => ({ commandId: "cmd-test", agent, rawInput, attachments: [], signal: new AbortController().signal });
 	/** G2 handle: the provider-side peak of concurrent `agents.create` calls. */
 	const maxCreateInFlight = () => createInFlight.max;
-	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentPresets, workspaceRegistry, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
+	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentPresets, workspaceRegistry, agentDefaultModel, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
 }
 
 function execFor(agent) {
@@ -2367,7 +2439,7 @@ const rotRoles = () => [
  * and the trust state a rotation operates on. `receiveMode: accept` keeps notice
  * delivery out of the receiver dialog; the notice cases set their mode explicitly.
  */
-function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitResume = false, extraAgents = undefined } = {}) {
+function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitResume = false, extraAgents = undefined } = {}) {
 	const env = setup({
 		sessions: [],
 		useSettings: true,
@@ -2389,6 +2461,10 @@ function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trus
 		// §10.2.2 模板的另一半（真机缺陷 #2）：auto 路径建继任者也走同一个
 		// `createRootAgent` ⇒ 工作区挂载同样要在这儿有它的降级 fixture。
 		omitWorkspaceRegistry,
+		// §10.2.2 模板的第三块（真机缺陷 #3）：auto 路径的继任者同样要在 `agentOptions`
+		// 里带上模型选择，否则「令牌投给了一个跑不起来的持钥者、而旧任已冻结」。
+		omitAgentDefaultModel,
+		agentDefaultModelOptions,
 		// §11.9.4 L1's two fixtures: `omitResume` is the documented "no factory /
 		// no session persistence" failure mode, and the stub's own record/hidden
 		// bookkeeping is what the revive cases read.
@@ -3240,6 +3316,25 @@ check("DEFECT-2 ③a 与 ② 同源: 两条路径的挂载读数是**同一个�
 const autoNoWsEnv = rotateEnv({ askScript: ["创建并交班"], omitWorkspaceRegistry: true, teams: handoffTeam(path.join(HANDOFF_WS, "noworkspace")) });
 const autoNoWsOut = await autoNoWsEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoNoWsEnv.senderAgent));
 check("DEFECT-2 ③a 降级: workspaceRegistry 缺席时继任者照常自建、换届不因此失败（令牌、交接文档、投递照旧），并**恰留一行 warn** 点名它未挂进工作区（信任迁移路径上的降级也要如实说）", autoNoWsEnv.creates.length === 1 && autoNoWsEnv.workspaceRegistry.attached.length === 0 && autoNoWsEnv.workspaceRegistry.creates.length === 0 && workspaceServiceWarns(autoNoWsEnv).length === 1 && workspaceServiceWarns(autoNoWsEnv).every((line) => line.includes("未挂进工作区")) && autoNoWsOut.includes("自建继任者") && autoNoWsOut.includes("投递（§11.4.5）"));
+
+// --- DEFECT-3 ③a（§11.4.2 复用 §10.2.2 的同一个创建函数）------------------------
+// 与 DEFECT-1/2 同一条影响面，但后果更重：`successor:"auto"` 的继任者也是
+// `createRootAgent` 建的 ⇒ 它同样必须带模型选择，否则**令牌已经投给了一个跑不起来的
+// 持钥者、而旧任已经冻结**（信任迁移路径上的失败：继任者无法 claim）。
+// 判据与 ② 逐字共用（`modelSelectionBoundOnce`：按会话 id 配对，不看位置）。
+const autoModelRows = modelSelectionOf(autoEnv);
+/** 一整条读数的诊断（判据不成立时印出来，而不是只印一句「不等」）。 */
+const autoModelProbe = { rows: autoModelRows, id: autoId, serviceCalls: autoEnv.agentDefaultModel.calls.length, agentOptionsKeys: Object.keys(autoEnv.creates[0]?.agentOptions ?? {}).sort().join(",") };
+check(`DEFECT-3 ③a 继任者: \`successor:"auto"\` 建出的会话**同样带模型选择** —— agentOptions 里那一对就是 \`currentSelection()\` 的读数，且模型选择钩子装在这一个继任者自己的 setup 上下文上`
+	+ (modelSelectionBoundOnce(autoEnv) && autoModelRows[0]?.id === autoId && autoModelRows[0]?.setupAgentId === autoId ? "" : `（实测：${show(autoModelProbe)}）`),
+modelSelectionBoundOnce(autoEnv) && autoEnv.creates.length === 1 && autoModelRows[0]?.id === autoId && autoModelRows[0]?.setupAgentId === autoId);
+// 服务缺席在 auto 路径上是**拒绝**（与 ② 同口径）：create 抛错 ⇒ `prepare` 失败，
+// **不铸令牌、不广播 freeze、不写交接文档**，已写的 pending-create 意图保留（§11.5）。
+const autoNoModelWs = path.join(HANDOFF_WS, `nomodel-${Date.now()}`);
+const autoNoModelEnv = rotateEnv({ askScript: ["创建并交班"], omitAgentDefaultModel: true, teams: handoffTeam(autoNoModelWs) });
+const autoNoModelOut = await autoNoModelEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoNoModelEnv.senderAgent));
+check("DEFECT-3 ③a 服务缺席 fail-visible: 继任者创建失败 ⇒ 零建会话、零令牌、零 freeze、零交接文档，错误文案点名 agentDefaultModel 与后果（令牌绝不投给一个跑不起来的持钥者）", autoNoModelEnv.creates.length === 0 && autoNoModelEnv.role().pending === null && autoNoModelEnv.calls("session-worker-a").followedup.length === 0 && autoNoModelEnv.calls("session-worker-b").followedup.length === 0 && !existsSync(autoNoModelWs) && autoNoModelOut.includes("agentDefaultModel") && autoNoModelOut.includes("继任者会话创建失败") && autoNoModelOut.includes("未铸令牌、未广播 freeze"));
+check("DEFECT-3 ③a 服务缺席: 已写的 pending-create 意图**保留**并如实报为可收编线索（§11.5 部分成功不回滚）——拒绝不是无声的", (autoNoModelEnv.ns.data.pendingCreates ?? []).length === 1 && autoNoModelOut.includes("pending-create"));
 
 // --- U22: 拒/取消/无确认服务 —— 三条都是「零副作用」 ---------------------------
 
@@ -4397,8 +4492,8 @@ check("🔵 #4: a webServer without register() is named by its reason code — �
  * real `CommandInvocation` so the assertions cover the handler and not a
  * re-implementation of it.
  */
-function teamSessionEnv({ teams = [], askScript = [], omitUserQuestions = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, workspaceRegistryOptions = undefined, failCreateAt = -1, selfCwd = TEAM_WS, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {
-	const env = setup({ sessions: [], useSettings: true, askScript, selfCwd, omitUserQuestions, omitCommands, lateCommands, omitAgentPresets, omitWorkspaceRegistry, workspaceRegistryOptions, failCreateAt, createdHook, actionLog, pendingSeed });
+function teamSessionEnv({ teams = [], askScript = [], omitUserQuestions = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, selfCwd = TEAM_WS, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {
+	const env = setup({ sessions: [], useSettings: true, askScript, selfCwd, omitUserQuestions, omitCommands, lateCommands, omitAgentPresets, omitWorkspaceRegistry, omitAgentDefaultModel, agentDefaultModelOptions, workspaceRegistryOptions, failCreateAt, createdHook, actionLog, pendingSeed });
 	const ns = env.settings.namespaces.get("team-link");
 	ns.data.teams = structuredClone(teams);
 	return {
@@ -4615,6 +4710,54 @@ const halfAttachEnv = teamSessionEnv({ askScript: ["创建"], workspaceRegistryO
 const halfAttachOut = await halfAttachEnv.run("n=1 team=defect2 roles=worker-a");
 const halfAttachId = halfAttachEnv.creates[0]?.sessionId;
 check("DEFECT-2 回滚（半成品）: attach 已把会话写进成员名单之后才抛错 ⇒ detach 仍被调用、成员名单里不留它（`attached` 标志在这里是 false——靠它就漏掉了这个半状态）", halfAttachEnv.workspaceRegistry.attached.length === 1 && halfAttachEnv.workspaceRegistry.detached.length === 1 && halfAttachEnv.workspaceRegistry.detached[0].sessionId === halfAttachId && halfAttachEnv.workspaceRegistry.workspaces.every((workspace) => workspace.has(halfAttachId) === false) && halfAttachOut.kind === "error");
+
+// --- DEFECT-3（§10.2.2 模板的第三块）：缺省模型选择也必须解析 -------------------
+// 真机缺陷 #3：DEFECT-1 只补了「装配源」（preset 的 resolve + mount），**没补那个变量
+// 的值**——`deployment:persona-prefix` 里的 `{{model}}` 取的是
+// `context.agent.options.model`（`dsh-agent-loop` 的
+// `ctx.systemPrompt.variable("model", (context) => context.agent?.options.model)`），
+// 而我们没给 model= 时 `agentOptions` 是**空的** ⇒ 整个 `agentOptions` 都不传 ⇒
+// 编程创建的 agent 没有任何模型选择 ⇒ 首回合死在
+// `prompt variable "{{model}}" has no value`。官方模板 `resolveRequest`
+// （`dsh-webhook/lib/index.js:30-36`）在**没给** model 时也解析：`currentSelection()`
+// ⇒ `agentOptions = {provider, model}`，并把同一份 selection 装进 `setup`（第 9 步）。
+// 所以判据有两个面，缺一不可：**写进 `agentOptions` 的那一对**，与**装在 setup 上的
+// 模型选择**——它们都取自 `currentSelection()` 那一刻的读数。
+
+const modelDefaultEnv = teamSessionEnv({ askScript: ["创建"] });
+const modelDefaultOut = await modelDefaultEnv.run("n=2 team=defect3 roles=worker-a,worker-b task=验缺省模型选择");
+const defaultModelRows = modelSelectionOf(modelDefaultEnv);
+check(`DEFECT-3 ② 缺省也解析: 没给 model= 时 \`agentOptions\` **必带** provider/model（此前整个 agentOptions 都不传），且逐字等于 \`currentSelection()\` 的读数${defaultModelRows.every((row) => row.provider === STUB_DEFAULT_PROVIDER && row.model === STUB_DEFAULT_MODEL) ? "" : `（实测：${show(defaultModelRows)}）`}`, modelDefaultOut.kind === "success" && modelDefaultEnv.creates.length === 2 && modelDefaultEnv.creates.every((options) => options.agentOptions?.provider === STUB_DEFAULT_PROVIDER && options.agentOptions?.model === STUB_DEFAULT_MODEL) && modelDefaultEnv.agentDefaultModel.calls.length === modelDefaultEnv.creates.length);
+check("DEFECT-3 ② 模型选择装进 agent（模板第 9 步）: `installTeamSessionModelSelection` 真的被调用 —— 每个新会话的 setup 上下文上都挂着 `agent/request` 钩子，且那个上下文就是**这个会话自己的**", modelDefaultEnv.created.length === 2 && modelSelectionBoundOnce(modelDefaultEnv) && defaultModelRows.every((row) => row.setupAgentId === row.id));
+// 「装了」还不够：钩子**带的是哪一对**要可观测。缺省 path 下把继承来的 reasoningEffort
+// 抹掉、换路由则原样放行——这正是模板 `installInitialModelSelection` 的语义，也正是
+// 「写进 agentOptions 的那一对」与「装在 setup 上的那一对」同源的证据。
+const defaultHookSame = await probeModelHook(modelDefaultEnv.created[0]?.agent, { provider: STUB_DEFAULT_PROVIDER, model: STUB_DEFAULT_MODEL, reasoningEffort: "high" });
+const defaultHookOther = await probeModelHook(modelDefaultEnv.created[0]?.agent, { provider: "someone-else", model: "other-model", reasoningEffort: "high" });
+check(`DEFECT-3 ② 判据是「能用」不是「装了」: 钩子携带的就是缺省那一对（同名路由 ⇒ 抹掉继承来的 reasoningEffort；换路由 ⇒ 原样放行）${defaultHookSame.installed === true && defaultHookOther.installed === true && defaultHookSame.out.reasoningEffort === undefined && defaultHookOther.out.reasoningEffort === "high" ? "" : `（实测：${show({ same: defaultHookSame, other: defaultHookOther })}）`}`, defaultHookSame.installed === true && defaultHookSame.out.provider === STUB_DEFAULT_PROVIDER && defaultHookSame.out.model === STUB_DEFAULT_MODEL && defaultHookSame.out.reasoningEffort === undefined && defaultHookOther.installed === true && defaultHookOther.out.reasoningEffort === "high");
+// 显式给了 provider/model ⇒ 走同一条创建路径、行为不变，且**不去问**缺省服务。
+check("DEFECT-3 显式 model= 行为不变: agentOptions 就是命令行给的那一对，同样装上模型选择钩子，且缺省服务一次都没被问过（缺省分支不是第二个创建分支）", okEnv.creates.every((options) => options.agentOptions?.provider === "deepseek" && options.agentOptions?.model === "deepseek-v4") && okEnv.created.length === 2 && okEnv.created.every((item) => typeof item.agent.setupCalls?.["agent/request"] === "function") && okEnv.agentDefaultModel.calls.length === 0);
+// ② 与 ③a 共用**一个**创建函数（`createRootAgent` → `buildTeamSessionCreateOptions`），
+// 所以两条路径的模型选择读数是**同一个形状**、缺省服务各被问了一次——把「同一函数」这件事
+// 也钉成读数（auto 路径没有自己的第二份创建实现，也就没有第二处会漏掉模型选择）。
+const modelShapeRows = [...modelSelectionOf(modelDefaultEnv), ...modelSelectionOf(autoEnv)];
+const modelShape = modelShapeRows.map((row) => [row.provider, row.model, row.hook].join("|"));
+check(`DEFECT-3 ②/③a 同源: 两条路径三处创建的选择形状完全一致（provider/model/钩子），且缺省模型服务各被问了一次（② 每会话一次、③a 恰一次）${new Set(modelShape).size === 1 && modelShapeRows.length === 3 ? "" : `（实测：${show({ modelShape, calls: [modelDefaultEnv.agentDefaultModel.calls.length, autoEnv.agentDefaultModel.calls.length] })}）`}`, modelShapeRows.length === 3 && new Set(modelShape).size === 1 && modelDefaultEnv.agentDefaultModel.calls.length === modelDefaultEnv.creates.length && autoEnv.agentDefaultModel.calls.length === 1);
+// 服务缺席 ⇒ **拒绝创建**（选定口径，二选一里更硬的那个）：没有它就没有可解析的缺省
+// 模型，造出来的 agent 就是跑不起来的。零创建、零 pairs、零 roster 行，报告点名原因。
+const noModelServiceEnv = teamSessionEnv({ askScript: ["创建"], omitAgentDefaultModel: true });
+const noModelServiceOut = await noModelServiceEnv.run("n=2 team=defect3 roles=worker-a,worker-b");
+check("DEFECT-3 ② 服务缺席 fail-visible（选定口径=拒绝创建）: 零创建、零 pairs、零 roster 行，报告点名缺的是 agentDefaultModel 与后果（宁可不建，也不建一个跑不起来的会话）", noModelServiceEnv.creates.length === 0 && noModelServiceEnv.pairs().length === 0 && noModelServiceEnv.store().length === 0 && noModelServiceOut.kind === "error" && noModelServiceOut.text.includes("agentDefaultModel") && noModelServiceOut.text.includes("真机缺陷 #3") && noModelServiceOut.text.includes("创建失败"));
+check("DEFECT-3 ② 服务缺席不静默: 拒绝文案说清了「没有它 ⇒ 没有可解析的缺省模型 ⇒ 新会话跑不起来」，并给出两条出路（显式 model= / 让服务可用），不是一句无声的跳过", noModelServiceOut.text.includes("宁可不建") && noModelServiceOut.text.includes("model=<provider>/<model>") && noModelServiceOut.text.includes("service"));
+// 服务**在**、但读不出可用的 provider/model：写进 agentOptions 的就是那一对，undefined
+// 会原样复现同一个真机缺陷 ⇒ 同样拒绝（这是同一口径的第二种触发方式，不是新增语义）。
+const emptyModelEnv = teamSessionEnv({ askScript: ["创建"], agentDefaultModelOptions: { provider: "", model: "" } });
+const emptyModelOut = await emptyModelEnv.run("n=1 team=defect3 roles=worker-a");
+check("DEFECT-3 ② 服务在但读不出可用的 provider/model ⇒ 同样拒绝创建（写进 agentOptions 的就是 currentSelection() 那一对，空值会原样复现同一个真机缺陷）", emptyModelEnv.creates.length === 0 && emptyModelOut.kind === "error" && emptyModelOut.text.includes("currentSelection") && emptyModelOut.text.includes("真机缺陷 #3"));
+// 服务只服务**缺省分支**：显式给了 model= 时它缺席不该拦住创建（拒绝不是一刀切）。
+const explicitNoServiceEnv = teamSessionEnv({ askScript: ["创建"], omitAgentDefaultModel: true });
+const explicitNoServiceOut = await explicitNoServiceEnv.run("n=1 team=defect3 roles=worker-a model=deepseek/deepseek-v4");
+check("DEFECT-3 服务只服务缺省分支: 显式给了 model= 时 agentDefaultModel 缺席不影响创建（拒绝只针对解析不出缺省的那条路）", explicitNoServiceEnv.creates.length === 1 && explicitNoServiceOut.kind === "success" && explicitNoServiceEnv.creates[0].agentOptions?.provider === "deepseek" && explicitNoServiceEnv.creates[0].agentOptions?.model === "deepseek-v4");
 // --- U18: 生命周期 (the handle belongs to the plugin's OWN context) ----------
 const controller = sessionControllerFor(okEnv.ctx);
 check("U18 生命周期: the batch controller lives on the plugin's own context (not a command-handler temp ctx) and owns its handles", controller !== undefined && controller.rootCtx === okEnv.ctx && okIds.every((id) => controller.hasHandle(id)) && okIds.every((id) => controller.handleFor(id).agent.id === id));
