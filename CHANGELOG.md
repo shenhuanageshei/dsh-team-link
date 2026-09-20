@@ -13,7 +13,7 @@
 > **发布状态**：三项的宿主半边都需 DSH 重启才在真机生效。**演练 8（①）已通过真机验证**（§12.1）；**演练 9（②）/ 演练 10（③）/ H1 / H3** 待另一次重启窗口（DEFECT-1/2 的修复要重启才生效，见 §12.4）。
 
 ### ✨ 新增
-- **A：`tool.call.toolview`（key 逐字 `team_link_send`）**——发送方的工具行从通用灰行变成与接收方同款的出站卡片（逐目标 outcome / detail / busy）。
+- **A：`tool.call.toolview`（key 逐字 `team_link_send`）**——发送方的工具行从通用灰行变成与接收方同款的出站卡片。**逐目标行 = 目标身份 + `outcome` 短句 + （忙碌时）徽标**：`outcome` → 固定短语（走 locale，zh/en 两套键），**不再原样搬运模型可见的 `detail` 报告句**——那句含「已投递到 …」「目标处于空闲」「steer 注入当前回合」这类**投递机制电报**，让人看的卡片偏机制而非结论且一个目标占 2–3 行（例：80 字符 → 44 字符）；`detail` **仍留在 meta 里**（模型可见文本的事实源 + 降级兜底），只出现在**模型可见的报告**中。用户 2026-09-20 决定，见设计 §10.1.5 / §12.5。
 - **D：自有 conversation node definition（kind `team-link-send`）+ 顶层摘要卡**——在会话流**顶层**多一条「发给谁 / 正文 / 汇总计数 / 时间」。**不写任何日志事件、不动模型上下文**。
 - **数据链：`output.presentationMeta` → `tool/result.meta`**——卡片读**结构化回执**，不再 regex 解析工具返回文本；持久化后可回放重建同一张卡。
 - **② `/team_session`（设计 §10.2）**——一条命令建 N 个 worker **根会话**（N ≤ 8、每队成员 ≤ 24，两个**代码常量**，刻意不进 settings schema）→ 逐个 create 后 `followup` 投递启动任务 → 按 role 幂等登记进 roster → 与主会话建立 pairs 双向免确认通道。批量动作前有**一次**写明「数量 / 模型 / 预设 / cwd / 保守成本口径 / 将建立的信任」的确认框，**取消即零创建零 pairs**，无确认服务即 fail-closed。命令走**可选** `ctx.inject(["commands"])`（模块级 `inject` 仍 4 项），**服务缺席 / 迟到 / 无 `register()`** 三种降级都只丢这条命令。会话 `meta` 恰 `{cwd, agentPreset}`（`origin` / `parentSession` / `delegationDepth` / `parentAgent` 一律不写 ⇒ 根会话），`AgentHandle` 由**插件根 ctx** 的控制器持有。
