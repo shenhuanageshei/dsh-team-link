@@ -3191,6 +3191,30 @@ check("U21 红线: 交接消息的 source 仍恰三成员 {kind, form, senderSes
 check("U24 无新日志事件: 整条自动路径只经 settings 写 + agents.create + followup 三个出口（提供方侧动作日志里没有第四种动作）", autoEnv.actionLog.every((entry) => entry === "create" || entry === "followup") && autoEnv.actionLog.includes("create") && autoEnv.actionLog.includes("followup"));
 check("U20 意图闭环: prepare 成功后台账里的 pending-create 意图被回填（否则启动清扫会把已就位的继任者当成孤儿）", autoId !== "（没有 pending）" && (autoEnv.ns.data.pendingCreates ?? []).length === 0 && (autoEnv.ns.data.pendingCreates ?? []).every((entry) => entry.sessionId !== autoId));
 
+// --- 评审 #4：事实段的**计数**是读数，必须取自写文档那一刻 ---------------------------
+// `autoHandover` 的确认框横跨一次不封顶的人工等待，所以「弹框之前那次 `view`」可能早已不是
+// 写文档瞬间的 store。本轮取方案 ①（确认之后、写文档之前**重读一次** `policy.get()`）：一次
+// 读的成本，换来的是「文档里的数目 == `prepare` 即将快照的那份状态」；而 §11.9.6 的指针式
+// 口径留给的是**写文档时不可能知道**的东西（freeze 的逐目标结果），不是这几个可读的数目。
+// 判据做成行为锁：人在对话框挂起时给退役者**又加一条** pair，文档事实段里的对称撤销行必须
+// 认这条新记录——删掉那次重读，它就会报对话框前那个旧数目（3）。
+const autoFactsEnv = rotateEnv({
+	askScript: [],
+	pairs: [rotPair("session-worker-a"), rotPair("session-worker-b"), rotPair(ROT_OUTSIDE)],
+	trustedSenders: [ROT_SELF],
+	rememberTargets: [ROT_SELF],
+	teams: handoffTeam(path.join(HANDOFF_WS, "facts")),
+});
+autoFactsEnv.setScript(() => {
+	// 人在确认框开着的时候又给退役者加了一条通道（三条 → 四条）。
+	autoFactsEnv.ns.data.pairs.push({ a: ROT_SELF, b: "session-midbox", createdAt: 9 });
+	return ["创建并交班"];
+});
+const autoFactsOut = await autoFactsEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoFactsEnv.senderAgent));
+const autoFactsDoc = await __testing.latestHandoffDocument(autoFactsEnv.team(), "coordinator");
+const autoFactsText = autoFactsDoc.path === null ? "" : await readFile(autoFactsDoc.path, "utf8");
+check("评审 #4 事实段计数取自写文档那一刻: 确认期间新加的 pair 进得了「对称撤销」行的计数（pairs 4 条），trustedSenders / rememberTargets 同样如实——删掉「确认后重读 policy.get()」那次读，这条立刻红（它会报对话框前的旧数目 3）", autoFactsDoc.path !== null && autoFactsText.includes(`退役者 ${ROT_SELF} 持有的 pairs 4 条已全部清除`) && autoFactsText.includes("trustedSenders 1 项与 rememberTargets 1 项一并清除") && !autoFactsText.includes(`退役者 ${ROT_SELF} 持有的 pairs 3 条`) && autoFactsOut.includes("自建继任者"));
+
 // --- DEFECT-1 ③a（§11.4.2 复用 §10.2.2 的同一个 create 函数）-------------------
 // 影响面比 ② 更大：同一个 `buildTeamSessionCreateOptions` 造继任者 ⇒ 若它跳过
 // preset，换届会失败在「继任者跑不起来 ⇒ 无法 claim」这一步，而令牌已经投给它、
@@ -3627,6 +3651,60 @@ check("U26 刻意空缺 ≠ 死亡空缺: current=null 时 revive 说清「没�
 
 const reviveScopeOut = await reviveTool.execute({ action: "revive", team: "night-shift", role: "worker-a" }, execFor(reviveEnv.agentFor("session-worker-a")));
 check("U26 窄域: 本工具只为 coordinator 恢复，别的角色明确拒绝并说清为什么（硬死锁只有一格，别的格子有既有的活路：retire + set-role）", reviveScopeOut.includes("本工具只为 coordinator 角色恢复") && reviveScopeOut.includes("硬死锁只有一格") && reviveScopeOut.includes("retire + set-role"));
+
+// --- Y3 的**对称件**（§11.9.9 点名的那条「半空锁」）：`revive` 侧的身份复检也必须是
+// 一条**行为锁**，而不是被活性那条的文案顺带覆盖住的空锁 -------------------------
+//
+// 设计原文（§11.9.9）：`reappoint` 的身份复检已在修复轮落成行为锁（下面 Y3），但
+// `revive` 侧**同款**的那条复检没有任何断言单独咬住它——它对「现任被改任给另一个会话」
+// 同样为假，所以任何只 grep 拒绝文案的断言都可能照样绿（同源化把锁变成空锁，第七次）。
+// 这里按 Y3 的形状补上对称的两条，**两条各咬各的复检**，不得互相顶替：
+//   ① 对话框期间现任被改任给**另一个（同样是死的）**会话 ⇒ 活性复检读的是**本次调用
+//      在 preflight 捕获的那个 incumbent**，而那个是死的 ⇒ 活性复检响不了 ⇒ 只有身份
+//      复检能拒绝。删掉身份复检，这次调用会一路 `resume`（下面 fixture 里那个会话在盘上、
+//      可被复活，所以红相是「真的复活了」而不是「抛了个别的错」）。
+//   ② 现任 id **没变**、只是被人重新打开了 ⇒ 由**活性**复检拒绝，且它必须只说活性
+//      （把身份那句抄过来，这条红）。
+const reviveRaceRoles = () => [
+	{ role: "coordinator", current: REVIVE_PLUGIN_ID, pending: null, rotationAt: 0, history: [{ session: REVIVE_PLUGIN_ID, from: 1_700_000_000_000, until: null }] },
+	{ role: "worker-a", current: "session-worker-a", pending: null, rotationAt: 0, history: [{ session: "session-worker-a", from: 1_700_000_000_000, until: null }] },
+];
+const reviveRaceEnv = rotateEnv({
+	askScript: [],
+	extraAgents: [{ id: "session-worker-a", status: "idle" }, { id: "session-replacement-dead", status: "idle" }],
+	teams: reviveTeam(reviveRaceRoles()),
+});
+// 新现任也没有活动代理（死活不论——评审给的是「另一个（死活不论）的会话 id」，这里取死的那一种，
+// 因为它才是**只有身份复检能拒绝**的那一格）。
+reviveRaceEnv.setHiddenAgent("session-replacement-dead", true);
+declareDormantSession(reviveRaceEnv, REVIVE_PLUGIN_ID);
+reviveRaceEnv.setScript(() => {
+	// 人在这段时间里把该角色改任给了另一个会话（不是打开它，是**换人**）。
+	reviveRaceEnv.role("coordinator").current = "session-replacement-dead";
+	return ["执行恢复"];
+});
+const reviveRace = await reviveRaceEnv.tool("team_link_recover").execute({ action: "revive", team: "night-shift", role: "coordinator" }, execFor(reviveRaceEnv.agentFor("session-worker-a")));
+check("Y3-sym（revive 身份复检·行为锁）: 对话框期间现任被改任成**另一个（死的）**会话 → 只能由**身份**复检拒绝（活性复检看的是本次调用那个死的 incumbent，响不了）；删掉身份复检这条立即红——它会一路 resume 出 resumeCalls=1", reviveRace.includes("（revive，写前复检）") && reviveRace.includes(`该角色的现任已不是 ${REVIVE_PLUGIN_ID}`) && reviveRace.includes("现在是 session-replacement-dead") && reviveRace.includes("别把令牌式的身份主张当成当前事实") && !reviveRace.includes("已经有活动代理了") && reviveRaceEnv.resumeCalls.length === 0 && (reviveRaceEnv.role().recoveries ?? []).length === 0 && !reviveRaceEnv.role().rotationAt);
+
+// 对照组（Y7「干净红」纪律：这条与身份复检**不是**同一个判据，别把它当重复删掉）:
+// 现任 id **没变**、只是复活了 → 由**活性**复检拒绝并说「已经有活动代理了」，
+// 且它的话**不是**身份复检那一句。把身份复检的话抄过来，这条红。
+const reviveRaceAliveEnv = rotateEnv({
+	askScript: [],
+	// 被 unhide 成「活的」需要它**注册在册**（hidden ⇒ `agents.get() === undefined`），
+	// 所以这一格里 incumbent 必须是 stub agent 之一，`setHiddenAgent(…, false)` 才真的生效。
+	extraAgents: [{ id: REVIVE_PLUGIN_ID, status: "idle" }, { id: "session-worker-a", status: "idle" }],
+	teams: reviveTeam(reviveRaceRoles()),
+});
+reviveRaceAliveEnv.setHiddenAgent(REVIVE_PLUGIN_ID, true);
+declareDormantSession(reviveRaceAliveEnv, REVIVE_PLUGIN_ID);
+reviveRaceAliveEnv.setScript(() => {
+	// 反例：现任 **id 没变**，只是有人把它在侧边栏重新打开了。
+	reviveRaceAliveEnv.setHiddenAgent(REVIVE_PLUGIN_ID, false);
+	return ["执行恢复"];
+});
+const reviveRaceAlive = await reviveRaceAliveEnv.tool("team_link_recover").execute({ action: "revive", team: "night-shift", role: "coordinator" }, execFor(reviveRaceAliveEnv.agentFor("session-worker-a")));
+check("Y7-sym（revive 活性对照·干净红）: 现任 id 没变、只是复活了 → 由**活性**复检拒绝并说「已经有活动代理了」（与身份复检那句**不是同一句**；把身份复检的话抄过来，这条红）", reviveRaceAlive.includes("（revive，写前复检）") && reviveRaceAlive.includes("已经有活动代理了") && reviveRaceAlive.includes("它本来就不需要恢复") && !reviveRaceAlive.includes("现任已不是") && !reviveRaceAlive.includes("别把令牌式的身份主张当成当前事实") && reviveRaceAliveEnv.resumeCalls.length === 0 && (reviveRaceAliveEnv.role().recoveries ?? []).length === 0);
 
 // --- Y2（③b 差异审计）：§11.9.5 的**发起域**必须真在实现里 ---------------------
 //
