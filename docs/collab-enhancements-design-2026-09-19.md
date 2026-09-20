@@ -177,6 +177,21 @@ const handle = await ctx.agents.create({          // ⚠ 必须从【插件根 c
 >
 > **实现要求（通用纪律）**：凡在本设计中「采用某模板」，实现前必须把该模板函数**通读并列出它的全部动作**，逐条标注「已做 / 不做（附理由）」；**漏步必须显式声明，不许静默跳过**。设计侧的教训见 §12.3。
 
+**模板中「故意不做」的步骤（2026-09-20 由实现方逐条列出，父侧裁定后写在此，不留白）**：
+
+| 模板步骤 | 为什么不做 |
+|---|---|
+| `agentDefaultModel.currentSelection()` 缺省解析（`:16-62`） | 缺省时**宿主自己的 defaultModel 已生效**，弹框文案写的就是「（本会话默认）」——替用户选一个反而是越权 |
+| `permissionPresets.resolve/set`（`:92`/`:118`） | `/team_session` **没有权限档参数**，设计契约里也没有；不替用户选档 |
+| `signal.throwIfAborted()`（`:95` 等） | signal 是 webhook 的**注册生命期**；本路径在一条命令内跑完，abort 由确认框的 signal 承担。补它要改两处调用点签名与断言面（列为后续可跟进项，非缺陷） |
+| `sessionTitle.rename`（`:119`） | 设计逐字契约里没有 title，而命名是**用户可见的交互决定**（三个 worker 该叫什么？）——设计没给就不自造；会话 id 自带 team/role |
+| delivery 快照校验（`:180-188`） | webhook 的投递侧概念（provider kind / deliveryId），本插件没有 provider delivery |
+| 模块级 `inject` 含 `workspaceRegistry`（`:197`） | §10.3 红线：模块级 `inject` **仍 4 项** ⇒ 走 `ctx.get("workspaceRegistry")`，缺席时降级为一行 warn |
+
+**本设计的实际创建落点（与上面的伪代码同批改准）**：`createRootAgent(ctx, rootCtx, plan, entry, cwd)` 是**唯一**的创建入口，它把模板的完整时序收成一处：① `workspaceRegistry.create(cwd)` → ② `meta.cwd = workspace.path`（**registry 归一化后的路径**，因为 attach 会拿它校验）→ ③ `agents.create(...)` → ④ `attachSession(sessionId)` → ⑤ 失败则 `detachSession` + `dispose` + 原错误照抛（各步失败一行 warn）。**② 批量建队与 ③a 自建继任者共用它**，所以两条路径的工作区归属一致。
+
+> **一处待跟进的同源风险（实现方主动上报）**：roster 的 `team.workspace` 仍取自调用方的**原始 cwd**，而会话 `meta.cwd` 现在用 registry **归一化**后的路径 ⇒ 若真实 registry 会归一化（realpath / 大小写 / 尾斜杠），**黑板的落点与工作区记录可能不同源**。这正是今晚反复出现的那类「同一事实两处各自计算」——列为下一轮的核查项。
+
 #### 10.2.3 启动任务：`create` resolve 之后 `followup`
 
 ```js
@@ -260,8 +275,10 @@ handle.agent.followup(createUserMessage({
 ### 10.5 显式假设与待验项（不当作已知事实）
 
 - **H1**：编程创建的会话在 web 壳里「点开」时**复用** agents store 里的既有 live agent 实例（而非另行 resume 撞上单写者拒绝）。**验证步骤**：`/team_session` 建 1 个 → 在侧边栏点开它 → 观察是否出现错误或第二个实例。**失败回退**：若壳层试图 resume，改由插件在创建后即 attachSession 并在文档里写明「新会话需在侧边栏打开一次」。
+  > **真机进展（2026-09-20）**：探针**执行了**，但它**问在一个不成立的前提上**——会话根本**没出现在该工作区的列表里**（那是 **DEFECT-2**，已修）。所以「点开是否复用 live agent」这个问题**仍未被回答**，它要等 DEFECT-2 的修复生效后重跑（下一次重启窗口）。**教训**：探针的前置条件本身也要被验证（见 §12.2 末段）。另注：H1 原本写的回退方案「创建后即 attachSession」现已**成为既定实现**（§10.2.2 的模板时序第 ④ 步），不再是回退项。
 - **H2**：外部客户端 bundle 能 `require` 到 chat 包的 `chatNode` / `contextLocation` helper，且 `ctx.uiConversation.events.register` 接受**外部** definition。**验证步骤**：注册一个最小 definition，观察顶层节点是否出现。**失败回退**：按公开形状手工构造节点字面量（会诊 D10 给出的退路）。
-- **H4**（评审 #7 补，承主文档 §7-1 残留 (a)）：**运行时是否已注册 agent 工厂**（`agents.setFactory`）、以及 `agents.create` 派生出的 headless 会话是否真的可用——**未做真机验证**。**验证步骤**：`/team_session` 建 1 个会话，观察其是否真的产生一个可投递的活动代理。**失败回退**：② 与 §11 的自动创建整体停用，退回主文档 §3.6.4 的半自动兜底（手工建会话 + 传 id）。
+- **H4**（评审 #7 补，承主文档 §7-1 残留 (a)）：**运行时是否已注册 agent 工厂**（`agents.setFactory`）、以及 `agents.create` 派生出的 headless 会话是否真的可用。**验证步骤**：`/team_session` 建 1 个会话，观察其是否真的产生一个可投递的活动代理。**失败回退**：② 与 §11 的自动创建整体停用，退回主文档 §3.6.4 的半自动兜底（手工建会话 + 传 id）。
+  > **真机结论（2026-09-20）：已被推翻。** 会话**建得出**，但**跑不起来**（缺 persona-prefix 组装源 ⇒ 首回合报 `{{model}} has no value` = **DEFECT-1**）；同一次探针还顺带暴露 **DEFECT-2**（会话未挂进工作区 ⇒ 侧边栏看不到）。**实际选择的是「修」而不是回退**——两个缺陷的修法都是**对齐官方模板**（缺省也解析 preset；`workspaceRegistry.create` + `attachSession`），改动局部且与模板一致。**这条假设的教训**：原验证步骤只问「是否产生一个可投递的活动代理」，而真机暴露的是**更前置**的两件事（组装源、工作区归属）——**「建成」与「能用」之间隔着模板的其余时序**（见 §10.2.2 的时序清单与 §12.2）。
 - 客户端 def/registry 属较新公开面，**升级有跟随成本**——按「坏了只是不渲染」定级，不进红线。
 
 ### 10.6 本节明确不做（范围声明）
