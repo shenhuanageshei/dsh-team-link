@@ -21,6 +21,14 @@ function check(label, cond) {
 	if (!cond) failures += 1;
 }
 
+/** Diagnostic rendering for a FAIL message: `JSON.stringify` returns `undefined`
+ * for `undefined`, and the harness's own console bridge rejects the resulting
+ * non-JSON argument (INVALID_ARGS) — which would turn a FAIL into a crash and
+ * hide the assertions after it. This renders every value, `undefined` included. */
+function show(value) {
+	return JSON.stringify(value) ?? String(value);
+}
+
 // ---------------------------------------------------------------------------
 // shared stubs
 // ---------------------------------------------------------------------------
@@ -2372,7 +2380,12 @@ const declareDormantSession = (env, sessionId) => {
 	return env;
 };
 const pairSummary = (env) => (env.ns.data.pairs ?? []).map((pair) => `${pair.a}↔${pair.b}${pair.provisional === true ? "(provisional)" : ""}`).sort().join(" ");
-const tokenOf = (text) => (String(text).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/u) ?? [])[0];
+/** The token of a prepare result. 🔵-1's discipline applies here too: `undefined`
+ * is not a value the tool-call bridge accepts (`arguments` must be a lossless JSON
+ * object), so a prepare that produced no token would turn the claim call below
+ * into a harness-level INVALID_ARGS crash instead of a clean refusal. The empty
+ * string keeps the call well-formed and lets the plugin answer it. */
+const tokenOf = (text) => (String(text).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/u) ?? [""])[0];
 
 // --- prepare (Phase A): token, snapshot, freeze broadcast --------------------
 
@@ -2966,6 +2979,26 @@ check("§11.9.6 诚实原则: 内容质量不被检查——五节全是 TODO �
 
 const handoffExplicit = __testing.readHandoffArgument(undefined, { auto: false });
 check("§11.9.6 阶梯: 显式 successor + 无正文 → 放行 + 警告（M4 现语义不收紧：那个会话有自己的生命与上下文）", handoffExplicit.error === undefined && handoffExplicit.body === "" && handoffExplicit.warnings.some((line) => line.includes("显式指定的继任者有自己的会话与上下文")));
+// 🟡-6: 拒绝文案的路径标签按**当次调用**渲染，不按写这个分支时设想的路径。缺项阶梯的
+// **缺硬节**那条只要正文有过、就与「哪条 successor 形态」无关（`readHandoffArgument`
+// 的同一条分支同时服务两种形态），所以它才是「同一段代码、两种路径」的真判据；而
+// 「正文缺失」那条今天只有 auto 分支会产出拒绝（显式 successor + 无正文 = 放行 + 警告，
+// §11.9.6），所以显式形态在这条上没有拒绝可断言 —— 这里就把这件事本身断出来。
+const handoffRefuseAuto = __testing.readHandoffArgument(undefined, { auto: true });
+const handoffRefuseExplicit = __testing.readHandoffArgument(undefined, { auto: false });
+const handoffMissingHardAuto = __testing.readHandoffArgument(handoffBody(["unknowns"]), { auto: true });
+const handoffMissingHardPathLabels = [];
+for (const flag of [true, false]) {
+	const parsed = __testing.readHandoffArgument(handoffBody(["unknowns"]), { auto: flag });
+	const head = (parsed.error ?? "").split("\n")[0];
+	handoffMissingHardPathLabels.push(head.includes(flag ? "prepare 被拒绝（successor:\"auto\" + 交接正文缺硬节）" : "prepare 被拒绝（显式 successor + 交接正文缺硬节）"));
+}
+check("🟡-6 路径文案: 拒绝文案里的路径标签由**当次调用的 successor 形态**渲染——同一条「缺硬节」分支在 auto 下写 successor:\"auto\"、在显式 successor 下写「显式 successor」，都不被标成对方那条路径"
+	+ (handoffMissingHardPathLabels.every(Boolean) ? "" : `（实测：auto=${show(handoffMissingHardPathLabels[0])} 显式=${show(handoffMissingHardPathLabels[1])}）`),
+(handoffRefuseAuto.error ?? "").includes("prepare 被拒绝（successor:\"auto\" + 交接正文缺失或为空）")
+	&& handoffRefuseExplicit.error === undefined
+	&& (handoffMissingHardAuto.error ?? "").includes("prepare 被拒绝（successor:\"auto\" + 交接正文缺硬节）")
+	&& handoffMissingHardPathLabels.every(Boolean));
 
 // --- 文档定位与三层渲染 ------------------------------------------------------
 
@@ -3029,10 +3062,23 @@ check("§11.9.6 事实段: 第二份文档把上一份的路径写进事实段�
 const handoffSoftDoc = await readFile(handoffWrite2.path, "utf8");
 check("§11.9.6 跨轮一致: 头部的完整性判定与校验器的读数同源——软节缺谁，头部与警告行说的是同一批名字", (() => {
 	const report = __testing.handoffBodyReport(handoffBody(["team-map"]));
-	const warning = __testing.readHandoffArgument(handoffBody(["team-map"]), { auto: true }).warnings.join("\n");
+	// 🔵-1: a rename in the section list makes the body above stop being a legal
+	// body, so `readHandoffArgument` answers `{ error }` and has no `warnings` at
+	// all. Reading `.warnings.join(...)` unguarded then THROWS, which aborts the
+	// whole run seven assertions early — the red is real but it is not CLEAN: it
+	// hides every later assertion instead of reporting itself. The guard below
+	// turns that same state into one honest FAIL and lets the rest of the suite
+	// run to its own `assertion total` line.
+	const parsed = __testing.readHandoffArgument(handoffBody(["team-map"]), { auto: true });
+	const warning = (parsed.warnings ?? []).join("\n");
 	const integrity = __testing.handoffIntegrityLine(report);
 	return integrity.includes("硬节 5/5") && integrity.includes("软节缺 1/3（team-map）") && warning.includes("team-map") && !warning.includes("conventions");
 })() && handoffSoftDoc.length > 0);
+// The crash above is only reachable through `body` no longer being a legal body;
+// that state has to be asserted on its own, or 🔵-1's guard would turn the crash
+// into a silent pass on the line that mattered.
+const handoffSoftGapArgs = __testing.readHandoffArgument(handoffBody(["team-map"]), { auto: true });
+check("🔵-1 对照: 改名后那份正文就是「缺硬节」而不是「缺软节」——上面那条因此报 FAIL（而不是把整轮掀翻），这条把同一个状态单独说清楚", handoffSoftGapArgs.error === undefined ? handoffSoftGapArgs.warnings.some((line) => line.includes("team-map")) : handoffSoftGapArgs.error.includes("交接正文缺硬节"));
 
 // --- 「不可两处口径」的源码级锁 ----------------------------------------------
 // §11.9.6 要求事实段与 claim 返回文案同一事实源。行为上两者在同一次换届里被
@@ -3061,6 +3107,8 @@ const autoId = autoEnv.role().pending?.session ?? "（没有 pending）";
 const autoCreatedCalls = autoEnv.created[0]?.calls;
 const autoDoc = await __testing.latestHandoffDocument(autoEnv.team(), "coordinator");
 const autoDocText = autoDoc.path === null ? "" : await readFile(autoDoc.path, "utf8");
+/** §11.5 的持久证据读数：**最新那一份**交接文档的头部是否认这次换届的继任者。 */
+const autoDocNames = await __testing.handoffDocumentNamesLatest(autoEnv.team(), "coordinator", autoId);
 const autoFollowup = autoCreatedCalls?.followedup?.[0];
 
 check("U22 确认: 自动换届必过一次确认框（新建 1 个会话 + 交班的爆炸半径：id / cwd / 模型情形 / 保守成本口径 / 信任面 / 取消=零副作用）", (() => {
@@ -3086,12 +3134,12 @@ const autoFreezeProbe = {
 	pairs: pairSummary(autoEnv),
 };
 check(`U20 冻结未被跳过: 既有 M4 机制原样走完（rotation-freeze 到其余成员、rotationBackup 快照、pairs 一条未动——信任迁移仍要 claim）`
-	+ (autoFreezeProbe.freezeA === 1 && autoFreezeProbe.freezeB === 1 && autoFreezeProbe.notice && autoFreezeProbe.backup && autoFreezeProbe.pairs === "session-self↔session-outside session-self↔session-worker-a session-self↔session-worker-b" ? "" : `（实测：${JSON.stringify(autoFreezeProbe)}）`),
+	+ (autoFreezeProbe.freezeA === 1 && autoFreezeProbe.freezeB === 1 && autoFreezeProbe.notice && autoFreezeProbe.backup && autoFreezeProbe.pairs === "session-self↔session-outside session-self↔session-worker-a session-self↔session-worker-b" ? "" : `（实测：${show(autoFreezeProbe)}）`),
 autoFreezeProbe.freezeA === 1 && autoFreezeProbe.freezeB === 1 && autoFreezeProbe.notice && autoFreezeProbe.backup && autoFreezeProbe.pairs === "session-self↔session-outside session-self↔session-worker-a session-self↔session-worker-b");
 check("U21 投递: followup 驱动（不是 inject），正文含令牌明文与「立即 claim」，并带上交接正文与文档路径", autoFollowup !== undefined && autoCreatedCalls.injected.length === 0 && autoCreatedCalls.followedup.length === 1 && autoFollowup.content[0].text.includes(autoEnv.role().pending.token) && autoFollowup.content[0].text.includes("team_link_rotate action=claim") && autoFollowup.content[0].text.includes(autoDoc.path) && autoFollowup.content[0].text.includes(HANDOFF_LINE["task-and-goal"]) && autoFollowup.content[0].text.includes("/goal resume"));
-check("U21 红线: 交接消息的 source 仍恰三成员 {kind, form, senderSessionId}，发送方是旧任", sameJson(Object.keys(autoFollowup.source).sort(), ["form", "kind", "senderSessionId"]) && autoFollowup.source.kind === "agent-message" && autoFollowup.source.form === "relay" && autoFollowup.source.senderSessionId === ROT_SELF);
+check("U21 红线: 交接消息的 source 仍恰三成员 {kind, form, senderSessionId}，发送方是旧任", autoFollowup !== undefined && sameJson(Object.keys(autoFollowup.source).sort(), ["form", "kind", "senderSessionId"]) && autoFollowup.source.kind === "agent-message" && autoFollowup.source.form === "relay" && autoFollowup.source.senderSessionId === ROT_SELF);
 check("U24 无新日志事件: 整条自动路径只经 settings 写 + agents.create + followup 三个出口（提供方侧动作日志里没有第四种动作）", autoEnv.actionLog.every((entry) => entry === "create" || entry === "followup") && autoEnv.actionLog.includes("create") && autoEnv.actionLog.includes("followup"));
-check("U20 意图闭环: prepare 成功后台账里的 pending-create 意图被回填（否则启动清扫会把已就位的继任者当成孤儿）", (autoEnv.ns.data.pendingCreates ?? []).length === 0 && (autoEnv.ns.data.pendingCreates ?? []).every((entry) => entry.sessionId !== autoId));
+check("U20 意图闭环: prepare 成功后台账里的 pending-create 意图被回填（否则启动清扫会把已就位的继任者当成孤儿）", autoId !== "（没有 pending）" && (autoEnv.ns.data.pendingCreates ?? []).length === 0 && (autoEnv.ns.data.pendingCreates ?? []).every((entry) => entry.sessionId !== autoId));
 
 // --- DEFECT-1 ③a（§11.4.2 复用 §10.2.2 的同一个 create 函数）-------------------
 // 影响面比 ② 更大：同一个 `buildTeamSessionCreateOptions` 造继任者 ⇒ 若它跳过
@@ -3132,10 +3180,155 @@ const autoCancelEnv = rotateEnv({ askScript: ["取消"], teams: handoffTeam(path
 const autoCancel = await autoCancelEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoCancelEnv.senderAgent));
 check("U22 取消: 零创建、零令牌、零 freeze、零交接文档（选「取消」就是什么都不做）", autoCancel.includes("未自动换届") && autoCancel.includes("零创建、零令牌、零 freeze、零交接文档") && autoCancelEnv.creates.length === 0 && autoCancelEnv.role().pending === null && autoCancelEnv.calls("session-worker-a").followedup.length === 0 && (autoCancelEnv.ns.data.pendingCreates ?? []).length === 0 && !existsSync(path.join(HANDOFF_WS, "cancel")));
 
+// --- 🟡-3 / 🟡-4: 同改面的**双向**锁（名单四处一处写 · 键表接受集 == 宣传集）-------
+// 差异审计的两个变异：单独把工具 handoff 参数说明（或投递正文）里的 `unknowns` 改成
+// `unknownz` → 735 全绿；`TEAM_ROTATE_KEYS` 加一个能被解析却从不被宣传的键 → 735 全绿。
+// 两条的共同形状是「同一份事实两处写、只锁了一处」。修法是让宣传面**从真源渲染**，
+// 并在这里把「渲染自真源」这件事本身钉住：留一份手抄的完整名单，无论它出现在哪一处，
+// 都会让下面的计数断言立刻跑红。
+const HANDOFF_SOURCE = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
+check("🟡-3 同改锁（前置）: 本组读的就是 lib/index.js 本身（读错文件会让下面三条变成空转）", HANDOFF_SOURCE.length > 100000 && HANDOFF_SOURCE.includes("export const __testing"));
+const HANDOFF_SECTIONS_INLINE = __testing.HANDOFF_HARD_SECTIONS.join(" / ");
+const handoffInlineCount = HANDOFF_SOURCE.split(HANDOFF_SECTIONS_INLINE).length - 1;
+const handoffSourceLiteral = `const HANDOFF_HARD_SECTIONS = [${__testing.HANDOFF_HARD_SECTIONS.map((name) => `"${name}"`).join(", ")}];`;
+check(`🟡-3 同改锁: 五个硬节的完整名单在 lib/index.js 里**一处都不许手抄**（实测 ${handoffInlineCount} 处）——唯一那处是真源数组 \`HANDOFF_HARD_SECTIONS\`，其余每一处都是 \`handoffSectionsInline()\` 的运行时产物`, handoffInlineCount === 0 && HANDOFF_SOURCE.includes(handoffSourceLiteral));
+/** 两处宣传面的**运行时**读数：变异把任一处改成手抄或改坏一个节名，这里立刻不等。 */
+const handoffTool = autoEnv.tool("team_link_rotate");
+const handoffFaces = [
+	["工具 description", handoffTool.description.includes(`硬节用这几个标题：${HANDOFF_SECTIONS_INLINE}，`)],
+	["handoff 参数 description", handoffTool.parameters.properties.handoff.description.includes(`五个硬节各以一个标题开头：${HANDOFF_SECTIONS_INLINE}（`)],
+	["投递正文（旧任 → 继任者）", (autoFollowup?.content?.[0]?.text ?? "").includes(`五个硬节：${HANDOFF_SECTIONS_INLINE}；`)],
+];
+check(`🟡-3 四处同改锁: 三个宣传面在**运行时**渲染出的就是真源那一份名单（工具 description / handoff 参数 / 投递正文各查一次；任一处手抄或改坏一个节名即红）${handoffFaces.every(([, ok]) => ok) ? "" : `（缺：${JSON.stringify(handoffFaces.filter(([, ok]) => !ok).map(([name]) => name))}）`}`, handoffFaces.every(([, ok]) => ok));const handoffFourFaces = [
+	["真源数组", HANDOFF_SOURCE.includes(`const HANDOFF_HARD_SECTIONS = [`)],
+	["提示表", __testing.HANDOFF_HARD_SECTIONS.every((name) => typeof __testing.HANDOFF_SECTION_HINTS[name] === "string" && __testing.HANDOFF_SECTION_HINTS[name] !== "")],
+	["投递正文", HANDOFF_SOURCE.includes("五个硬节：\" + handoffSectionsInline()")],
+	["工具 description / handoff 参数", HANDOFF_SOURCE.includes("硬节用这几个标题：\" + handoffSectionsInline()") && HANDOFF_SOURCE.includes("五个硬节各以一个标题开头：\" + handoffSectionsInline()")],
+];
+check(`🟡-3 四处宣传面: 真源 / 提示表 / 投递正文 / 工具参数各自都在，且后两者逐字渲染真源（不是各自手抄）${handoffFourFaces.every(([, ok]) => ok) ? "" : `（缺：${JSON.stringify(handoffFourFaces.filter(([, ok]) => !ok).map(([name]) => name))}）`}`, handoffFourFaces.every(([, ok]) => ok));
+// 变异 M7a/M7b 的**咬合点**：改坏任一处宣传面 ⇒ 它不再渲染真源（上一条钉住这一点）；
+// 而如果改的是散文里的裸名字，就会留下一个本不该存在的拼法。下面这几个变体都**不是**
+// 任何正常中英文散文会出现的词，也**不是**源码里合规的同义写法（`commitment` 单数、
+// `task_and_goal` 这类会被 `normalizeHandoffSection` 折叠成同一节的写法都刻意不收，
+// 收了就是假红——那条折叠本身还有它自己的断言在管）。
+const handoffDriftNames = ["unknownz", "missionz", "inflight", "taskandgoal", "firstactions"];
+const handoffDriftSeen = handoffDriftNames.filter((name) => HANDOFF_SOURCE.includes(name));
+check(`🟡-3 同改锁: 五个硬节名没有第二个拼法（常见的漏改变体一个都不许出现：${handoffDriftNames.join(" / ")}）`, handoffDriftSeen.length === 0);
+// 🟡-4: 反向锁。审计的变异是「`TEAM_ROTATE_KEYS` 加一个能被解析却从不被宣传的键」。
+// 修法两步：① 广告（`TEAM_ROTATE_KEY_HINT`）现在**从 `TEAM_ROTATE_KEYS` 渲染**，两个
+// 集合在结构上同源；② 但同源**不能自己证明自己**——集合相等是渲染出来的，真正会被这
+// 个变异打穿的是「解析器接受了一个不在表里的键」，所以反向锁落在**解析器的行为**上：
+// 任何不在广告里的键都必须被拒、且拒绝文案印的就是广告那一份。②是操作性的：把解析器
+// 换成「任何 `k=v` 都收」的写法（审计 M5b 加的那个键要走的路）这里立刻咬住。
+const rotKeyHints = [...__testing.TEAM_ROTATE_KEY_HINT.matchAll(/([A-Za-z][A-Za-z0-9-]*)=/gu)].map((match) => match[1]);
+const rotKeyAccepted = __testing.TEAM_ROTATE_KEYS;
+const rotKeyUnknown = "shard";
+const rotKeyUnknownOut = __testing.readTeamRotateCommand(`coordinator ${rotKeyUnknown}=night-shift`);
+const rotKeyProbe = {
+	advertised: rotKeyHints.join(","),
+	accepted: rotKeyAccepted.join(","),
+	advertisedInHelp: __testing.readTeamRotateCommand("coordinator team=night-shift").value?.team === "night-shift",
+	advertisedAccepted: rotKeyAccepted.every((key) => rotKeyHints.includes(key)),
+	acceptedAdvertised: rotKeyHints.every((key) => rotKeyAccepted.includes(key)),
+	unknownRefused: rotKeyUnknownOut.error !== undefined && !rotKeyAccepted.includes(rotKeyUnknown),
+	unknownNamedInRefusal: (rotKeyUnknownOut.error ?? "").includes(`「${rotKeyUnknown}=」`) && (rotKeyUnknownOut.error ?? "").includes(__testing.TEAM_ROTATE_KEY_HINT),
+	emptyRefused: __testing.readTeamRotateCommand("coordinator team=").error !== undefined,
+};
+check(`🟡-4 双向锁: 被宣传的键集 == 被接受的键集（结构上同源：广告由 \`TEAM_ROTATE_KEYS\` 渲染），且**反向是操作性的**——任何不在广告里的键（${rotKeyUnknown}）都被解析器拒绝并在拒绝文案里点名，而不是被默默接受`
+	+ (rotKeyProbe.advertised === rotKeyProbe.accepted && rotKeyProbe.advertisedInHelp && rotKeyProbe.unknownRefused && rotKeyProbe.unknownNamedInRefusal && rotKeyProbe.emptyRefused ? "" : `（实测：${show(rotKeyProbe)}）`),
+rotKeyProbe.advertised === rotKeyProbe.accepted && rotKeyAccepted.length > 0 && rotKeyHints.length === rotKeyAccepted.length && rotKeyProbe.advertisedAccepted && rotKeyProbe.acceptedAdvertised && rotKeyProbe.advertisedInHelp && rotKeyProbe.unknownRefused && rotKeyProbe.unknownNamedInRefusal && rotKeyProbe.emptyRefused);
+check("🟡-4 单向锁（既有，保留）: 未知键仍被点名拒绝，且拒绝文案里印的就是广告那份键表", (() => {
+	const out = __testing.readTeamRotateCommand("coordinator shard=night-shift");
+	return out.error !== undefined && out.error.includes("未知参数「shard=」") && out.error.includes(__testing.TEAM_ROTATE_KEY_HINT);
+})());
+
 // --- U23: 30 分钟未认领 / 崩溃窗口 / 文档写失败 --------------------------------
 
+/**
+ * 跨激活相（🟡-2 的核心）：**同一份落盘状态** + **空 handle 注册表**。
+ *
+ * 「插件重载」到底是什么，这里逐项照抄，一项不省：交接文档还在磁盘上（换
+ * 激活不会删它）、settings 命名空间里的 roster/pending 原样在盘上、而
+ * `teamSession.handles` 随着旧激活一起没了（新窗口的注册表是空的）。所以
+ * fixture 是：新 env（新激活窗口）+ 把旧窗口的落盘快照灌进去 + 新控制器上
+ * `hasHandle` 一律 false。修复前这里必红——旧判据只有 `hasHandle` 这一问。
+ *
+ * 快照必须在 `autoSweep` **之前**取：清扫本身会清掉那个 pending（那是它的正常
+ * 工作），而「重载」要的是**清扫之前**的那份盘上状态。
+ */
+const autoDiskSnapshot = { teams: structuredClone(autoEnv.ns.data.teams), pairs: structuredClone(autoEnv.ns.data.pairs), trustedSenders: [...(autoEnv.ns.data.trustedSenders ?? [])], rememberTargets: [...(autoEnv.ns.data.rememberTargets ?? [])], blockedSenders: [...(autoEnv.ns.data.blockedSenders ?? [])], pendingCreates: structuredClone(autoEnv.ns.data.pendingCreates ?? []) };
 const autoSweep = await autoEnv.rotation.sweep({ now: Date.now() + 31 * 60000 });
 check("U23 未认领: 30 分钟超时走既有 rotation-cancelled（旧任仍为现任、冻结解除），并额外点名插件自建的继任者", autoSweep.cancelled.length === 1 && autoSweep.cancelled[0].caller === autoId && autoEnv.role().current === ROT_SELF && autoEnv.role().pending === null && autoSweep.lines.some((line) => line.includes(autoId) && line.includes("可收编或关闭") && line.includes("§11.5")) && autoEnv.calls("session-worker-a").followedup.at(-1).content[0].text.includes("[rotation-cancelled]"));
+
+// --- §11.5 的判据必须跨激活成立（🟡-2）-------------------------------------------
+// 现象（差异审计实测）：判据是内存态 `hasHandle`，而**插件重载会清空 handle 注册表**
+// ——盘上的 pending 仍在、清扫照跑、点名行却静默消失（同窗口 4 行 → 换激活后 3 行）。
+// 而那正是设计要防的「没人知道的孤儿」窗口。修法是让判据**先读持久证据**：交接文档
+// 头部的 `successor:` 行（落盘、重载不动），再退到落盘的 pending-create 意图，内存
+// handle 只作附加佐证。下面三条把三层来源与「重载相」分别钉住。
+check("🟡-2 持久证据: 交接文档头部的 `successor:` 行按逐字匹配认人（正文里的同名文本不作数——头部才是落盘的指派记录）", __testing.handoffDocumentNamesSuccessor(`---\nsuccessor: session-x\n---\n`, "session-x") === true && __testing.handoffDocumentNamesSuccessor(`---\nsuccessor: session-x\n---\n`, "session-xy") === false && __testing.handoffDocumentNamesSuccessor(`---\nsuccessor: session-x\n---\n`, "session-") === false && __testing.handoffDocumentNamesSuccessor(`successor: session-x\n`, "") === false && __testing.handoffDocumentNamesSuccessor(`## mission\nthe successor: session-x was named\n`, "session-x") === false);
+check("🟡-2 持久证据: 最新那份交接文档的头部 `successor:` 认得这次换届的继任者（重载后它仍在磁盘上，这正是跨激活判据的来源）", (() => {
+	return autoDocNames.error === null && autoDocNames.named === true && autoDoc.path !== null && path.dirname(autoDoc.path) === path.join(TEAM_WS, "team", "night-shift");
+})());
+// 判据必须**只认最新那一份**：旧文档里的 id 属于已被取代的换届（一个 token 若还
+// pending，它必然是最后一次 prepare 的），拿旧文档认人就是假阳。
+const autoDocStaleMatch = await __testing.handoffDocumentNamesLatest(autoEnv.team(), "coordinator", "session-never-created");
+check("🟡-2 持久证据: 只有最新那一份文档能认人——换一个不在任何文档里的 id，判据为否（旧文档里的 id 不许冒充现在的继任者）", autoDocStaleMatch.error === null && autoDocStaleMatch.named === false && autoDocNames.named === true && !autoDocText.includes("session-never-created"));
+/** 重载窗口的继任者 id **从盘上那一行读**，不从 `autoId` 抄：`autoId` 是测试进程里
+ * 「刚才那次 prepare」的内存读数，而重载相要证明的恰恰是「没有内存读数也认得出」。 */
+const autoReloadId = autoDiskSnapshot.teams[0].roles[0].pending?.session ?? "（快照里没有 pending）";
+/**
+ * 重载相的环境：**一个全新的 Context + 一份全新的 settings 存根**，灌的就是那份落盘
+ * 快照。为什么不能用 `rotateEnv`：它的 settings 存根把 `register(namespace)` 与「种入
+ * state」绑在一起，而新策略存储自己会再 register 一次 ⇒ state 被重置成空 —— 那样测的
+ * 就不是「重载后还认不认得出」，而是「另一个空命名空间」。这里在注册之后把快照灌进去，
+ * 重放的是真实的启动顺序（先有服务，再有数据）。
+ */
+const reloadCtx = new Context();
+const reloadState = { teams: structuredClone(autoDiskSnapshot.teams), pairs: structuredClone(autoDiskSnapshot.pairs), trustedSenders: [...autoDiskSnapshot.trustedSenders], rememberTargets: [...autoDiskSnapshot.rememberTargets], blockedSenders: [...autoDiskSnapshot.blockedSenders], pendingCreates: structuredClone(autoDiskSnapshot.pendingCreates) };
+reloadCtx.provide("settings", {
+	register(_namespace, _schema, options = {}) {
+		return { get: () => ({ ...structuredClone(options.base ?? {}), ...structuredClone(reloadState) }), update: async (patch) => { Object.assign(reloadState, structuredClone(patch)); } };
+	},
+});
+// 重载后的一切：agents 表是空的（旧激活的 handle 连同旧激活一起没了），所以
+// `broadcastNotice` 的逐目标行只会是 no-agent —— 点名行就是这次清扫唯一的产出。
+reloadCtx.provide("agents", { get: () => undefined, list: () => [] });
+reloadCtx.provide("sessionQuery", {});
+reloadCtx.provide("tools", { register: () => () => {} });
+reloadCtx.logger = { warn() {}, info() {}, error() {} };
+const reloadRotation = __testing.rotationFor(reloadCtx, { hasHandle: () => false });
+const reloadSweep = await reloadRotation.sweep({ now: Date.now() + 31 * 60000 });
+const reloadMentions = reloadSweep.lines.filter((line) => line.includes(autoReloadId));
+const reloadNaming = reloadMentions.filter((line) => line.includes("可收编或关闭"));
+const reloadProbe = {
+	snapshotHadPending: autoDiskSnapshot.teams[0].roles[0].pending?.session === autoReloadId,
+	documentOnDisk: autoDocNames.named === true && autoDocNames.error === null,
+	cancelled: reloadSweep.cancelled.length,
+	naming: reloadNaming.length,
+	evidenceNamed: reloadNaming.some((line) => line.includes("落盘的交接文档头部 successor 行")),
+	pendingCleared: reloadState.teams[0].roles[0].pending === null,
+	currentKept: reloadState.teams[0].roles[0].current === ROT_SELF,
+};
+check(`🟡-2 跨激活: 空 handle 注册表 + 同一份落盘状态 ⇒ 点名行仍在，且它自己说出判据来自落盘的交接文档（不看本激活窗口的内存态）`
+	+ (reloadProbe.snapshotHadPending && reloadProbe.documentOnDisk && reloadProbe.cancelled === 1 && reloadProbe.naming === 1 && reloadProbe.evidenceNamed && reloadProbe.pendingCleared && reloadProbe.currentKept ? "" : `（实测：${show(reloadProbe)}）`),
+reloadProbe.snapshotHadPending && reloadProbe.documentOnDisk && reloadProbe.cancelled === 1 && reloadSweep.cancelled[0].caller === autoReloadId && reloadProbe.naming === 1 && reloadProbe.evidenceNamed && reloadProbe.pendingCleared && reloadProbe.currentKept);
+/** 三层来源各司其职：落盘文档 > 落盘 intent > 内存 handle。三者的差别是可检的
+ * （`evidence` 字段），而 `handle` 只在持久来源一个都没命中时才作数——它是最不
+ * 耐久的那一条，所以它不能替持久证据说话。反面同批钉住：三条都不命中就是
+ * 「不是本插件建的」，点名行不许出现（手工路径的 U23 对照另有断言）。 */
+const reloadTeam = reloadState.teams[0];
+/** `handle` 那一条要在**没有落盘文档**的目录上测：否则命中的是文档（上一条），
+ * 而不是 handle——借用一份不属于这次换届的文档来断言是假绿。 */
+const bareTeam = { ...reloadTeam, workspace: path.join(TEAM_TMP, "ownership-probe-ws") };
+const handleEvidence = await __testing.successorOwnershipOf({ team: bareTeam, role: "coordinator", sessionId: "session-handle-only", pendingCreates: [], hasHandle: () => true });
+const documentEvidence = await __testing.successorOwnershipOf({ team: reloadTeam, role: "coordinator", sessionId: autoReloadId, pendingCreates: [], hasHandle: () => false });
+const absentEvidence = await __testing.successorOwnershipOf({ team: bareTeam, role: "coordinator", sessionId: "session-never-created", pendingCreates: [], hasHandle: () => false });
+const intentEvidence = await __testing.successorOwnershipOf({ team: bareTeam, role: "coordinator", sessionId: "session-never-created", pendingCreates: [{ sessionId: "session-never-created" }], hasHandle: () => false });
+const ownershipProbe = { handle: handleEvidence, document: documentEvidence, intent: intentEvidence, absent: absentEvidence };
+check(`🟡-2 三层来源各司其职: 落盘文档 > 落盘 intent > 内存 handle，且四者互不冒充（handle 只在内存态为真时兜底，三条持久路径都不命中就是「不是本插件建的」）`
+	+ (documentEvidence.evidence === "handoff-document" && intentEvidence.evidence === "pending-create-intent" && absentEvidence.evidence === "none" && handleEvidence.evidence === "handle" ? "" : `（实测：${show(ownershipProbe)}）`),
+handleEvidence.pluginCreated === true && handleEvidence.evidence === "handle" && documentEvidence.pluginCreated === true && documentEvidence.evidence === "handoff-document" && intentEvidence.pluginCreated === true && intentEvidence.evidence === "pending-create-intent" && absentEvidence.pluginCreated === false && absentEvidence.evidence === "none" && __testing.ownershipEvidenceLabel("handoff-document") !== __testing.ownershipEvidenceLabel("handle"));
 
 const manualUnclaimedEnv = rotateEnv({ askScript: [], pairs: [rotPair("session-worker-a")] });
 const manualUnclaimedPrep = await manualUnclaimedEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: SUCCESSOR }, execFor(manualUnclaimedEnv.senderAgent));
@@ -3182,7 +3375,7 @@ const autoFullProbe = {
 	done: (autoFullEnv.calls("session-worker-a").followedup.at(-1)?.content?.[0]?.text ?? "").includes("[rotation-done]"),
 };
 check(`U24 红线: 自动换届没有跳过 claim 的任何一步——令牌校验 + 单个多选对话框 + 域限定迁移 + 对称吊销 + roster 落定 + rotation-done`
-	+ (autoFullProbe.asks === 2 && autoFullProbe.claimId === "rotation-migrate" && autoFullProbe.multi === true && autoFullProbe.pairs === autoFullExpectedPairs && autoFullProbe.retireeGone && !autoFullProbe.trusted && !autoFullProbe.remembered && autoFullProbe.current && autoFullProbe.pending === null && autoFullProbe.done ? "" : `（实测：${JSON.stringify(autoFullProbe)}）`),
+	+ (autoFullProbe.asks === 2 && autoFullProbe.claimId === "rotation-migrate" && autoFullProbe.multi === true && autoFullProbe.pairs === autoFullExpectedPairs && autoFullProbe.retireeGone && !autoFullProbe.trusted && !autoFullProbe.remembered && autoFullProbe.current && autoFullProbe.pending === null && autoFullProbe.done ? "" : `（实测：${show(autoFullProbe)}）`),
 autoFullProbe.asks === 2 && autoFullProbe.claimId === "rotation-migrate" && autoFullProbe.multi === true && autoFullProbe.pairs === autoFullExpectedPairs && autoFullProbe.retireeGone && !autoFullProbe.trusted && !autoFullProbe.remembered && autoFullProbe.current && autoFullProbe.pending === null && autoFullProbe.done);
 check("U24 无新日志事件: 一次完整的自动换届（prepare + claim）里，宿主动作仍只有 create/followup 两种（settings 写不在这个日志里，它是另一个出口）", autoFullEnv.actionLog.every((entry) => entry === "create" || entry === "followup"));
 // DEFECT-1 的 ③a 端到端对照：认领并落定的那个继任者，就是被挂载过 preset 的那个
