@@ -428,13 +428,21 @@ check("U14: A's label names the tool the slot was dispatched for (props.toolName
 const runningRow = renderSendRow(runningBlock());
 check("U14: an in-flight call has no receipt yet and renders the plain row", isSendPlain(runningRow) && !isSendCard(runningRow));
 check("U14: the plain row names the call and says it is still running", treeText(runningRow).includes("工具调用") && treeText(runningRow).includes("team_link_send") && treeText(runningRow).includes("调用中…"));
-const noMetaRow = renderSendRow(sendBlock(undefined, "已投递到 session-worker-a（已配对通道，免确认自动投递）：目标空闲。"));
-check("U14: a settled call with NO meta falls back to plain text (every log written before §10.1)", isSendPlain(noMetaRow) && !isSendCard(noMetaRow));
-check("U14: ... and the fallback shows the model-visible result verbatim", treeText(treeByClass(noMetaRow, "dshsl-plain-body")) === "已投递到 session-worker-a（已配对通道，免确认自动投递）：目标空闲。" && treeText(noMetaRow).includes("无结构化回执"));
+// One consequence of the §10.1.5 text rebuild (below) is visible right here: a
+// fixture whose text IS one of the two shapes our host half mints no longer
+// reaches the plain face at all — it is rebuilt into A's minimal card. That is
+// the point of the round, so this block now says which text it means instead of
+// relying on `sendBlock`'s default, and the two assertions that used to pin
+// 「无 meta ⇒ 纯文本」 verbatim are RETIRED by the rebuild block below (they pinned
+// a contract the design has replaced: 无 meta 时可重建 ⇒ 卡).
+const FALLBACK_TEXT = "回退正文：这不是本插件报告形状里的任何一句。";
+const fallbackRow = renderSendRow(sendBlock(undefined, FALLBACK_TEXT));
+check("U14: a settled call with NO meta and a text that is NOT one of our report shapes falls back to plain text", isSendPlain(fallbackRow) && !isSendCard(fallbackRow));
+check("U14: ... and the fallback shows the model-visible result verbatim, with the degradation named", treeText(treeByClass(fallbackRow, "dshsl-plain-body")) === FALLBACK_TEXT && treeText(fallbackRow).includes("无结构化回执"));
 check("U14: a result with no text blocks still renders the plain row (no empty card, no crash)", isSendPlain(renderSendRow({ ...sendBlock(undefined), content: [] })));
 
-// --- anything this build cannot read is NOT a card ---------------------------
-const foreignMeta = renderSendRow(sendBlock({ kind: "fs-search", v: 1, results: [] }));
+// --- anything this build cannot read is NOT a structured card ----------------
+const foreignMeta = renderSendRow(sendBlock({ kind: "fs-search", v: 1, results: [] }, FALLBACK_TEXT));
 check("U14: another tool's meta is not dressed as our card (the discriminator is ours)", isSendPlain(foreignMeta) && !isSendCard(foreignMeta));
 const malformed = [
 	["not an object", "nope"],
@@ -450,18 +458,188 @@ const malformed = [
 	["a target id that is neither a string nor null", { ...SEND_CARD, targets: [{ sessionId: 5, outcome: "delivered", detail: "d" }] }],
 	["no summary", { ...SEND_CARD, summary: undefined }],
 ];
-check(`U14: none of the ${malformed.length} unreadable receipt shapes becomes a card`, malformed.every(([, meta]) => isSendPlain(renderSendRow(sendBlock(meta))) ));
-check("U14: ... and each of them still shows the model-visible text instead", malformed.every(([, meta]) => treeText(renderSendRow(sendBlock(meta, "回退正文"))).includes("回退正文")));
+check(`U14: none of the ${malformed.length} unreadable receipt shapes becomes a card`, malformed.every(([, meta]) => isSendPlain(renderSendRow(sendBlock(meta, FALLBACK_TEXT))) ));
+check("U14: ... and each of them still shows the model-visible text instead", malformed.every(([, meta]) => treeText(renderSendRow(sendBlock(meta, FALLBACK_TEXT))).includes("回退正文")));
 const hostile = { kind: "team-link-send", get v() { throw new Error("hostile getter"); } };
-check("U14: a receipt with a throwing getter degrades to the plain row instead of taking the transcript down", isSendPlain(renderSendRow(sendBlock(hostile))));
+check("U14: a receipt with a throwing getter degrades to the plain row instead of taking the transcript down", isSendPlain(renderSendRow(sendBlock(hostile, FALLBACK_TEXT))));
 check("U14: the reader is total — it never throws for any of these shapes", malformed.every(([, meta]) => {
 	try {
-		renderSendRow(sendBlock(meta));
+		renderSendRow(sendBlock(meta, FALLBACK_TEXT));
 		return true;
 	} catch {
 		return false;
 	}
 }));
+
+// ---------------------------------------------------------------------------
+// DEFECT-5 / §10.1.5 文本重建（2026-09-20）: a send with NO receipt but with a
+// model-visible text OUR OWN host half minted is rebuilt into A's minimal card.
+//
+// Why it is needed (measured, not inferred): `presentationMeta` is projected only
+// for a TOP-LEVEL dispatch — `exec.parent === undefined`
+// (`dsh-tools/lib/types/index.js:1191`) — so a `team_link_send` issued from inside
+// a `run_code` program never gets a `tool/result.meta`. The bridge logs
+// `tool/ptc-dispatch` with exactly
+// `{rootCallId, parentCallId, subCallId, name, arguments, isError, content}`
+// (no `meta`), and the chat package's `childResult` mints no `meta` on the block
+// either. A read-only scan of all 1311 session logs in the store found 733 such
+// dispatches with ZERO `meta`, against 11 `tool/result` events that DO carry a
+// card — i.e. every program-issued send was the grey fallback row while the
+// directly-issued ones had cards.
+//
+// The fixtures below are the host's two report shapes, copied VERBATIM out of
+// `lib/index.js` (`deliverToTarget`'s success sentence; `fanout`'s lead, header,
+// rows and summary). The lock that keeps those copies HONEST is cross-half and
+// lives in `host-half.test.mjs`: it renders the REAL text a REAL send produced
+// and compares the rebuilt card's rows against the structured receipt of that
+// same send. These copies exist so the client half can pin the parser's own
+// behaviour without importing the host.
+// ---------------------------------------------------------------------------
+
+/** The single-target success sentence, as `deliverToTarget` writes it. */
+const REBUILT_DELIVERED_TEXT = "已投递到 session-worker-a（已配对通道，免确认自动投递）：目标空闲，已唤醒目标会话并作为新回合处理（消息与回复稍后出现在目标会话中）。";
+/** A two-target fan-out report: one delivered, one refused, with the ❌ lead. */
+const REBUILT_FANOUT_TEXT = [
+	"❌ 1 个目标未投递（1 个已投递）",
+	"广播 fan-out：2 个目标",
+	`- session-worker-a（via team:night-shift/*） → delivered：${REBUILT_DELIVERED_TEXT}`,
+	"- session-worker-b（via team:night-shift/*） → refused：发送失败：跨会话发送需要用户批准，但确认服务（userQuestions）不可用。",
+	"汇总：1 投递 / 1 拒绝。",
+].join("\n");
+/** `renderSendRow` for a settled block with NO receipt at all. */
+const renderRebuiltRow = (text) => renderSendRow(sendBlock(undefined, text));
+/** The four statements A draws, in render order (label, then one entry per row). */
+const rebuiltRowsOf = (tree) => treeAllByClass(tree, "dshsl-send-target").map((row) => ({
+	identity: treeText(treeByClass(row, "dshsl-send-targetid")),
+	outcome: treeText(treeByClass(row, "dshsl-send-outcome")),
+	token: treeByClass(row, "dshsl-send-outcome").props["data-outcome"],
+}));
+/** One row's statement, or an EMPTY record when the row is not there — so a red
+ * run reports the mismatch and carries on instead of dying mid-suite. A suite that
+ * stops before `assertion total` hides every assertion after it (③b Y7 的教训). */
+const rebuiltRowAt = (tree, index) => rebuiltRowsOf(tree)[index] ?? { identity: undefined, outcome: undefined, token: undefined };
+
+const rebuiltDelivered = renderRebuiltRow(REBUILT_DELIVERED_TEXT);
+check("DEFECT-5: a settled call with no receipt whose text IS our delivered sentence renders a CARD, not the grey fallback row", isSendCard(rebuiltDelivered) && !isSendPlain(rebuiltDelivered));
+check("DEFECT-5: ... its minimal label still names the tool and the true target count", treeText(treeByClass(rebuiltDelivered, "dshsl-send-rowhead")) === "✦ 工具调用 · team_link_send · 1 个目标");
+check("DEFECT-5: ... and its one row is the target identity plus the outcome's short phrase", JSON.stringify(rebuiltRowsOf(rebuiltDelivered)) === JSON.stringify([{ identity: "session-worker-a", outcome: "已送达", token: "delivered" }]));
+// The channel note is between the label and the separator, so the id has to be
+// read past it; a titled label puts the title (user text, possibly containing the
+// separator) in front of the id.
+const rebuiltTitled = renderRebuiltRow("已投递到 「目标会话」(session-target)（provisional 通道，24h 内未批准自动回退）：目标空闲，已唤醒目标会话并作为新回合处理（消息与回复稍后出现在目标会话中）。");
+check("DEFECT-5: a titled label with a channel note still resolves to the session id (both wrappers are stripped)", rebuiltRowAt(rebuiltTitled, 0).identity === "session-target");
+const rebuiltTitledColon = renderRebuiltRow("已投递到 「会议：方案」(session-x)：目标空闲，已唤醒目标会话并作为新回合处理（消息与回复稍后出现在目标会话中）。");
+check("DEFECT-5: a title containing the separator does not steal it — the id is still session-x", rebuiltRowAt(rebuiltTitledColon, 0).identity === "session-x" && rebuiltTitledColon !== null && isSendCard(rebuiltTitledColon));
+const rebuiltNoTitle = renderRebuiltRow("已投递到 session-y：目标空闲，已唤醒目标会话并作为新回合处理（消息与回复稍后出现在目标会话中）。");
+check("DEFECT-5: an untitled, un-noted label is the bare session id", rebuiltRowAt(rebuiltNoTitle, 0).identity === "session-y");
+// ② 往返（客户端侧）: the identity goes through the SAME shortening helper on both
+// faces, so a long id round-trips as well — and it is the SHORT form, not the raw
+// label, that both faces must state.
+const REBUILT_LONG_ID = "session-6eba9a3f-1234-5678-9abc-d5d8f4cb1234";
+const longRebuiltRow = renderRebuiltRow(`已投递到 ${REBUILT_LONG_ID}（已配对通道，免确认自动投递）：目标空闲，已唤醒目标会话并作为新回合处理（消息与回复稍后出现在目标会话中）。`);
+const longStructuredRow = renderSendRow(sendBlock({ ...SEND_CARD, targets: [{ sessionId: REBUILT_LONG_ID, expr: undefined, outcome: "delivered", detail: "已投递到 x" }], summary: { delivered: 1, refused: 0, noAgent: 0, noHolder: 0, deduped: 0 } }));
+check("② 往返（客户端侧）: a long id rebuilds to the SAME short display form the structured row renders — and not to the raw label", rebuiltRowAt(longRebuiltRow, 0).identity === rebuiltRowAt(longStructuredRow, 0).identity && rebuiltRowAt(longRebuiltRow, 0).identity !== REBUILT_LONG_ID && rebuiltRowAt(longRebuiltRow, 0).identity.includes("…"));
+
+const rebuiltFanout = renderRebuiltRow(REBUILT_FANOUT_TEXT);
+check("DEFECT-5: a fan-out report with no receipt renders a CARD with one row per target", isSendCard(rebuiltFanout) && !isSendPlain(rebuiltFanout));
+check("DEFECT-5: ... its label states the report's own target count", treeText(treeByClass(rebuiltFanout, "dshsl-send-rowhead")) === "✦ 工具调用 · team_link_send · 2 个目标");
+check("DEFECT-5: ... and each row carries the identity the report labelled, with its outcome's phrase and token", JSON.stringify(rebuiltRowsOf(rebuiltFanout)) === JSON.stringify([
+	{ identity: "session-worker-a（via team:night-shift/*）", outcome: "已送达", token: "delivered" },
+	{ identity: "session-worker-b（via team:night-shift/*）", outcome: "未送达——接收方拒绝", token: "refused" },
+]));
+check("DEFECT-5: ... while the ❌ lead, the fan-out header and the summary stay off A (A owns the rows, and nothing else)", !treeText(rebuiltFanout).includes("汇总：") && !treeText(rebuiltFanout).includes("个目标未投递") && !treeText(rebuiltFanout).includes("广播 fan-out"));
+// The vacant-role row has no session id at all: its label IS the addressing
+// expression, and that is what the structured card carries too (`sessionId:null`).
+const rebuiltVacant = renderRebuiltRow([
+	"❌ 1 个目标未投递（0 个已投递）",
+	"广播 fan-out：1 个目标",
+	"- team:night-shift/reviewer → no-holder：该角色当前空缺",
+	"汇总：0 投递 / 0 拒绝 / 1 空缺目标（no-holder，不计入投递与失败）。",
+].join("\n"));
+check("DEFECT-5: a vacant-role row rebuilds as the expression itself with the no-holder phrase", JSON.stringify(rebuiltRowsOf(rebuiltVacant)) === JSON.stringify([{ identity: "team:night-shift/reviewer", outcome: "未送达——该角色当前空缺", token: "no-holder" }]));
+// A row's detail may be a MULTI-LINE paragraph (the `no-agent` refusal joins
+// three sentences with newlines and indents its own list). Those lines are the
+// row's, not new rows: the row count must still match the header's declaration.
+const rebuiltMultiLine = renderRebuiltRow([
+	"❌ 1 个目标未投递（0 个已投递）",
+	"广播 fan-out：1 个目标",
+	"- session-nope → no-agent：❌ 未投递：目标会话 session-nope 没有活动代理（未在本壳中打开或已退出）。仅支持投递到存活会话。",
+	"当前工作区无其他存活会话。",
+	"提示：请对照上列 id 核对目标 id（常见错误：转录错位）；也可先调 team_link_list_sessions 查询。",
+	"汇总：0 投递 / 0 拒绝 / 1 无活动代理。",
+].join("\n"));
+check("DEFECT-5: a multi-line row detail is one row, not three (the report's own indented list does not become target rows)", JSON.stringify(rebuiltRowsOf(rebuiltMultiLine)) === JSON.stringify([{ identity: "session-nope", outcome: "未送达——目标会话没有活动代理", token: "no-agent" }]));
+const rebuiltDeduped = renderRebuiltRow([
+	"广播 fan-out：1 个目标（重复目标已去重 2 个）",
+	"- session-worker-a → delivered：已投递到 session-worker-a：目标空闲。",
+	"汇总：1 投递 / 0 拒绝 / 2 个重复目标已去重。",
+].join("\n"));
+check("DEFECT-5: an all-delivered report carries NO ❌ lead and still rebuilds", isSendCard(rebuiltDeduped) && rebuiltRowsOf(rebuiltDeduped).length === 1);
+const rebuiltNoted = renderRebuiltRow(`${REBUILT_DELIVERED_TEXT}\n注意：meta.ref 超过 16 字符（原 17 字符），已按码点截断。`);
+check("DEFECT-5: a trailing 注意 note does not stop the rebuild (the note stays the model-visible report's)", isSendCard(rebuiltNoted) && rebuiltRowAt(rebuiltNoted, 0).identity === "session-worker-a" && !treeText(rebuiltNoted).includes("meta.ref"));
+
+// --- ③ 不伪造: what the rebuild cannot place stays a PLAIN row, verbatim ------
+// The rebuild is all-or-nothing. A single-target REFUSAL names no target at all
+// in our text, a reworded report is not a shape this build reads, and a report
+// whose own numbers disagree is not trustworthy — each of them must fall to the
+// plain face with every line intact, never to a half-invented card.
+const UNPLACEABLE = [
+	["a single-target refusal (our text names no target there at all)", "未投递：目标会话用户未在 3 分钟内确认接收。"],
+	["a no-agent refusal (the refusal paragraph, not a report)", "❌ 未投递：目标会话 session-nope 没有活动代理（未在本壳中打开或已退出）。仅支持投递到存活会话。\n当前工作区无其他存活会话。\n提示：请对照上列 id 核对目标 id。"],
+	["an addressing/meta rejection", "发送失败：targets（广播 fan-out）与 targetSessionId（单目标）互斥——一次调用只能用一种寻址方式。"],
+	["a report whose row separator was reworded", REBUILT_FANOUT_TEXT.split(" → ").join(" -> ")],
+	["a report whose summary disagrees with its own rows", REBUILT_FANOUT_TEXT.replace("汇总：1 投递 / 1 拒绝。", "汇总：2 投递 / 0 拒绝。")],
+	["a report whose ❌ lead disagrees with its own rows", REBUILT_FANOUT_TEXT.replace("❌ 1 个目标未投递（1 个已投递）", "❌ 2 个目标未投递（0 个已投递）")],
+	["a report missing its summary line", REBUILT_FANOUT_TEXT.split("\n").slice(0, -1).join("\n")],
+	["a report whose header count disagrees with its rows", REBUILT_FANOUT_TEXT.replace("广播 fan-out：2 个目标", "广播 fan-out：3 个目标")],
+	["a report with an outcome token the summary cannot bucket", REBUILT_FANOUT_TEXT.replace(" → refused：", " → delayed：")],
+	["a report with a line the shape has no place for", `${REBUILT_FANOUT_TEXT}\n这是多出来的一行。`],
+	["a delivered sentence with an unreadable label", "已投递到 「没有闭合引号的标题(session-x)：目标空闲。"],
+];
+check(`③ 不伪造: none of the ${UNPLACEABLE.length} texts this build cannot place becomes a card`, UNPLACEABLE.every(([, text]) => isSendPlain(renderRebuiltRow(text)) && !isSendCard(renderRebuiltRow(text))));
+check("③ 不伪造: ... and every one of them is shown VERBATIM on the plain face (nothing swallowed, nothing rewritten)", UNPLACEABLE.every(([, text]) => treeText(treeByClass(renderRebuiltRow(text), "dshsl-plain-body")) === text));
+check("③ 不伪造: ... and the rebuild never throws for any of them, nor for junk input", UNPLACEABLE.every(([, text]) => {
+	try { renderRebuiltRow(text); return true; } catch { return false; }
+}) && [undefined, null, 7, "", "\n\n", "❌", "广播 fan-out：x 个目标", "汇总：。", "- → ："].every((text) => {
+	try {
+		const tree = renderSendRow(sendBlock(undefined, text));
+		return tree !== null && tree !== undefined;
+	} catch {
+		return false;
+	}
+}));
+// No field is invented. Our text carries no turn-start time, so a row whose
+// detail reports one must NOT grow a busy badge the structured card would have
+// needed `target.busy` for.
+const rebuiltBusyish = renderRebuiltRow([
+	"广播 fan-out：1 个目标",
+	"- session-worker-a → delivered：已投递到 session-worker-a：目标正在运行，消息将在步边界注入当前回合。目标回合已运行 7 分钟（steer 注入当前回合）；需新回合语义请等其空闲。",
+	"汇总：1 投递 / 0 拒绝。",
+].join("\n"));
+check("③ 不伪造: the rebuild reads no `busy` out of the mechanism sentence — no badge is invented, and the sentence itself stays off the card", isSendCard(rebuiltBusyish) && !treeText(rebuiltBusyish).includes("忙碌") && !treeText(rebuiltBusyish).includes("已运行 7 分钟") && !treeText(rebuiltBusyish).includes("steer"));
+const rebuiltIsNotATarget = treeAllByClass(rebuiltBusyish, "dshsl-send-target").length === 1;
+check("③ 不伪造: ... and the report's own sentence is not mistaken for a second row", rebuiltIsNotATarget);
+// A rebuilt card is A's alone: D is driven by the receipt's discriminator through
+// the definition match, so it can never be produced from text. (Asserted further
+// down, beside the definition driver, where those fixtures exist.)
+
+// --- ① 有 meta 时永远走结构化路径 --------------------------------------------
+// The rebuild is a DEGRADATION, never a second opinion. The decoy below carries a
+// perfectly readable receipt AND a text that parses into a DIFFERENT card (2
+// targets instead of 3); if the two sources were ever consulted in the other
+// order, the decoy would win and this is red. Making the whole rebuild a
+// constant `null` must leave this assertion green — that is the property that
+// keeps the fallback from overriding structure.
+const decoyText = REBUILT_FANOUT_TEXT;
+const decoyRow = renderSendRow(sendBlock(SEND_CARD, decoyText));
+check("① 有 meta 时永远走结构化路径: a readable receipt decides the card even when the model-visible text would rebuild into a DIFFERENT one", JSON.stringify(rebuiltRowsOf(decoyRow)) === JSON.stringify([
+	{ identity: "session-worker-a（via team:night-shift/*）", outcome: "已送达", token: "delivered" },
+	{ identity: "session-worker-b（via team:night-shift/*）", outcome: "未送达——接收方拒绝", token: "refused" },
+	{ identity: "team:night-shift/reviewer", outcome: "未送达——该角色当前空缺", token: "no-holder" },
+]) && treeText(treeByClass(decoyRow, "dshsl-send-rowhead")) === "✦ 工具调用 · team_link_send · 3 个目标");
+// The other direction of the same rule: an UNREADABLE receipt is exactly the
+// 「meta 不可读」 case §10.1.5 hands to the rebuild.
+check("① 有 meta 时永远走结构化路径: an UNREADABLE receipt falls through to the rebuild instead of to the plain row", isSendCard(renderSendRow(sendBlock({ kind: "fs-search", v: 1 }, REBUILT_DELIVERED_TEXT))) && isSendCard(renderSendRow(sendBlock({ ...SEND_CARD, v: 2 }, REBUILT_DELIVERED_TEXT))));
 
 // --- the receipt's row bound (round-1 🔵 #2) ---------------------------------
 // `meta` is CORE-OPAQUE and persisted, so a hand-edited log or a heterogeneous
@@ -500,6 +678,11 @@ const hostCutTargets = Array.from({ length: 24 }, (_, i) => ({ sessionId: `sessi
 const hostCutCard = { ...SEND_CARD, targets: hostCutTargets, targetsTruncated: { shown: 24, total: 30 }, summary: { delivered: 30, refused: 0, noAgent: 0, noHolder: 0, deduped: 0 } };
 const hostCutRow = renderSendRow(sendBlock(hostCutCard));
 check("U14 跨轮: a HOST-cut receipt (24 rows + the `targetsTruncated` mark) still renders as a card", isSendCard(hostCutRow) && !isSendPlain(hostCutRow));
+// ① 有 meta 时永远走结构化路径, the control that makes the claim checkable: every
+// meta-bearing fixture of this suite still cards when the text beside it is the
+// decoy report. Turning the whole §10.1.5 rebuild into a constant `null` must
+// leave this green — `host-half.test.mjs` runs the red phase for that direction.
+check("① 有 meta 时永远走结构化路径: every meta-bearing fixture still renders a card beside a decoy text (the rebuild is never consulted for a readable receipt)", [SEND_CARD, overCapCard, hostCutCard, { ...SEND_CARD, message: { text: "", truncated: false, chars: 0 } }].every((card) => isSendCard(renderSendRow(sendBlock(card, decoyText)))));
 check("U14 跨轮: ... A states the truncation explicitly, at the mark's shown count", treeText(treeByClass(hostCutRow, "dshsl-send-rows-trunc")) === "（已截断——仅显示前 24 行）");
 check("U14 跨轮: ... and the label states the TRUE total (30) from the mark, not the 24 rows the host had already drawn", treeText(treeByClass(hostCutRow, "dshsl-send-rowhead")) === "✦ 工具调用 · team_link_send · 30 个目标");
 check("U14 跨轮: ... with exactly the 24 rows the host kept being what is drawn", treeAllByClass(hostCutRow, "dshsl-send-target").length === 24);
@@ -644,6 +827,11 @@ const runningRun = driveDefinition([callEvent("team_link_send", "call-1")]);
 check("U15: an in-flight send produces NO node yet (there is no receipt to draw)", runningRun.node === null);
 const noCardRun = driveDefinition([callEvent("team_link_send", "call-1"), resultEvent("call-1", undefined)]);
 check("U15: a call whose result carries no receipt produces no node (and no half card)", noCardRun.node === null);
+// DEFECT-5, the same boundary from the rebuild's side: D is driven by the
+// receipt's discriminator through this definition, so a card REBUILT from text
+// can never acquire a top-level face. A result the rebuild happily turns into A's
+// card on the row is still not claimed here.
+check("③ 不伪造: a receipt-less result is still NOT claimed by D's definition (a rebuilt card has no top-level face)", registeredDefinition.match(resultEvent("call-1", undefined)) === null && driveDefinition([callEvent("team_link_send", "call-1"), resultEvent("call-1", undefined)]).node === null);
 
 // --- window truncation: only the tool/result is in the loaded history -------
 const truncated = driveDefinition([resultEvent("call-1", SEND_CARD, 42)]);

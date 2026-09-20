@@ -2422,6 +2422,200 @@ const eightCard = eightCardEnv.send.output.presentationMeta(eightCardArgs, eight
 check("U13: 8 expressions resolve to 8 rows here — the ≤8 fan-out bound counts EXPRESSIONS; the card's own ROW bound is 24 (locked in the block below)", eightCard.targets.length === 8 && !Object.prototype.hasOwnProperty.call(eightCard, "targetsTruncated"));
 check("U13: the card is lossless JSON, which is what the registry requires before it persists it as tool/result.meta", sameJson(JSON.parse(JSON.stringify(holderCard)), holderCard) && sameJson(JSON.parse(JSON.stringify(fanCard)), fanCard));
 
+// ---------------------------------------------------------------------------
+// ② §10.1.5 文本重建的跨半边往返锁（DEFECT-5, 2026-09-20）
+//
+// The client half rebuilds a minimal card out of the model-visible text when a
+// send has no `tool/result.meta` — which is every `team_link_send` issued from
+// inside a `run_code` program, because the host projects `presentationMeta` for
+// top-level dispatches only (`exec.parent === undefined`, dsh-tools:1191). That
+// rebuild reads OUR text, so the one real risk is TEXT-SHAPE DRIFT: reword a
+// renderer in `lib/index.js` and the parser silently stops placing the lines
+// (the row degrades to plain text — safe, but the feature is gone and nothing
+// says so).
+//
+// This block is the lock against exactly that, and it is deliberately CROSS-HALF:
+// it runs the REAL send paths to get the REAL report text and the REAL receipt of
+// the SAME call, loads the REAL browser bundle, renders both faces through the
+// REAL A component, and holds the rebuilt rows equal to the structured ones. A
+// rewording on either side — the host's `已投递到 …`, its `- <label> → <outcome>：`
+// rows, its `广播 fan-out：` header or its `汇总：` line, or the client's parser —
+// makes the two faces disagree and this block red. Nothing here is a fixture
+// copied out of the other half: the text under test is produced by this file's
+// own host module at run time.
+// ---------------------------------------------------------------------------
+
+/** Load the browser bundle against a stubbed loader/React/DOM (the same shape
+ * `client-half.test.mjs` uses) and return the A component plus the real zh copy. */
+const roundTripBundle = await readFile(fileURLToPath(new URL("./lib/client.js", import.meta.url)), "utf8");
+const roundTripReact = {
+	createElement(type, props, ...children) { return { type, props: props === null || props === undefined ? {} : props, children }; },
+	useState(initial) { return [initial, () => {}]; },
+	useCallback(fn) { return fn; },
+	Fragment: Symbol("Fragment"),
+};
+const roundTripLoaded = { definition: null };
+const roundTripRegistrations = [];
+const roundTripDicts = new Map();
+new Function("window", "document", roundTripBundle)(
+	{
+		__ModuleLoader__: { load(value) { roundTripLoaded.definition = value; } },
+		location: { pathname: "/" },
+		isSecureContext: false,
+		setTimeout,
+		open() {},
+	},
+	{
+		querySelector() { return null; },
+		createElement() { return { dataset: {}, style: {}, textContent: "", setAttribute() {}, appendChild() {} }; },
+		head: { appendChild() {} },
+		body: { appendChild() {}, removeChild() {} },
+	},
+);
+const roundTripClient = roundTripLoaded.definition.factory((specifier) => {
+	if (specifier === "react") return roundTripReact;
+	throw new Error(`unstubbed client require: ${specifier}`);
+});
+roundTripClient.apply({
+	effect(fn) { const disposer = fn(); return typeof disposer === "function" ? disposer : () => {}; },
+	locale: { register(_namespace, lang, dict) { roundTripDicts.set(lang, dict); return () => {}; }, bind() { return (key) => key; } },
+	slots: {
+		inject(_name, register) { return register(); },
+		register(options, component) { roundTripRegistrations.push({ options, component }); return () => {}; },
+		entries() { return []; },
+	},
+	sessions: { list: { getSnapshot() { return { byId: {} }; } }, open() {} },
+	inject(_specs, callback) { return callback({ uiConversation: { events: { register() { return () => {}; } } } }); },
+});
+const roundTripRowView = roundTripRegistrations.find((entry) => entry.options.name === "tool.call.toolview");
+check("② 往返: the browser bundle really loaded here and exposed A's row component", roundTripRowView !== undefined && roundTripRowView.options.key === "team_link_send" && roundTripDicts.get("zh") !== undefined);
+
+// Tree helpers, the same shape `client-half.test.mjs` uses: the React stub
+// returns plain `{type, props, children}` literals, so one expansion is done for
+// a function component and fragments are flattened.
+function roundTripFlatten(tree) {
+	if (tree === null || tree === undefined || typeof tree !== "object") return tree;
+	if (Array.isArray(tree)) return tree.map(roundTripFlatten);
+	if (typeof tree.type === "function") return roundTripFlatten(tree.type({ ...tree.props, children: tree.children }));
+	if (tree.type === roundTripReact.Fragment) return roundTripFlatten(tree.children);
+	const children = tree.children === undefined ? [] : Array.isArray(tree.children) ? tree.children.map(roundTripFlatten) : [roundTripFlatten(tree.children)];
+	return { type: tree.type, props: tree.props, children };
+}
+function roundTripText(tree) {
+	if (tree === null || tree === undefined || tree === false) return "";
+	if (typeof tree === "string" || typeof tree === "number") return String(tree);
+	if (Array.isArray(tree)) return tree.map(roundTripText).join("");
+	if (typeof tree === "object" && tree.children !== undefined) return roundTripText(tree.children);
+	return "";
+}
+function roundTripByClass(tree, className) {
+	if (tree === null || tree === undefined || typeof tree !== "object") return null;
+	if (Array.isArray(tree)) {
+		for (const child of tree) {
+			const hit = roundTripByClass(child, className);
+			if (hit !== null) return hit;
+		}
+		return null;
+	}
+	if (tree.props !== undefined && tree.props.className === className) return tree;
+	return roundTripByClass(tree.children, className);
+}
+const roundTripAllByClass = (tree, className) => {
+	if (tree === null || tree === undefined || typeof tree !== "object") return [];
+	if (Array.isArray(tree)) return tree.flatMap((child) => roundTripAllByClass(child, className));
+	const here = tree.props !== undefined && tree.props.className === className ? [tree] : [];
+	return [...here, ...roundTripAllByClass(tree.children, className)];
+};
+const roundTripZh = (key) => (Object.prototype.hasOwnProperty.call(roundTripDicts.get("zh"), key) ? roundTripDicts.get("zh")[key] : key);
+/** A's face of one settled block: the REAL content the host wrote, and `meta` only
+ * when the caller has a receipt — exactly the two blocks the tool row receives.
+ * Expanded once through `roundTripFlatten` (the stub's `createElement` returns an
+ * element, not a tree). */
+const roundTripRow = (content, meta) => roundTripFlatten(roundTripRowView.component({
+	callId: "call-1",
+	toolName: "team_link_send",
+	t: roundTripZh,
+	block: {
+		kind: "tool-result", seq: 1, time: 1, callId: "call-1",
+		call: { name: "team_link_send", argsRaw: "{}" }, callTime: 0,
+		content: [{ type: "text", text: content }], isError: false, subCalls: [],
+		...meta === undefined ? {} : { meta },
+	},
+}));
+const roundTripIsCard = (tree) => { const card = roundTripByClass(tree, "dshsl-relay dshsl-send"); return card !== null && card.props["data-slp-send"] === "row"; };
+const roundTripIsPlain = (tree) => { const plain = roundTripByClass(tree, "dshsl-plain"); return plain !== null && plain.props["data-slp-send"] === "plain"; };
+/** What the design's round trip is about: every target's IDENTITY and outcome
+ * PHRASE, in order. The row as a whole also carries the busy badge, which our
+ * text does not carry and the rebuild must not invent — so the badge is outside
+ * the comparison on purpose (asserted separately, on the client half). */
+const roundTripStatements = (tree) => roundTripAllByClass(tree, "dshsl-send-target").map((row) => ({
+	identity: roundTripText(roundTripByClass(row, "dshsl-send-targetid")),
+	outcome: roundTripText(roundTripByClass(row, "dshsl-send-outcome")),
+}));
+/** One target's statement, or an EMPTY record when the row is not there — so a red
+ * run reports the mismatch and carries on instead of dying mid-suite (③b Y7's
+ * lesson: a suite that stops before `assertion total` hides everything after it). */
+const roundTripStatementAt = (tree, index) => roundTripStatements(tree)[index] ?? { identity: undefined, outcome: undefined };
+const roundTripRowCount = (tree) => roundTripText(roundTripByClass(tree, "dshsl-send-rowhead"));
+
+// Case A — one delivery to a TITLED session: the host's label is `「title」(id)`,
+// so the parser has to strip both the title and the channel note to find the id.
+const rtSingleEnv = fanEnv({ pairs: [pairSelf("session-target")] });
+const rtSingleArgs = { targetSessionId: "session-target", message: "往返：单目标" };
+const { value: rtSingleText, card: rtSingleCard } = await sendWithCard(rtSingleEnv, rtSingleArgs, execFor(rtSingleEnv.senderAgent));
+const rtSingleStructured = roundTripRow(rtSingleText, rtSingleCard);
+const rtSingleRebuilt = roundTripRow(rtSingleText);
+check("② 往返: the REAL text of a single-target delivery renders as a card with no receipt and as a card with one", roundTripIsCard(rtSingleStructured) && roundTripIsCard(rtSingleRebuilt) && !roundTripIsPlain(rtSingleRebuilt));
+check("② 往返: ... and the rebuilt target identity + phrase EQUAL the structured receipt's own row of the SAME send", sameJson(roundTripStatements(rtSingleRebuilt), roundTripStatements(rtSingleStructured)) && roundTripStatements(rtSingleRebuilt).length === 1 && rtSingleCard.targets[0].outcome === "delivered");
+check("② 往返: ... the identity being the session id the host titled (the `「title」(id)` wrapper is stripped, and the host's own label is what the receipt's `sessionId` is)", roundTripStatementAt(rtSingleRebuilt, 0).identity === rtSingleCard.targets[0].sessionId && rtSingleText.startsWith("已投递到 「"));
+
+// Case B — a MIXED fan-out (delivered / refused / no-holder) in one report: three
+// buckets, the ❌ lead, and a vacant row whose label is the expression itself.
+const rtMixedEnv = fanEnv({ omitUserQuestions: true, pairs: [pairSelf("session-worker-a")] });
+const rtMixedArgs = { targets: ["session-worker-a", "session-worker-b", "team:night-shift/reviewer"], message: "往返：混合" };
+const { value: rtMixedText, card: rtMixedCard } = await sendWithCard(rtMixedEnv, rtMixedArgs, execFor(rtMixedEnv.senderAgent));
+const rtMixedRebuilt = roundTripRow(rtMixedText);
+check("② 往返: the REAL text of a mixed fan-out (delivered / refused / no-holder) rebuilds into a card", roundTripIsCard(rtMixedRebuilt) && !roundTripIsPlain(rtMixedRebuilt));
+check("② 往返: ... one row per target, with identities and phrases equal to the structured receipt's", sameJson(roundTripStatements(rtMixedRebuilt), roundTripStatements(roundTripRow(rtMixedText, rtMixedCard))) && rtMixedCard.targets.length === 3);
+check("② 往返: ... the label stating the same target count the receipt holds", roundTripRowCount(rtMixedRebuilt) === roundTripRowCount(roundTripRow(rtMixedText, rtMixedCard)) && roundTripRowCount(rtMixedRebuilt) === `✦ 工具调用 · team_link_send · ${rtMixedCard.targets.length} 个目标`);
+check("② 往返: ... and the receipt really is the mixed one this case claims (all three buckets present, the lead on)", rtMixedCard.summary.delivered === 1 && rtMixedCard.summary.refused === 1 && rtMixedCard.summary.noHolder === 1 && rtMixedText.startsWith("❌ 2 个目标未投递（1 个已投递）"));
+
+// Case C — a `no-agent` row: its detail is a three-line paragraph with an
+// indented list of its own, which must stay ONE row (the header's count is the
+// cross-check that catches a parser that reads the list as more targets).
+const rtDeadEnv = fanEnv();
+const rtDeadArgs = { targets: ["session-nope"], message: "往返：无代理" };
+const { value: rtDeadText, card: rtDeadCard } = await sendWithCard(rtDeadEnv, rtDeadArgs, execFor(rtDeadEnv.senderAgent));
+const rtDeadRebuilt = roundTripRow(rtDeadText);
+check("② 往返: a no-agent row's MULTI-LINE refusal paragraph still rebuilds as exactly one row", roundTripIsCard(rtDeadRebuilt) && sameJson(roundTripStatements(rtDeadRebuilt), roundTripStatements(roundTripRow(rtDeadText, rtDeadCard))) && roundTripStatements(rtDeadRebuilt).length === 1 && rtDeadCard.targets[0].outcome === "no-agent");
+check("② 往返: ... and the paragraph really did span lines (the case would prove nothing otherwise)", rtDeadText.split("\n").length > 4);
+
+// Case D — duplicates: the count lives in the header AND the summary, and the
+// rebuild refuses the report unless the two agree.
+const rtDedupeEnv = fanEnv({ pairs: [pairSelf("session-worker-a")] });
+const rtDedupeArgs = { targets: ["session-worker-a", "session-worker-a", "team:night-shift/worker-a"], message: "往返：去重" };
+const { value: rtDedupeText, card: rtDedupeCard } = await sendWithCard(rtDedupeEnv, rtDedupeArgs, execFor(rtDedupeEnv.senderAgent));
+check("② 往返: a deduplicated report round-trips (one row, the dedupe count taken from the header and confirmed by the summary)", roundTripIsCard(roundTripRow(rtDedupeText)) && sameJson(roundTripStatements(roundTripRow(rtDedupeText)), roundTripStatements(roundTripRow(rtDedupeText, rtDedupeCard))) && rtDedupeCard.summary.deduped === 2 && rtDedupeText.includes("汇总：1 投递 / 0 拒绝 / 2 个重复目标已去重。"));
+
+// Case E — the honest boundary. A single-target REFUSAL is real host text this
+// build deliberately does NOT rebuild: our refusal sentences name no target, so a
+// card would have to invent the one field the design says must not be invented
+// (§10.1.5 「缺的字段不造」/「认不出的行原样显示」). It stays the plain row, verbatim.
+const rtRefusedEnv = fanEnv({ omitUserQuestions: true });
+const rtRefusedArgs = { targetSessionId: "session-worker-a", message: "往返：被拒" };
+const rtRefusedValue = await rtRefusedEnv.send.execute(rtRefusedArgs, execFor(rtRefusedEnv.senderAgent));
+const rtRefusedRebuilt = roundTripRow(rtRefusedValue);
+check("③ 不伪造: a real single-target REFUSAL never becomes a card — our refusal text names no target at all", roundTripIsPlain(rtRefusedRebuilt) && !roundTripIsCard(rtRefusedRebuilt));
+check("③ 不伪造: ... and the plain face shows the host's own sentence verbatim (nothing swallowed, nothing rewritten)", roundTripText(roundTripByClass(rtRefusedRebuilt, "dshsl-plain-body")) === rtRefusedValue && rtRefusedValue.startsWith("发送失败：") && !rtRefusedValue.includes("广播 fan-out"));
+
+// The lock's own sensitivity anchor, permanent rather than a one-off mutation: if
+// the host's renderers are ever reworded while the client's parser is not, the
+// two faces disagree exactly like this. One space out of the row separator is
+// enough — the same sentence, reworded, must LOSE the rebuild.
+const driftedRow = rtMixedText.split(" → ").join(" -> ");
+check("② 往返 敏感性锚点: the very same report with ONE character of drift in the row separator loses the rebuild (the lock above is not vacuous)", roundTripIsCard(roundTripRow(rtMixedText)) && roundTripIsPlain(roundTripRow(driftedRow)) && roundTripText(roundTripByClass(roundTripRow(driftedRow), "dshsl-plain-body")) === driftedRow);
+check("② 往返 敏感性锚点: ... and so does a drift in the host's own delivery prefix", roundTripIsCard(rtSingleRebuilt) && roundTripIsPlain(roundTripRow(rtSingleText.replace("已投递到 ", "已投递给 "))) && roundTripIsPlain(roundTripRow(rtSingleText.replace("：目标空闲", "，目标空闲"))));
+
 // --- U13 (§10.1.2 2026-09-19 修正): the card's ROW bound is 24, not the ≤8 -----
 // The bound locked just above counts the INPUT expressions. ONE `team:<name>/*`
 // is one expression and expands to every filled live member, so a legal broadcast
