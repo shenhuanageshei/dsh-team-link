@@ -252,6 +252,76 @@ function presetServiceWarns(env) {
 }
 
 /**
+ * `workspaceRegistry` service stub —— 真机缺陷 #2 的判据面。插件照
+ * `dsh-webhook` 的 `createWebhookSession` 那样用它：`create(cwd)` 在
+ * `agents.create` **之前**，`attachSession(sessionId)` 在它 resolve **之后**。这个
+ * 桩保住那两次调用必须满足的那一条性质：**会话属于某个工作区，只是因为那份工作区
+ * 自己的成员名单里有它**。「盘上有会话、cwd 也对」不是「侧边栏里看得到」——差别就
+ * 是这条成员关系，也正是 DEFECT-2 的现象。
+ *
+ * `sessionIds` 即侧边栏分组所读的成员名单。两个失败 fixture：
+ * - `refuseAttach`：registry 直接拒绝挂载（回滚用例）；
+ * - `registerThenRefuse`：真实的半成品——实体的 `attachSession` 先
+ *   `host.rememberSessionPath()` 再写记录，写记录抛错时会话已在路径索引里而
+ *   `sessionIds` 未必有它。回滚**不能**靠 `attached` 标志（它此时仍是 false），
+ *   这条 fixture 就是为那个半状态准备的。
+ */
+function makeWorkspaceRegistry({ refuseAttach = false, registerThenRefuse = false, normalize = (workspacePath) => workspacePath } = {}) {
+	const creates = [];
+	const attached = [];
+	const detached = [];
+	const workspaces = [];
+	const service = {
+		async create(workspacePath) {
+			creates.push(workspacePath);
+			const record = { path: normalize(workspacePath), sessionIds: [] };
+			const workspace = {
+				/** 归一化后的路径——模板 `:103` 把它写进 `meta.cwd`，`attachSession`
+				 * 也拿同一个值比对，所以「meta.cwd 来自 registry 而不是调用方原样
+				 * 透传」是**可观测**的，不是源码里的一句话。 */
+				path: record.path,
+				get sessionIds() { return [...record.sessionIds]; },
+				async attachSession(sessionId) {
+					attached.push({ path: record.path, sessionId });
+					if (registerThenRefuse) {
+						record.sessionIds = [sessionId, ...record.sessionIds];
+						throw new Error(`stub workspace: record write failed after registering ${sessionId}`);
+					}
+					if (refuseAttach) throw new Error(`stub workspace refused attach for ${sessionId}`);
+					if (!record.sessionIds.includes(sessionId)) record.sessionIds = [sessionId, ...record.sessionIds];
+				},
+				async detachSession(sessionId) {
+					detached.push({ path: record.path, sessionId });
+					record.sessionIds = record.sessionIds.filter((id) => id !== sessionId);
+				},
+				has: (sessionId) => record.sessionIds.includes(sessionId),
+			};
+			workspaces.push(workspace);
+			return workspace;
+		},
+	};
+	return { service, creates, attached, detached, workspaces };
+}
+
+/** DEFECT-2 的端到端读数，按**会话 id** 配对（不按位置）：每个新建会话的 workspace
+ * 各建恰一次、`attachSession` 恰一次且 id 就是**这个会话自己的** id、且写进
+ * `meta.cwd` 的正是那份 workspace 的路径。①②③a 三条路径共用这一个判据 —— 判据
+ * 只写一处，才不会出现「三处口径」。 */
+function workspaceBindingOf(env) {
+	return env.creates.map((options) => {
+		const rows = env.workspaceRegistry.attached.filter((entry) => entry.sessionId === options.sessionId);
+		return { id: options.sessionId, attached: rows.length, path: rows[0]?.path ?? null, metaCwd: options.meta.cwd, member: env.workspaceRegistry.workspaces.some((workspace) => workspace.has(options.sessionId)) };
+	});
+}
+function workspaceBoundOnce(env) {
+	return env.creates.length > 0 && workspaceBindingOf(env).every((row) => row.attached === 1 && row.path === row.metaCwd && row.member === true);
+}
+/** The one NAMED degradation line of the workspace face, per created session. */
+function workspaceServiceWarns(env) {
+	return env.log.lines.warn.filter((line) => line.includes("workspaceRegistry service unavailable"));
+}
+
+/**
  * `agents` service stub with the §10.2.2 create face: every `create` call is
  * recorded (options included, which is how the lineage assertions read `meta`),
  * the returned handle's agent is a full message sink, and `failAt` makes the
@@ -443,7 +513,7 @@ const tick = () => new Promise((resolve) => { setTimeout(resolve, 0); });
  * the DEFECT-1 degradation fixture: it is the ONE branch that may skip the preset
  * face, and it has to leave one warn per created session when it does.
  */
-function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0 } = {}) {	const ctx = new Context();
+function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0 } = {}) {	const ctx = new Context();
 	// Every plugin log line lands in `log.lines` instead of the console: the
 	// service-attach red line (§5.3) is asserted on the lines themselves.
 	const log = makeLogger();
@@ -563,6 +633,12 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	// so one warn per created session must say so and the session must still exist).
 	const agentPresets = makeAgentPresets();
 	if (!omitAgentPresets) ctx.provide("agentPresets", agentPresets.service);
+	// §10.2.2 模板的另一半（真机缺陷 #2）：会话建完要**挂进工作区**，否则侧边栏按
+	// 工作区分组时列不出它。与 agentPresets 同款——可选服务、创建时 `ctx.get`、默认
+	// 提供（真实宿主有它）；`omitWorkspaceRegistry` 是降级 fixture，`normalize` 是
+	// 「meta.cwd 真的来自 registry 的 path」的可观测 fixture。
+	const workspaceRegistry = makeWorkspaceRegistry(workspaceRegistryOptions ?? {});
+	if (!omitWorkspaceRegistry) ctx.provide("workspaceRegistry", workspaceRegistry.service);
 	apply(ctx);
 	const tool = (name) => registeredTools.find((candidate) => candidate.name === name);
 	/** U9 handle: the settings provider going active AFTER the plugin loaded. */
@@ -604,7 +680,7 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	const invoke = (rawInput, agent = senderAgent) => ({ commandId: "cmd-test", agent, rawInput, attachments: [], signal: new AbortController().signal });
 	/** G2 handle: the provider-side peak of concurrent `agents.create` calls. */
 	const maxCreateInFlight = () => createInFlight.max;
-	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentPresets, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
+	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentPresets, workspaceRegistry, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
 }
 
 function execFor(agent) {
@@ -2232,7 +2308,7 @@ const rotRoles = () => [
  * and the trust state a rotation operates on. `receiveMode: accept` keeps notice
  * delivery out of the receiver dialog; the notice cases set their mode explicitly.
  */
-function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitResume = false, extraAgents = undefined } = {}) {
+function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitResume = false, extraAgents = undefined } = {}) {
 	const env = setup({
 		sessions: [],
 		useSettings: true,
@@ -2251,6 +2327,9 @@ function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trus
 		// is the degradation fixture for the auto path too (it creates through the
 		// SAME `buildTeamSessionCreateOptions`).
 		omitAgentPresets,
+		// §10.2.2 模板的另一半（真机缺陷 #2）：auto 路径建继任者也走同一个
+		// `createRootAgent` ⇒ 工作区挂载同样要在这儿有它的降级 fixture。
+		omitWorkspaceRegistry,
 		// §11.9.4 L1's two fixtures: `omitResume` is the documented "no factory /
 		// no session persistence" failure mode, and the stub's own record/hidden
 		// bookkeeping is what the revive cases read.
@@ -3028,6 +3107,16 @@ check("DEFECT-1 ③a 判据是「能用」: 那条 mount 的 agentCtx 就是继�
 const autoNoPresetEnv = rotateEnv({ askScript: ["创建并交班"], omitAgentPresets: true, teams: handoffTeam(path.join(HANDOFF_WS, "nopreset")) });
 const autoNoPresetOut = await autoNoPresetEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoNoPresetEnv.senderAgent));
 check("DEFECT-1 ③a 降级: agentPresets 缺席时继任者照常自建、换届不因此失败（不因服务缺失让整条创建失败），并恰留一行 warn 点名它没有 persona-prefix 组装源", autoNoPresetEnv.creates.length === 1 && autoNoPresetEnv.agentPresets.mounts.length === 0 && autoNoPresetEnv.log.lines.warn.filter((line) => line.includes("agentPresets service unavailable")).length === 1 && autoNoPresetOut.includes("自建继任者"));
+
+// --- DEFECT-2 ③a（§11.4.2 复用 §10.2.2 的同一个创建路径）-----------------------
+// 与 DEFECT-1 同一条影响面：继任者也是 `createRootAgent` 建的 ⇒ 它同样要**挂进工作
+// 区**，否则换届之后用户在侧边栏里同样找不到新协调者，只能靠 `list_sessions` 或深链。
+// 判据与 ② 逐字共用（`workspaceBoundOnce`：按会话 id 配对，不看位置）。
+check("DEFECT-2 ③a 继任者: `successor:\"auto\"` 建出的会话同样挂进了工作区 —— workspace 恰建一次、`attachSession` 恰一次且 id === 继任者 id、`meta.cwd` 就是那份 workspace 的 path、成员名单里有它", workspaceBoundOnce(autoEnv) && autoEnv.workspaceRegistry.creates.length === 1 && autoEnv.workspaceRegistry.creates[0] === TEAM_WS && autoEnv.workspaceRegistry.attached.length === 1 && autoEnv.workspaceRegistry.attached[0].sessionId === autoId && autoEnv.workspaceRegistry.detached.length === 0);
+check("DEFECT-2 ③a 与 ② 同源: 两条路径的挂载读数是**同一个函数**产出的（`createRootAgent` 是全模块唯一的创建落点，auto 路径没有自己的第二份实现）", workspaceBindingOf(autoEnv).length === 1 && workspaceBindingOf(autoEnv)[0].id === autoId && autoEnv.creates.length === 1);
+const autoNoWsEnv = rotateEnv({ askScript: ["创建并交班"], omitWorkspaceRegistry: true, teams: handoffTeam(path.join(HANDOFF_WS, "noworkspace")) });
+const autoNoWsOut = await autoNoWsEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoNoWsEnv.senderAgent));
+check("DEFECT-2 ③a 降级: workspaceRegistry 缺席时继任者照常自建、换届不因此失败（令牌、交接文档、投递照旧），并**恰留一行 warn** 点名它未挂进工作区（信任迁移路径上的降级也要如实说）", autoNoWsEnv.creates.length === 1 && autoNoWsEnv.workspaceRegistry.attached.length === 0 && autoNoWsEnv.workspaceRegistry.creates.length === 0 && workspaceServiceWarns(autoNoWsEnv).length === 1 && workspaceServiceWarns(autoNoWsEnv).every((line) => line.includes("未挂进工作区")) && autoNoWsOut.includes("自建继任者") && autoNoWsOut.includes("投递（§11.4.5）"));
 
 // --- U22: 拒/取消/无确认服务 —— 三条都是「零副作用」 ---------------------------
 
@@ -3807,8 +3896,8 @@ check("🔵 #4: a webServer without register() is named by its reason code — �
  * real `CommandInvocation` so the assertions cover the handler and not a
  * re-implementation of it.
  */
-function teamSessionEnv({ teams = [], askScript = [], omitUserQuestions = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, failCreateAt = -1, selfCwd = TEAM_WS, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {
-	const env = setup({ sessions: [], useSettings: true, askScript, selfCwd, omitUserQuestions, omitCommands, lateCommands, omitAgentPresets, failCreateAt, createdHook, actionLog, pendingSeed });
+function teamSessionEnv({ teams = [], askScript = [], omitUserQuestions = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, workspaceRegistryOptions = undefined, failCreateAt = -1, selfCwd = TEAM_WS, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {
+	const env = setup({ sessions: [], useSettings: true, askScript, selfCwd, omitUserQuestions, omitCommands, lateCommands, omitAgentPresets, omitWorkspaceRegistry, workspaceRegistryOptions, failCreateAt, createdHook, actionLog, pendingSeed });
 	const ns = env.settings.namespaces.get("team-link");
 	ns.data.teams = structuredClone(teams);
 	return {
@@ -3988,6 +4077,43 @@ const bogusPresetEnv = teamSessionEnv({ askScript: ["创建"] });
 const bogusPresetOut = await bogusPresetEnv.run("n=1 team=defect1 roles=worker-a preset=nope");
 check("DEFECT-1 不静默降级: preset= 指了一个解析不出来的 id ⇒ 创建失败并如实报出原因（`not found`），零创建", bogusPresetEnv.creates.length === 0 && bogusPresetOut.kind === "error" && bogusPresetOut.text.includes("not found") && bogusPresetOut.text.includes("创建失败"));
 
+// --- DEFECT-2（§10.2.2 模板的**时序**）：workspace 建 → meta.cwd → attach ------
+// 真机缺陷 #2：那个会话**在盘上、cwd 也对**，但**没有工作区归属**——侧边栏按工作区
+// 分组时列不出它，用户得手动切工作区才找得到自己刚建出来的 worker。模板
+// `createWebhookSession` 做的是**完整时序**：`workspaceRegistry.create`（:96）→
+// `meta.cwd = workspace.path`（:103）→ `agents.create` → `workspace.attachSession`
+// （:115）。所以判据不是「会话建出来了」，而是「它真的在那份工作区的成员名单里」，
+// 且写进 meta 的路径就是 registry 给的那一个。
+const wsEnv = teamSessionEnv({ askScript: ["创建"] });
+const wsOut = await wsEnv.run("n=2 team=defect2 roles=worker-a,worker-b task=验工作区归属");
+check("DEFECT-2 ② 建/取工作区: `workspaceRegistry.create` 每个新会话**恰一次**，路径就是调用会话的 cwd（绝对）", wsOut.kind === "success" && wsEnv.workspaceRegistry.creates.length === wsEnv.creates.length && wsEnv.workspaceRegistry.creates.every((entry) => path.isAbsolute(entry) && entry === TEAM_WS));
+check("DEFECT-2 ② 挂进工作区: `attachSession` **恰一次**且 id 就是**这个会话自己的** id —— 不是「建完就不管了」", wsEnv.creates.length === 2 && workspaceBoundOnce(wsEnv) && workspaceBindingOf(wsEnv).every((row) => row.attached === 1));
+check("DEFECT-2 ② 判据是「侧边栏看得到」不是「盘上有会话」: 每个新会话真的在那份工作区的成员名单里（membership 才是分组所读的东西）", wsEnv.workspaceRegistry.workspaces.length === 2 && wsEnv.creates.every((options) => wsEnv.workspaceRegistry.workspaces.some((workspace) => workspace.has(options.sessionId))) && wsEnv.workspaceRegistry.detached.length === 0);
+// `meta.cwd` 必须取自 registry 的 `path`（模板 :103），不是把调用方 cwd 原样透传——
+// 真实 `attachSession` 拿会话 header 里 realpath 过的 cwd 与 workspace 记录比对，
+// 两者不同一就会被拒。让 registry 归一化出一个**不同的**路径，这个读数才可观测。
+const normWsEnv = teamSessionEnv({ askScript: ["创建"], workspaceRegistryOptions: { normalize: (workspacePath) => `${workspacePath}/` } });
+const normWsOut = await normWsEnv.run("n=1 team=defect2 roles=worker-a");
+check("DEFECT-2 ② meta.cwd 来自 workspace.path（模板 :103）: registry 归一化后的路径才是写进 meta 与 attach 的那一个，调用方 cwd 不是直通（源码里那句话可被行为观测）", normWsOut.kind === "success" && normWsEnv.workspaceRegistry.creates[0] === TEAM_WS && normWsEnv.creates[0].meta.cwd === `${TEAM_WS}/` && workspaceBoundOnce(normWsEnv));
+// 服务缺席是**唯一**允许跳过 workspace 面的分支（§10.3：不许为了它把模块级 inject
+// 撑大 ⇒ 走 `ctx.get`）。降级但绝不静默：会话照建照驱动，每个会话一行 warn。
+const noWsServiceEnv = teamSessionEnv({ askScript: ["创建"], omitWorkspaceRegistry: true });
+const noWsServiceOut = await noWsServiceEnv.run("n=2 team=defect2 roles=worker-a,worker-b");
+check("DEFECT-2 降级（唯一允许跳过的分支）: workspaceRegistry 缺席 ⇒ 零 attach、零工作区创建、meta.cwd 回落到调用方 cwd，而会话照建、照驱动（不因服务缺失让整条创建失败）", noWsServiceEnv.creates.length === 2 && noWsServiceEnv.workspaceRegistry.attached.length === 0 && noWsServiceEnv.workspaceRegistry.creates.length === 0 && noWsServiceEnv.creates.every((options) => options.meta.cwd === TEAM_WS) && noWsServiceEnv.created.every((item) => item.calls.followedup.length === 1) && noWsServiceOut.kind === "success");
+check("DEFECT-2 降级不静默: 恰一行 warn/会话，且点名「未挂进工作区，可能不会出现在侧边栏」——正是用户当时找不到会话的那个现象", workspaceServiceWarns(noWsServiceEnv).length === 2 && workspaceServiceWarns(noWsServiceEnv).every((line) => line.includes("未挂进工作区，可能不会出现在侧边栏")));
+// 回滚（模板 :135-147）：失败的创建不留下半个已挂载的会话 —— attach 抛错 ⇒
+// detach（幂等）+ `handle.dispose()`，**原错误照抛**（回滚失败不许顶替原始失败）。
+// 两条 fixture：直接拒绝，以及「已注册之后才抛」的半成品——后者正是 `attached` 标志
+// 会漏掉的状态（真实 attachSession 先 rememberSessionPath 再写记录）。
+const refuseAttachEnv = teamSessionEnv({ askScript: ["创建"], workspaceRegistryOptions: { refuseAttach: true } });
+const refuseAttachOut = await refuseAttachEnv.run("n=1 team=defect2 roles=worker-a");
+const refuseAttachId = refuseAttachEnv.creates[0]?.sessionId;
+check("DEFECT-2 回滚: attach 失败 ⇒ detachSession **恰一次**（同一个会话 id）+ handle 被 dispose（代理不在注册表里、无 controller handle），批次如实报「创建失败」，零 followup", refuseAttachEnv.creates.length === 1 && refuseAttachEnv.workspaceRegistry.attached.length === 1 && refuseAttachEnv.workspaceRegistry.detached.length === 1 && refuseAttachEnv.workspaceRegistry.detached[0].sessionId === refuseAttachId && refuseAttachEnv.agentFor(refuseAttachId) === undefined && sessionControllerFor(refuseAttachEnv.ctx).hasHandle(refuseAttachId) === false && refuseAttachEnv.created.every((item) => item.calls.followedup.length === 0) && refuseAttachOut.kind === "error" && refuseAttachOut.text.includes("创建失败"));
+check("DEFECT-2 回滚: 原错误照抛（回滚不许顶替它），且回滚本身成功时不留回滚失败 warn（attach 失败是唯一那条 warn 之外的噪音才叫问题）", refuseAttachOut.text.includes("stub workspace refused attach") && refuseAttachEnv.log.lines.warn.filter((line) => line.includes("rollback")).length === 0);
+const halfAttachEnv = teamSessionEnv({ askScript: ["创建"], workspaceRegistryOptions: { registerThenRefuse: true } });
+const halfAttachOut = await halfAttachEnv.run("n=1 team=defect2 roles=worker-a");
+const halfAttachId = halfAttachEnv.creates[0]?.sessionId;
+check("DEFECT-2 回滚（半成品）: attach 已把会话写进成员名单之后才抛错 ⇒ detach 仍被调用、成员名单里不留它（`attached` 标志在这里是 false——靠它就漏掉了这个半状态）", halfAttachEnv.workspaceRegistry.attached.length === 1 && halfAttachEnv.workspaceRegistry.detached.length === 1 && halfAttachEnv.workspaceRegistry.detached[0].sessionId === halfAttachId && halfAttachEnv.workspaceRegistry.workspaces.every((workspace) => workspace.has(halfAttachId) === false) && halfAttachOut.kind === "error");
 // --- U18: 生命周期 (the handle belongs to the plugin's OWN context) ----------
 const controller = sessionControllerFor(okEnv.ctx);
 check("U18 生命周期: the batch controller lives on the plugin's own context (not a command-handler temp ctx) and owns its handles", controller !== undefined && controller.rootCtx === okEnv.ctx && okIds.every((id) => controller.hasHandle(id)) && okIds.every((id) => controller.handleFor(id).agent.id === id));
@@ -4143,6 +4269,9 @@ check("U18 文档漂移: prepare's fallback text no longer claims 「本插件�
 // the process cwd, so the run would silently read nothing under another cwd.
 const hostSourcePath = fileURLToPath(new URL("./lib/index.js", import.meta.url));
 const hostSource = await readFile(hostSourcePath, "utf8");
+// DEFECT-2 源码锁：整模块只有**一处** attach/detach 调用点（② 与 ③a 共用同一个
+// `createRootAgent`，不存在第二个挂载点），`agents.create(` 仍是那**一处**。
+check("DEFECT-2 源码锁: 全模块 `.attachSession(` / `.detachSession(` 各**恰一处**（② 与 ③a 共用同一条创建路径，不存在第二个挂载点），`agents.create(` 仍恰一处", (hostSource.match(/\.attachSession\(/gu) ?? []).length === 1 && (hostSource.match(/\.detachSession\(/gu) ?? []).length === 1 && (hostSource.match(/agents\.create\(/gu) ?? []).length === 1);
 const importList = [...hostSource.matchAll(/^import .*? from "([^"]+)";$/gmu)].map((match) => match[1]);
 const HOST_IMPORTS = ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "schemastery", "node:crypto", "node:fs/promises", "node:path"];
 // `appendFile(`/`writeFile(` are deliberately NOT in this list: they are the
