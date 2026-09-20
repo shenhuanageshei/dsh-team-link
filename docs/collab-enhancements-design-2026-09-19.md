@@ -189,12 +189,14 @@ const handle = await ctx.agents.create({          // ⚠ 必须从【插件根 c
 
 | 模板步骤 | 为什么不做 |
 |---|---|
-| `agentDefaultModel.currentSelection()` 缺省解析（`:16-62`） | 缺省时**宿主自己的 defaultModel 已生效**，弹框文案写的就是「（本会话默认）」——替用户选一个反而是越权 |
+| ~~`agentDefaultModel.currentSelection()` 缺省解析~~ → **必须做（2026-09-20 真机推翻「不做」的判断）** | 曾以「缺省时宿主自己的 defaultModel 已生效」为由判为不做，**该理由不成立**：宿主默认是在**它自己的装配流程**里生效的，而**由插件 `agents.create` 造出、不带 `agentOptions` 的 agent** 走不到那个默认 ⇒ `deployment:persona-prefix` 里的 `{{model}}` **无值**、首回合直接失败（**真机复现**，见 `.goal/DEFECT-3-model-selection-missing.md`）。**现在必须**：`provider`/`model` 均未给时用 `ctx.agentDefaultModel.currentSelection()` 解析缺省并写进 `agentOptions`（与 `dsh-webhook` 的 `resolveRequest:30-36` 逐字对齐），并把它传给 `setup` 的初始模型选择安装 |
 | `permissionPresets.resolve/set`（`:92`/`:118`） | `/team_session` **没有权限档参数**，设计契约里也没有；不替用户选档 |
 | `signal.throwIfAborted()`（`:95` 等） | signal 是 webhook 的**注册生命期**；本路径在一条命令内跑完，abort 由确认框的 signal 承担。补它要改两处调用点签名与断言面（列为后续可跟进项，非缺陷） |
 | `sessionTitle.rename`（`:119`） | 设计逐字契约里没有 title，而命名是**用户可见的交互决定**（三个 worker 该叫什么？）——设计没给就不自造；会话 id 自带 team/role |
 | delivery 快照校验（`:180-188`） | webhook 的投递侧概念（provider kind / deliveryId），本插件没有 provider delivery |
 | 模块级 `inject` 含 `workspaceRegistry`（`:197`） | §10.3 红线：模块级 `inject` **仍 4 项** ⇒ 走 `ctx.get("workspaceRegistry")`，缺席时降级为一行 warn |
+
+> **⚠️ 给「故意不做」清单加的纪律（2026-09-20，DEFECT-3 之后）**：上表每一条「故意不做」都是**一条判断**，与代码一样需要被判据支撑——**「我认为宿主会兜底」不是判据**。⇒ 凡列入本清单的条目，必须**在真机上被证伪过**（即：确实不做也正确），否则必须显式标注为「**未验证的假设**」并给出验证步骤。**DEFECT-1（preset 源）与 DEFECT-3（模型选择）是同一份清单上的同一次失误的两次爆发**：都写在「故意不做」里，都在真机上炸了。
 
 **本设计的实际创建落点（与上面的伪代码同批改准）**：`createRootAgent(ctx, rootCtx, plan, entry, cwd)` 是**唯一**的创建入口，它把模板的完整时序收成一处：① `workspaceRegistry.create(cwd)` → ② `meta.cwd = workspace.path`（**registry 归一化后的路径**，因为 attach 会拿它校验）→ ③ `agents.create(...)` → ④ `attachSession(sessionId)` → ⑤ 失败则 `detachSession` + `dispose` + 原错误照抛（各步失败一行 warn）。**② 批量建队与 ③a 自建继任者共用它**，所以两条路径的工作区归属一致。
 
