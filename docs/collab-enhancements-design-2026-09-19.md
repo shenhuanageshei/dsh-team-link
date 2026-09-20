@@ -446,7 +446,7 @@ sequenceDiagram
 | `team_link_roster get` 的现任行 | 现任无活代理时一行注记 + 恢复指引 |
 | 三道门（`writerGate` / `rotateGate` / `retireGate`）的**拒绝文案** | **gate 本体保持纯函数**，由**有 ctx 的工具层**富化：把「只有现任 X 可写」改成「现任 X **无活代理**——恢复梯子见 …」。今天这道文案对死现任是**误导性**的 |
 | 启动清扫报告 | 新增一行：各团队「current 无活代理」的角色清单 |
-| （派生词汇，**不落盘**） | `vacant` = current 为 null；`seated-dead` = current 非空但 `agents.get(current) === undefined` |
+| （派生**诊断词**，**不新增持久字段**） | `vacant` = current 为 null；`seated-dead` = current 非空但 `agents.get(current) === undefined`。**澄清（③b 审计 B8/Y5 后改准）**：设计要求的是「**不落盘新的状态字段**」+「镜像里**不出现当前的活性读数**」——而 `vacant` 这个**既有事实**（`current=null`）本来就在盘上、`roster.md` 自 M2 起一直渲染「空缺（vacant）」；同理，恢复记录里的**理由词** `vacant-due-to-death` 可以出现在镜像里，因为它是**当时的事实**（为什么恢复），不是**当前的读数**（现在的活性）。**判据**：镜像里可以有「为什么变成这样」，不可以有「现在是什么样」。 |
 
 **明确否决「巡逻主动告警 coordinator 死亡」**：插件重载 = 全队代理同时死亡 ⇒ 巡逻一告警就是**每次重载一场误报风暴**；且 `broadcastNotice` 对无发送方身份的通知按设计不发送。
 
@@ -459,6 +459,10 @@ sequenceDiagram
 
 **L1 的适用域（会诊 D7，父侧原设计完全没想到）**：`resume` 的 ownerCtx 是**插件根 ctx** ⇒ 复活后该代理的**运行时所有权归插件**，插件卸载即拆。对**人类自建**会话做 revive 会让它的生命周期**从 UI 转给插件、比现状更差**。⇒ **v1 的 `revive` 只对插件自建会话**（§11.4.2 自建的那些本来就是插件所有）；人类自建会话改为输出**深链指引**「请在侧边栏打开」。
 
+> **适用域的实现扩展与独立核验（2026-09-20）**：单用 `teamSession.hasHandle(id)` 在**本轮最要紧的场景里恒为 false**——它读的是**本激活**的 handle 注册表，而 L1 存在的理由恰恰是「插件重载把 handle 表清空」（§10.2.5）；照字面实现，重载后 `revive` 会对**每一个**插件自建会话说「这不是本插件建的」，**与设计意图相反**。故实现取 `hasHandle(id) || pluginSessionIdMatches(team, role, id)`（后者按 §10.2.2 的 id 文法）。
+>
+> **③b 差异审计独立核实其不越授权面**（审计原始结论）：DSH 侧**人类可达**的会话 id 文法是 `session-<uuid>`（UI/人类，`dsh-api-session-controller:575`；子代理 `:693`）、`session-<n>`（`dsh-session:1465`）、`webhook-<uuid>`（`dsh-webhook:98`）——**没有任何人类可达路径能造出 `team-link-<team>-<role>-<8hex>`**；该 id 由插件自铸（`teamSessionId`），真机盘上确实存在（`team-link-h1-probe-worker-1-92796b16`）。残余风险只剩两点：「命名文法是**推断**而非存证」与「超写者手改 settings 把 current 指到同形 id」——**两者都不构成「人类自建会话被插件接管」的路径**。⇒ **本节接受该扩展，并把这条论证作为它的正当性依据。**
+
 **入口为什么是独立工具**：演员与前置条件都与 `rotate` / `roster` 不同；而「两个封闭动词」这条反后门性质需要**单一可审计落点**。**不新增令牌类型**——L2 用的就是 `pending`/token 本身。
 
 ### 11.9.5 发起、授权与防滥用（回答「会不会变成后门」）
@@ -468,7 +472,7 @@ sequenceDiagram
 - **授权**唯一来源 = **人类在对话框里那一下点击**（`userQuestions`，fail-closed）。骨架论证：**任何由人类确认框把关的动作，其权限上界就是设置 UI 超级写者**——后者本来就能改一切且无审计 ⇒ 恢复只是把既有人类权限收窄成**更窄、更可审计**的形式，**不可能新增**后门；后门只可能来自**绕开人类**的那部分。
 - **发起**：{该角色**最近一任前任**} ∪ {团队**现任成员**}。旧任**可以发起**（发起权不依赖信任、只依赖身份资格；它上下文最完整，「回聘旧任」是最自然的恢复）——但**授权仍必须由人类给出**；它若被选为继任者，走的是 M4 claim 的**域限定迁移**（从死亡继任者的遗存重建），**被第一次换届丢弃的旧 pairs 一律不复活**。
 - **不需要「临时复权令牌」**（三家独立一致）：令牌只在**无人值守**场景换得价值，而恢复**必须有人在场**；一个绕过 `writerGate` 且无人类门的 bearer capability 恰好是后门的形状。
-- **八条硬约束**：① 封闭动词（只 `revive`/`reappoint`），不接受任意 roster 字段写入、不改 `policy.writer`；② **attended-only**，**刻意不设 provisional 无人值守变体**（与 claim 的关键不对称：pair 迁移可被 sweep 自动回退，**incumbency 不可自动回退**——错误现任写下的黑板/roster 已成事实）；③ **候选由插件从 live 成员计算**，模型只传 `team`（+可选 `role`），**不得指定继任者 id**；④ `revive` 只绑**当前** `current`（不存在「复活任意历史会话」的动词，否则吊销形同虚设）；⑤ `writerGate` 原样不动；⑥ **绝不把 `writer` 降级为 `any` 当作「修复」**（那是对团队的静默弱化）；⑦ 速率限制 + 三处留痕（版本史备注 `recovery(vacant-due-to-death, requester=…)` / roster.md 镜像 / `decisions.md` 追加——黑板无门，死锁下也能落账）；⑧ 进入即先跑既有过期清扫。
+- **八条硬约束**：① 封闭动词（只 `revive`/`reappoint`），不接受任意 roster 字段写入、不改 `policy.writer`；② **attended-only**，**刻意不设 provisional 无人值守变体**（与 claim 的关键不对称：pair 迁移可被 sweep 自动回退，**incumbency 不可自动回退**——错误现任写下的黑板/roster 已成事实）；③ **候选由插件从 live 成员计算**，模型只传 `team`（+可选 `role`），**不得指定继任者 id**；④ `revive` 只绑**当前** `current`（不存在「复活任意历史会话」的动词，否则吊销形同虚设）；⑤ `writerGate` 原样不动；⑥ **绝不把 `writer` 降级为 `any` 当作「修复」**（那是对团队的静默弱化）；⑦ 速率限制 + 三处留痕（**role 行的 `recoveries` 字段**（= `recovery(<verb>, vacant-due-to-death, requester=…)`；**`history`（版本史）一字未动**——③b 审计 Y6 已**独立验证它会被持久化**：真 `PolicyConfig` 往返存活 + `dsh-settings` 的 `persist` 落原始 section + **真机 `profile/settings.yaml` 的 role 行确实带 `recoveries: []`**）/ `roster.md` 镜像 / `decisions.md` 追加——黑板无门，死锁下也能落账）；⑧ 进入即先跑既有过期清扫。
 - **写时复检（TOCTOU）**：条件由**宿主观测**、不由调用方主张——对话框弹出时**与**落笔写入前**各重查一次 `agents.get(incumbent) === undefined`；现任已复活则中止（「现任已复活，无需恢复」）。
 
 ### 11.9.6 交接文档契约（会诊 Q2 裁定）
