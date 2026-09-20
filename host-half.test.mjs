@@ -372,6 +372,60 @@ function workspaceServiceWarns(env) {
 	return env.log.lines.warn.filter((line) => line.includes("workspaceRegistry service unavailable"));
 }
 
+/**
+ * `sessionTitle` service stub —— 真机缺陷 #4 的判据面（`dsh-webhook` 的
+ * `createWebhookSession` 第 8 步：`ctx.sessionTitle.rename(handle.agent.session,
+ * resolved.title)`，`lib/index.js:119`）。
+ *
+ * 真机现象：编程创建的会话**全部叫工作区名**（`dsh-session-link-pro`）⇒ 侧边栏里
+ * **互相无法区分**。根因是插件**从不设标题**（理由曾是「命名是用户可见的交互决定，
+ * 设计没给就不自造」）——但**默认值（工作区名）本身就是一个很糟的决定**。
+ *
+ * 这个桩记的是 `(会话 id, 标题)` 的**配对**，所以判据是「**这个**会话被命名成了
+ * **按它自己的 role 派生**的标题」，而不是「`rename` 被调用过几次」——后者对
+ * 「两个会话都被命名成同一个常量」照样全绿（空锁）。
+ *
+ * 形状照真服务：`rename` 拿的是**会话对象**（不是 id）、标题必须是可见字符、会话不在册
+ * 就抛。两个失败 fixture 各对应实现的一条降级分支（`omitSessionTitle` = 服务整个缺席、
+ * `refuseRename` = 服务在但改名失败），两档都必须**只留一行 warn、不阻断创建**。
+ */
+function makeSessionTitle({ refuseRename = false } = {}) {
+	const renames = [];
+	const service = {
+		rename(session, title) {
+			const sessionId = session?.header?.id;
+			if (typeof sessionId !== "string" || sessionId === "") throw new Error("session-title: refusing to rename a session that is not live in this store");
+			if (typeof title !== "string" || title.trim() === "") throw new Error("session-title: title must contain visible characters");
+			if (refuseRename) throw new Error(`stub session-title refused rename for ${sessionId}`);
+			renames.push({ sessionId, title });
+			return { title, source: { kind: "user" } };
+		},
+	};
+	return { service, renames };
+}
+
+/** DEFECT-4 的端到端读数，按**会话 id** 配对（不按位置）：每个新建会话各被命名一次、
+ * 命名的就是**这个会话自己的** id。①②③a 三条路径共用这一个形状的判据 —— 判据只写
+ * 一处，才不会出现「三处口径」。 */
+function sessionTitleOf(env) {
+	return env.creates.map((options) => {
+		const rows = env.sessionTitle.renames.filter((entry) => entry.sessionId === options.sessionId);
+		return { id: options.sessionId, renames: rows.length, title: rows[0]?.title ?? null };
+	});
+}
+/** 整个读数：每个新建会话恰被命名一次，且标题非空。 */
+function sessionTitledOnce(env) {
+	return env.creates.length > 0 && sessionTitleOf(env).every((row) => row.renames === 1 && typeof row.title === "string" && row.title !== "");
+}
+/** The one NAMED degradation line of the title face, when the SERVICE is absent. */
+function sessionTitleServiceWarns(env) {
+	return env.log.lines.warn.filter((line) => line.includes("sessionTitle service unavailable"));
+}
+/** The other NAMED degradation line of the title face, when the rename itself throws. */
+function sessionTitleRenameWarns(env) {
+	return env.log.lines.warn.filter((line) => line.includes("sessionTitle.rename failed"));
+}
+
 /** DEFECT-3 的端到端读数，按**会话 id** 配对（不按位置）：每个新建会话拿到的那一对
  * provider/model 是不是 `currentSelection()` 那一刻的读数，以及创建时装上的模型选择钩子
  * 是不是挂在**这个会话自己**的 setup 上下文上（`agents.create` 的 `setup` 真的被工厂
@@ -598,7 +652,7 @@ const tick = () => new Promise((resolve) => { setTimeout(resolve, 0); });
  * the DEFECT-1 degradation fixture: it is the ONE branch that may skip the preset
  * face, and it has to leave one warn per created session when it does.
  */
-function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0 } = {}) {	const ctx = new Context();
+function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0 } = {}) {	const ctx = new Context();
 	// Every plugin log line lands in `log.lines` instead of the console: the
 	// service-attach red line (§5.3) is asserted on the lines themselves.
 	const log = makeLogger();
@@ -725,6 +779,12 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	// 「meta.cwd 真的来自 registry 的 path」的可观测 fixture。
 	const workspaceRegistry = makeWorkspaceRegistry(workspaceRegistryOptions ?? {});
 	if (!omitWorkspaceRegistry) ctx.provide("workspaceRegistry", workspaceRegistry.service);
+	// §10.2.2 模板的**第四块**（真机缺陷 #4）：会话建完要**命名**，否则它显示成工作区名、
+	// 侧边栏里互相认不出来。同一款可选服务：默认提供（真宿主有它，`dsh-webhook` 第 8 步
+	// 无条件调它），`omitSessionTitle` / `sessionTitleOptions.refuseRename` 是它的两档降级
+	// fixture（服务缺席 / 服务在但改名失败）——两档都只留一行 warn、不阻断创建。
+	const sessionTitle = makeSessionTitle(sessionTitleOptions ?? {});
+	if (!omitSessionTitle) ctx.provide("sessionTitle", sessionTitle.service);
 	// §10.2.2 模板的**第三块**（真机缺陷 #3）：`resolveRequest` 在调用方没给 model 时
 	// **也**解析宿主的缺省模型选择，把它写进 `agentOptions` 并装成初始模型选择（模板
 	// 第 9 步）。同一款可选服务：默认提供（真宿主有它），`omitAgentDefaultModel` 是
@@ -773,7 +833,7 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	const invoke = (rawInput, agent = senderAgent) => ({ commandId: "cmd-test", agent, rawInput, attachments: [], signal: new AbortController().signal });
 	/** G2 handle: the provider-side peak of concurrent `agents.create` calls. */
 	const maxCreateInFlight = () => createInFlight.max;
-	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentPresets, workspaceRegistry, agentDefaultModel, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
+	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentPresets, workspaceRegistry, sessionTitle, agentDefaultModel, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
 }
 
 function execFor(agent) {
@@ -2439,7 +2499,7 @@ const rotRoles = () => [
  * and the trust state a rotation operates on. `receiveMode: accept` keeps notice
  * delivery out of the receiver dialog; the notice cases set their mode explicitly.
  */
-function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitResume = false, extraAgents = undefined } = {}) {
+function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitResume = false, extraAgents = undefined } = {}) {
 	const env = setup({
 		sessions: [],
 		useSettings: true,
@@ -2461,10 +2521,17 @@ function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trus
 		// §10.2.2 模板的另一半（真机缺陷 #2）：auto 路径建继任者也走同一个
 		// `createRootAgent` ⇒ 工作区挂载同样要在这儿有它的降级 fixture。
 		omitWorkspaceRegistry,
+		// §10.2.2 模板的第四块（真机缺陷 #4）：同上——命名也是**同一个**注入点。
+		omitSessionTitle,
+		sessionTitleOptions,
 		// §10.2.2 模板的第三块（真机缺陷 #3）：auto 路径的继任者同样要在 `agentOptions`
 		// 里带上模型选择，否则「令牌投给了一个跑不起来的持钥者、而旧任已冻结」。
 		omitAgentDefaultModel,
 		agentDefaultModelOptions,
+		// §10.2.2 模板的第四块（真机缺陷 #4）：auto 路径的继任者同样要被命名
+		// （同一个 `createRootAgent` ⇒ 同一个注入点），两档降级 fixture 同样转发。
+		omitSessionTitle,
+		sessionTitleOptions,
 		// §11.9.4 L1's two fixtures: `omitResume` is the documented "no factory /
 		// no session persistence" failure mode, and the stub's own record/hidden
 		// bookkeeping is what the revive cases read.
@@ -3335,6 +3402,19 @@ const autoNoModelEnv = rotateEnv({ askScript: ["创建并交班"], omitAgentDefa
 const autoNoModelOut = await autoNoModelEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoNoModelEnv.senderAgent));
 check("DEFECT-3 ③a 服务缺席 fail-visible: 继任者创建失败 ⇒ 零建会话、零令牌、零 freeze、零交接文档，错误文案点名 agentDefaultModel 与后果（令牌绝不投给一个跑不起来的持钥者）", autoNoModelEnv.creates.length === 0 && autoNoModelEnv.role().pending === null && autoNoModelEnv.calls("session-worker-a").followedup.length === 0 && autoNoModelEnv.calls("session-worker-b").followedup.length === 0 && !existsSync(autoNoModelWs) && autoNoModelOut.includes("agentDefaultModel") && autoNoModelOut.includes("继任者会话创建失败") && autoNoModelOut.includes("未铸令牌、未广播 freeze"));
 check("DEFECT-3 ③a 服务缺席: 已写的 pending-create 意图**保留**并如实报为可收编线索（§11.5 部分成功不回滚）——拒绝不是无声的", (autoNoModelEnv.ns.data.pendingCreates ?? []).length === 1 && autoNoModelOut.includes("pending-create"));
+
+// --- DEFECT-4 ③a（§11.4.2 复用 §10.2.2 的同一个创建路径）------------------------
+// 与 DEFECT-1/2/3 同一条影响面：继任者也是 `createRootAgent` 建的 ⇒ 它同样必须有一个
+// **可区分**的标题，否则换届之后用户在侧边栏里同样认不出那个新协调者（而它正是**持钥者**）。
+// 判据与 ② 逐字共用（`sessionTitledOnce` / `sessionTitleOf`：按会话 id 配对，不看位置）
+// ——这也是「注入点只有一处」的行为侧证据：auto 路径没有自己的第二份命名实现。
+check("DEFECT-4 ③a 继任者: `successor:\"auto\"` 建出的会话同样被命名成 `<team> · <role>`（同一个注入点，auto 路径没有自己的第二份实现）", sessionTitledOnce(autoEnv) && autoEnv.creates.length === 1 && at(sessionTitleOf(autoEnv), 0, {}).id === autoId && at(sessionTitleOf(autoEnv), 0, {}).title === "night-shift · coordinator");
+const autoTitleBody = autoEnv.uq.requests[0]?.questions[0]?.question ?? "";
+check("DEFECT-4 ③a 确认框说明设了什么标题: 自动换届的确认框写出继任者将得到的那个标题（同一份值既进框、又交给创建路径的 rename），并写明「想改随时在壳里重命名」", autoTitleBody.includes("night-shift · coordinator") && autoTitleBody.includes("想改随时在壳里重命名"));
+check("DEFECT-4 ③a 回执说明设了什么标题: 交班摘要如实写出真正设成的标题（取自 rename 的返回值）", autoOut.includes("已命名为「night-shift · coordinator」"));
+const autoNoTitleEnv = rotateEnv({ askScript: ["创建并交班"], omitSessionTitle: true, teams: handoffTeam(path.join(HANDOFF_WS, "notitle")) });
+const autoNoTitleOut = await autoNoTitleEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoNoTitleEnv.senderAgent));
+check("DEFECT-4 ③a 降级: sessionTitle 缺席时继任者照常自建、换届不因此失败（令牌、交接文档、投递照旧），恰留一行 warn 点名未设标题的后果（信任迁移路径上的降级也要如实说）", autoNoTitleEnv.creates.length === 1 && autoNoTitleEnv.sessionTitle.renames.length === 0 && sessionTitleServiceWarns(autoNoTitleEnv).length === 1 && sessionTitleServiceWarns(autoNoTitleEnv)[0].includes("工作区名") && autoNoTitleOut.includes("自建继任者") && autoNoTitleOut.includes("投递（§11.4.5）"));
 
 // --- U22: 拒/取消/无确认服务 —— 三条都是「零副作用」 ---------------------------
 
@@ -4492,8 +4572,8 @@ check("🔵 #4: a webServer without register() is named by its reason code — �
  * real `CommandInvocation` so the assertions cover the handler and not a
  * re-implementation of it.
  */
-function teamSessionEnv({ teams = [], askScript = [], omitUserQuestions = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, selfCwd = TEAM_WS, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {
-	const env = setup({ sessions: [], useSettings: true, askScript, selfCwd, omitUserQuestions, omitCommands, lateCommands, omitAgentPresets, omitWorkspaceRegistry, omitAgentDefaultModel, agentDefaultModelOptions, workspaceRegistryOptions, failCreateAt, createdHook, actionLog, pendingSeed });
+function teamSessionEnv({ teams = [], askScript = [], omitUserQuestions = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, selfCwd = TEAM_WS, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {
+	const env = setup({ sessions: [], useSettings: true, askScript, selfCwd, omitUserQuestions, omitCommands, lateCommands, omitAgentPresets, omitWorkspaceRegistry, omitSessionTitle, sessionTitleOptions, omitAgentDefaultModel, agentDefaultModelOptions, workspaceRegistryOptions, failCreateAt, createdHook, actionLog, pendingSeed });
 	const ns = env.settings.namespaces.get("team-link");
 	ns.data.teams = structuredClone(teams);
 	return {
@@ -4759,6 +4839,55 @@ const explicitNoServiceEnv = teamSessionEnv({ askScript: ["创建"], omitAgentDe
 const explicitNoServiceOut = await explicitNoServiceEnv.run("n=1 team=defect3 roles=worker-a model=deepseek/deepseek-v4");
 check("DEFECT-3 服务只服务缺省分支: 显式给了 model= 时 agentDefaultModel 缺席不影响创建（拒绝只针对解析不出缺省的那条路）", explicitNoServiceEnv.creates.length === 1 && explicitNoServiceOut.kind === "success" && explicitNoServiceEnv.creates[0].agentOptions?.provider === "deepseek" && explicitNoServiceEnv.creates[0].agentOptions?.model === "deepseek-v4");
 
+// ---------------------------------------------------------------------------
+// DEFECT-4（真机缺陷 #4）：编程创建的会话必须有一个**可区分**的默认标题
+// ---------------------------------------------------------------------------
+// 真机现象（用户原话）：「可以看到新的会话，不过**会话名称都是 `dsh-session-link-pro`**」
+// ——新建的 worker 标题全是**工作区名**，侧边栏里互相无法区分。根因是插件**刻意不设标题**
+// （当时的理由是「命名是用户可见的交互决定，三个 worker 该叫什么？设计没给就不自造」）；
+// **这个判断是错的**：不设标题**不等于**不替用户决定——**默认值（工作区名）本身就是一个
+// 很糟的决定**。官方模板 `dsh-webhook` 第 8 步是
+// `ctx.sessionTitle.rename(handle.agent.session, resolved.title)`（`lib/index.js:119`）。
+//
+// 修法：按**已有的结构化信息**派生标题（不新造随机数、不读工作区名）：`<team> · <role>`；
+// 缺一宁可回落到 `<team>` 或会话 id 的短前缀，**绝不回落成工作区名**（那正是本缺陷）。
+// 判据按**会话 id 配对**逐会话核对（`sessionTitleOf`）——「rename 被调用过几次」这种计数
+// 对「两个会话都被命名成同一个常量」照样全绿，是空锁。
+const wsTitleRows = sessionTitleOf(wsEnv).map((row) => ({
+	...row,
+	expected: row.id === plannedId(wsEnv, "defect2", "worker-a") ? "defect2 · worker-a" : row.id === plannedId(wsEnv, "defect2", "worker-b") ? "defect2 · worker-b" : null,
+}));
+check(`DEFECT-4 ② 逐会话命名（按 role 派生）: 每个新会话各被命名一次，且标题就是它自己的 \`<team> · <role>\`——不是工作区名、不是会话 id${wsTitleRows.length === 2 && wsTitleRows.every((row) => row.renames === 1 && row.expected !== null && row.title === row.expected) ? "" : `（实测：${show(wsTitleRows)}）`}`, wsTitleRows.length === 2 && wsTitleRows.every((row) => row.renames === 1 && row.expected !== null && row.title === row.expected && row.title !== path.basename(TEAM_WS)));
+// 判据 ④（可区分性）：同一批里不同 role 的标题**两两不同**；而且**同名 role 换一个团队**
+// 也不再同名——这正是 `<team> · <role>` 相对「只写 role」的价值，也是用户真正要的那件事。
+const crossTeamEnv = teamSessionEnv({ askScript: ["创建"] });
+const crossTeamOut = await crossTeamEnv.run("n=2 team=alpha roles=worker-a,worker-b");
+const distinctTitleRows = [...sessionTitleOf(wsEnv), ...sessionTitleOf(crossTeamEnv)];
+const distinctTitles = distinctTitleRows.map((row) => row.title);
+check(`DEFECT-4 ② 可区分性: 同一批里不同 role 的标题两两不同，同名 role 在两个团队之间也不同名（${distinctTitleRows.length} 个标题全不重复，且无一等于工作区名或会话 id）${new Set(distinctTitles).size === distinctTitles.length ? "" : `（实测：${show(distinctTitles)}）`}`, distinctTitleRows.length === 4 && new Set(distinctTitles).size === 4 && distinctTitleRows.every((row) => typeof row.title === "string" && row.title !== path.basename(TEAM_WS) && row.title !== row.id) && crossTeamOut.kind === "success");
+// 降级（服务缺席）：标题是**呈现面**——一个改不了名的新会话仍然是能用的 worker ⇒ **一行
+// warn、不阻断创建**。这与 preset / 模型选择那两处的 fail-fast 口径**故意不同**：那两处
+// 决定的是会话**能不能跑**（缺了首回合就死），标题只决定它在侧边栏里长什么样。
+const noTitleEnv = teamSessionEnv({ askScript: ["创建"], omitSessionTitle: true });
+const noTitleOut = await noTitleEnv.run("n=2 team=defect4 roles=worker-a,worker-b");
+check("DEFECT-4 ② 服务缺席降级不阻断创建: sessionTitle 缺席 ⇒ 零 rename，而两个会话照建、照驱动、照登记（团队里 worker-a/worker-b 两个角色都在，外加创建路径认领的 coordinator），批次仍报成功（其余面一字不变）", noTitleEnv.creates.length === 2 && noTitleEnv.sessionTitle.renames.length === 0 && noTitleEnv.created.every((item) => item.calls.followedup.length === 1) && noTitleEnv.store().length === 1 && at(noTitleEnv.store(), 0, { roles: [] }).roles.map((entry) => entry.role).sort().join(",") === "coordinator,worker-a,worker-b" && noTitleOut.kind === "success");
+check("DEFECT-4 ② 降级不静默: 一个会话一行 warn，点名「未设标题」的后果（宿主默认标题很可能是工作区名、同一批 worker 在侧边栏里会无法区分）与出路（可在壳里改），并把**打算用的**那个标题如实写出来", sessionTitleServiceWarns(noTitleEnv).length === 2 && sessionTitleServiceWarns(noTitleEnv).every((line) => line.includes("未设标题") && line.includes("工作区名") && line.includes("无法区分") && line.includes("手动")) && sessionTitleServiceWarns(noTitleEnv).some((line) => line.includes("defect4 · worker-a")) && sessionTitleServiceWarns(noTitleEnv).some((line) => line.includes("defect4 · worker-b")));
+// 第二档降级：服务在、但 rename 抛错（标题为空 / 会话不在册 / 服务已 dispose）。
+const refuseRenameEnv = teamSessionEnv({ askScript: ["创建"], sessionTitleOptions: { refuseRename: true } });
+const refuseRenameOut = await refuseRenameEnv.run("n=1 team=defect4 roles=worker-a");
+check("DEFECT-4 ② rename 抛错 ⇒ 同样只降级: 恰一行 warn/会话（点名 rename failed 与后果），会话照建照驱动、批次仍报成功（异常不许从呈现面漏出去炸掉建队）", refuseRenameEnv.creates.length === 1 && refuseRenameEnv.sessionTitle.renames.length === 0 && refuseRenameEnv.created.every((item) => item.calls.followedup.length === 1) && sessionTitleRenameWarns(refuseRenameEnv).length === 1 && sessionTitleRenameWarns(refuseRenameEnv)[0].includes("工作区名") && refuseRenameOut.kind === "success");
+// 口径说明（任务第 5 条）：确认框与回执都要说明**设了什么标题**、用户想改随时可改。
+const titleTextEnv = teamSessionEnv({ askScript: ["创建"] });
+const titleTextOut = await titleTextEnv.run("n=2 team=title-dialog roles=worker-a,worker-b");
+const titleTextBody = titleTextEnv.uq.requests[0]?.questions[0]?.question ?? "";
+const titleTextApplied = sessionTitleOf(titleTextEnv).map((row) => row.title);
+check(`DEFECT-4 ② 确认框说明设了什么标题: 每个新会话逐行写出将被设成的标题（与真正交给 rename 的那一份是同一个读数），并写明「想改随时在壳里重命名」${titleTextApplied.every((title) => typeof title === "string" && titleTextBody.includes(`（标题：${title}）`)) ? "" : `（实测：${show({ titleTextApplied, titleTextBody })}）`}`, titleTextApplied.length === 2 && titleTextBody.includes("（标题：title-dialog · worker-a）") && titleTextBody.includes("（标题：title-dialog · worker-b）") && titleTextBody.includes("想改随时在壳里重命名") && titleTextBody.includes("工作区名"));
+check("DEFECT-4 ② 回执说明设了什么标题: 完成清单逐会话列出**真正设成**的标题，并说明可随时改（不再让用户自己去侧边栏发现它们全同名）", titleTextOut.kind === "success" && titleTextOut.text.includes("worker-a → title-dialog · worker-a") && titleTextOut.text.includes("worker-b → title-dialog · worker-b") && titleTextOut.text.includes("想改随时"));
+// 这条锁住「回执是**读数**而不是复述」：标题取自 `rename` 的返回值，而不是拿 team/role
+// 重算一遍。rename 抛错时回执必须如实写「未设标题」——若改成重算，它就会谎报一个标题，
+// 这条当场红。
+check("DEFECT-4 ② 回执是读数不是复述: rename 失败时回执**不谎报**标题（该行如实写「未设标题」，而不是拿 team/role 重算一个出来）", refuseRenameOut.text.includes("未设标题") && !refuseRenameOut.text.includes("defect4 · worker-a"));
+
 // --- DEFECT-3 收尾 · 裁定 1：「半条路由」——只给一半，缺的那一半从缺省读数补齐 ---------
 // 真机缺陷 #3 的**同一个缺陷类的另一半**：`model=X` 而漏写 `provider=` 的人类用户拿到的
 // 是一个**跑不起来的会话**（`agentOptions = {model}` 会被 `dsh-agent-loop` 以
@@ -4969,6 +5098,11 @@ check("U18 文档漂移: prepare's fallback text no longer claims 「本插件�
 // DEFECT-2 源码锁：整模块只有**一处** attach/detach 调用点（② 与 ③a 共用同一个
 // `createRootAgent`，不存在第二个挂载点），`agents.create(` 仍是那**一处**。
 check("DEFECT-2 源码锁: 全模块 `.attachSession(` / `.detachSession(` 各**恰一处**（② 与 ③a 共用同一条创建路径，不存在第二个挂载点），`agents.create(` 仍恰一处", (hostSource.match(/\.attachSession\(/gu) ?? []).length === 1 && (hostSource.match(/\.detachSession\(/gu) ?? []).length === 1 && (hostSource.match(/agents\.create\(/gu) ?? []).length === 1);
+// DEFECT-4 源码锁：`sessionTitle` 只有**一处**取用点、`.rename(` 恰一处 —— ② 与 ③a 共用
+// `createRootAgent` 里的那一个注入点，不是各写一遍；而且它走 `ctx.get`（可选服务），
+// 模块级 `inject` 仍是那 4 项（U19 另有断言咬住）。正则同时认 `ctx.get(` 与 `ctx.get?.(`
+// 两种拼法，所以「换个写法再开第二个取用点」也躲不过；注释里因此不写这两种字面量。
+check("DEFECT-4 源码锁: `ctx.get(\"sessionTitle\")` 恰一处、`.rename(` 恰一处（② 与 ③a 共用同一个注入点，不存在各写一遍的第二处）", (hostSource.match(/ctx\.get\??\.\("sessionTitle"\)/gu) ?? []).length === 1 && (hostSource.match(/\.rename\(/gu) ?? []).length === 1);
 const importList = [...hostSource.matchAll(/^import .*? from "([^"]+)";$/gmu)].map((match) => match[1]);
 const HOST_IMPORTS = ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "schemastery", "node:crypto", "node:fs/promises", "node:path"];
 // `appendFile(`/`writeFile(` are deliberately NOT in this list: they are the
