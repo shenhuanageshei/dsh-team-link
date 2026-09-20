@@ -384,11 +384,21 @@ check("U14: A is the receiver's card with the outbound accent and the row face f
 check("U14: A carries NO title/time head, NO body, NO summary and NO foot (those are D's — one block, one face)", treeByClass(cardRow, "dshsl-relay-head") === null && treeByClass(cardRow, "dshsl-relay-body") === null && treeByClass(cardRow, "dshsl-send-summary") === null && treeByClass(cardRow, "dshsl-relay-foot") === null && treeByClass(cardRow, "dshsl-send-env") === null);
 check("U14: A's minimal label is the tool name plus the target count, and nothing else", treeText(treeByClass(cardRow, "dshsl-send-rowhead")) === "✦ 工具调用 · team_link_send · 3 个目标");
 const detailRows = treeAllByClass(cardRow, "dshsl-send-target");
-check("U14: A carries the per-target DETAIL — one row per target, each naming its target, outcome and detail", detailRows.length === 3 && detailRows.map((row) => treeText(row)).join("|") === [
-	"session-worker-a（via team:night-shift/*） 已投递 已投递到 session-worker-a：目标空闲，已唤醒目标会话。",
-	"session-worker-b（via team:night-shift/*） 被拒绝 未投递：目标会话用户未确认接收。",
-	"team:night-shift/reviewer 空缺目标 该角色当前空缺",
+// 2026-09-20 §10.1.5 修订（用户决定）: a row renders from the STRUCTURED fields —
+// the target identity, the SHORT phrase of its `outcome`, and the busy badge — and
+// NOT from `target.detail`. The three receipts below carry three DIFFERENT detail
+// sentences, so a row that still printed the detail would not match this text at
+// all (that is the lock the retired "card row == report first line" equality was
+// replaced by, §12.5).
+check("U14: A renders one row per target from the structured fields — target identity + the outcome's short phrase, never `target.detail`", detailRows.length === 3 && detailRows.map((row) => treeText(row)).join("|") === [
+	"session-worker-a（via team:night-shift/*） 已送达",
+	"session-worker-b（via team:night-shift/*） 未送达——接收方拒绝",
+	"team:night-shift/reviewer 未送达——该角色当前空缺",
 ].join("|"));
+check("U14: ... and no row prints its target's `detail` sentence (the model-visible report line is not a card input anymore)", !treeText(detailRows[0]).includes("已投递到 session-worker-a：") && !treeText(detailRows[1]).includes("未投递：") && !treeText(detailRows[2]).includes("当前空缺。"));
+const phrasesOfCardRow = detailRows.map((row) => treeText(treeByClass(row, "dshsl-send-outcome")));
+const OUTCOME_PHRASE_KEYS = ["sendResultDelivered", "sendResultRefused", "sendResultNoAgent", "sendResultNoHolder"];
+check("U14: every outcome the host mints renders its OWN non-empty short phrase — four keys, four distinct sentences, no key leaking as text", phrasesOfCardRow.every((phrase) => typeof phrase === "string" && phrase !== "" && !phrase.startsWith("sendResult")) && new Set(OUTCOME_PHRASE_KEYS.map((key) => tZh(key))).size === 4 && OUTCOME_PHRASE_KEYS.every((key) => tZh(key) !== key));
 check("U14: ... and every outcome is carried as a data attribute (a refused row is visually distinct)", detailRows.map((row) => treeByClass(row, "dshsl-send-outcome").props["data-outcome"]).join(",") === "delivered,refused,no-holder");
 check("U14: ... with the target identity in its own span (a long id is shortened, the expression stays readable)", detailRows.map((row) => treeText(treeByClass(row, "dshsl-send-targetid"))).join("|") === "session-worker-a（via team:night-shift/*）|session-worker-b（via team:night-shift/*）|team:night-shift/reviewer");
 // D carries the blocks A does not: title + sender + time, the envelope, the body
@@ -399,9 +409,10 @@ check("U15: ... the body that was sent, and no truncation note on an untruncated
 check("U15: ... and the summary counts, plus dedupe when there is one", treeText(treeByClass(cardTop, "dshsl-send-summary")) === "汇总：1 投递 / 1 拒绝 / 0 无活动代理 / 1 空缺目标 · 2 个重复目标已去重");
 check("U15: D carries NO per-target row and no target identity (逐目标明细行 is A's)", treeAllByClass(cardTop, "dshsl-send-target").length === 0 && treeByClass(cardTop, "dshsl-send-rowhead") === null && !treeText(cardTop).includes("session-worker-a") && !treeText(cardTop).includes("team:night-shift/*"));
 const busyRow = renderSendRow(sendBlock({ ...SEND_CARD, targets: [{ sessionId: "session-worker-a", outcome: "delivered", detail: "已投递", busy: { running: true, minutes: 7 } }], summary: { delivered: 1, refused: 0, noAgent: 0, noHolder: 0, deduped: 0 } }));
-check("U14: a running target's row carries the §3.5 busy prediction with its minutes", treeText(busyRow).includes("（目标回合已运行 7 分钟——steer 注入当前回合）"));
+check("U14: a running target's row carries the §3.5 busy prediction as a BADGE with its minutes", treeText(busyRow).includes("忙碌 · 已运行 7 分钟"));
 const busyUnknownRow = renderSendRow(sendBlock({ ...SEND_CARD, targets: [{ sessionId: "session-worker-a", outcome: "delivered", detail: "已投递", busy: { running: true } }], summary: { delivered: 1, refused: 0, noAgent: 0, noHolder: 0, deduped: 0 } }));
-check("U14: an unreadable turn start states steer without inventing a number", treeText(busyUnknownRow).includes("（目标回合运行中——起始时间不可读）") && !/已运行 \d+ 分钟/u.test(treeText(busyUnknownRow)));
+check("U14: an unreadable turn start says busy without inventing a number", treeText(busyUnknownRow).includes("忙碌") && !treeText(busyUnknownRow).includes("忙碌 ·") && !/已运行 \d+ 分钟/u.test(treeText(busyUnknownRow)));
+check("U14: ... and neither busy badge restates the steer mechanism — that sentence is the model-visible report's, not the card's", [busyRow, busyUnknownRow].every((tree) => !treeText(tree).includes("steer") && !treeText(tree).includes("起始时间不可读")));
 const truncatedRow = renderTopCard({ ...SEND_CARD, message: { text: "头" + "..." + "尾", truncated: true, chars: 2100 } });
 check("U15: a truncated body says so and states the ORIGINAL code-point count", treeText(treeByClass(truncatedRow, "dshsl-relay-body")).includes("（正文已截断，原文 2100 码点）"));
 const emptyBodyRow = renderTopCard({ ...SEND_CARD, message: { text: "", truncated: false, chars: 0 } });
@@ -606,6 +617,29 @@ check(`F1 差异审计: the union of the two faces prints every statement exactl
 check("F1 差异审计: between them the two faces carry every block of the receipt — A the label + 3 rows, D the head + body + summary", rowStatements.length === 4 && topStatements.length === 3);
 check("F1 差异审计: ... and neither face restates a block of the other (no head/body/summary/foot on A, no label or row container on D)", [treeByClass(cardRow, "dshsl-relay-head"), treeByClass(cardRow, "dshsl-relay-body"), treeByClass(cardRow, "dshsl-send-summary"), treeByClass(cardRow, "dshsl-relay-foot"), treeByClass(cardTop, "dshsl-send-rowhead"), treeByClass(cardTop, "dshsl-send-targets")].every((node) => node === null));
 
+// ---------------------------------------------------------------------------
+// 2026-09-20 §10.1.5 修订: the CARD half of the outcome enum.
+//
+// A's row now renders `target.outcome` through the module-scope `OUTCOME_PHRASES`
+// map instead of copying `target.detail`. That makes the map the contract between
+// the two halves — the host MINTED the tokens, this map must PHRASE them — and
+// the lock on it is a BEHAVIOR one (a new enum value without a phrase is red),
+// never an equality between two products of the same change (the shape that can
+// never go red, §12.3 ⑤). The text's own truth is the running module: the row
+// below is rendered with an outcome that is deliberately NOT a host token, and
+// the client must show it as-is rather than swallow it or invent a phrase.
+// ---------------------------------------------------------------------------
+// The map's keys are read out of the SOURCE literal (the same way the host half
+// reads it), so this assertion is about what the file declares — not about a list
+// copied into the test.
+const outcomeMapSource = /const OUTCOME_PHRASES = Object\.freeze\(\{([\s\S]*?)\}\);/u.exec(SOURCE);
+const outcomeMapPairs = outcomeMapSource === null ? [] : [...outcomeMapSource[1].matchAll(/"([^"]+)":\s*"([^"]+)"/gu)].map((match) => [match[1], match[2]]);
+check(`§12.5 跨半边锁（客户端侧）: the outcome→phrase map is a real literal in the bundle (parsed ${outcomeMapPairs.length} pairs)`, outcomeMapPairs.length === 4);
+check("§12.5 跨半边锁（客户端侧）: the map declares exactly the four tokens the host mints, in that order, and every phrase key is declared in BOTH dictionaries", outcomeMapPairs.map(([outcome]) => outcome).join(",") === "delivered,refused,no-agent,no-holder" && outcomeMapPairs.every(([, key]) => typeof localeDicts.get("zh")?.[key] === "string" && typeof localeDicts.get("en")?.[key] === "string"));
+check("§12.5 跨半边锁（客户端侧）: the phrase keys the map declares are the strings the RENDERER asks for (a key sitting in the map with no `t(\"…\")` call is a phrase the card can never print)", outcomeMapPairs.every(([, key]) => SOURCE.includes(`"${key}"`)));
+const unknownOutcomeRow = renderSendRow(sendBlock({ ...SEND_CARD, targets: [{ sessionId: "session-worker-a", outcome: "blocked", detail: "这是报告句，不该上卡" }], summary: { delivered: 0, refused: 0, noAgent: 0, noHolder: 0, deduped: 0 } }));
+check("§12.5: a token OUTSIDE the map (a newer host) renders as the token itself — the card never swallows it and never invents a phrase", treeText(treeByClass(unknownOutcomeRow, "dshsl-send-outcome")) === "blocked" && !treeText(unknownOutcomeRow).includes("这是报告句，不该上卡"));
+
 const runningRun = driveDefinition([callEvent("team_link_send", "call-1")]);
 check("U15: an in-flight send produces NO node yet (there is no receipt to draw)", runningRun.node === null);
 const noCardRun = driveDefinition([callEvent("team_link_send", "call-1"), resultEvent("call-1", undefined)]);
@@ -740,6 +774,12 @@ check("B3: ... and the top-level definition still registers (the strip is not on
 const zhKeys = Object.keys(localeDicts.get("zh")).sort().join(",");
 const enKeys = Object.keys(localeDicts.get("en")).sort().join(",");
 check("U14: the zh and en dictionaries declare the same key set (a missing translation would silently render the key name)", zhKeys === enKeys && zhKeys.includes("sendRowTargets") && !zhKeys.includes("sendRecipients") && !zhKeys.includes("sendFoot"));
+// The 2026-09-20 修订 moved A's row copy onto the outcome phrases and the busy
+// badge, so the keys the OLD row rendered are gone from BOTH dictionaries and the
+// new pair is in both — a key left behind by the rewrite is a dead dictionary
+// entry (the same「一处事实」discipline the retired equality assertion was about).
+const outcomePhraseKeysPresent = OUTCOME_PHRASE_KEYS.every((key) => zhKeys.includes(key) && enKeys.includes(key));
+check("U14: the row's new copy is declared in BOTH dictionaries, and the retired row keys are gone from both (no dead entry left by the rewrite)", outcomePhraseKeysPresent && ["sendResultDelivered", "sendResultRefused", "sendResultNoAgent", "sendResultNoHolder", "sendBusyBadge", "sendBusyBadgeUnknown"].every((key) => zhKeys.includes(key) && enKeys.includes(key)) && ["sendBusyMinutes", "sendBusyUnknown", "outcomeDelivered", "outcomeRefused", "outcomeNoAgent", "outcomeNoHolder"].every((key) => !zhKeys.includes(key) && !enKeys.includes(key)));
 
 console.log("");
 if (failures === 0) console.log("ALL PASS");

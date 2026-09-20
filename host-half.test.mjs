@@ -2041,6 +2041,13 @@ check("§3.5: and the fan-out still steers the running target and follows up the
 // U13 (§10.1.2): the sender-side receipt — `output.presentationMeta`
 // ---------------------------------------------------------------------------
 
+// The two SOURCE reads the §12.5 cross-half lock below needs. `new URL(…,
+// import.meta.url)` (never `import.meta.resolve`, which resolves against the
+// process cwd — the ② 收口轮's own lesson) so the run reads the real files from
+// any working directory.
+const hostSource = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
+const clientSource = await readFile(fileURLToPath(new URL("./lib/client.js", import.meta.url)), "utf8");
+
 /** One dispatch and its card, projected the way the Tool registry does it: the
  * body stashes the card against the frozen `exec.arguments` object and the
  * registry later calls `presentationMeta` with that SAME object (dsh-tools:
@@ -2065,22 +2072,53 @@ check("U13: the model-visible text is untouched — the returned value is still 
 check("U13: ... and output.render still snapshots it as the single text block textOutput produced (same schema, same renderer)", sameJson(receiptEnv.send.output.render(receiptArgs, receiptText), [{ type: "text", text: receiptText }]));
 check("U13: the card carries the §10.1.2 discriminators and the sender identity", isCardShape(receiptCard) && receiptCard.senderSessionId === "session-self" && typeof receiptCard.at === "number" && receiptCard.at > 0 && receiptCard.fanout === false);
 check("U13: a single-target receipt has exactly one target row, with the id and the delivered outcome", receiptCard.targets.length === 1 && receiptCard.targets[0].sessionId === "session-worker-a" && receiptCard.targets[0].outcome === "delivered");
-// B1 (差异审计): the row detail is the per-target result sentence — the same
-// source the text report prints — but the report may append a CALL-level note
-// ("注意：meta.ref 超过 16 字符…", see the U7 case above) that is not a per-target
-// result line and so is deliberately NOT copied into the row. The claim is
-// therefore "identical until the envelope note"; the boundary is pinned from
-// both sides right below.
-check("U13: the row detail is the SAME sentence the text report prints (identical while no envelope note is appended)", receiptCard.targets[0].detail === receiptText && !receiptText.includes("注意："));
+// 2026-09-20 §10.1.5 修订（用户决定）+ §12.5: the A face renders the per-target
+// row from the STRUCTURED fields (the `outcome` token through the client's phrase
+// map, plus the §3.5 busy badge) — it no longer copies `target.detail`, so B1's
+// old「卡内行 == 报告首行」string equality is RETIRED: it pinned a rendering the
+// design has since replaced (`detail` stays on the card as the model-visible fact
+// source and as the plain row's text, but it is not a render input for A).
+//
+// What replaces it is a CROSS-HALF BEHAVIOR LOCK, not another equality between
+// two products of one change (§12.3 ⑤: after two facts are同源化, an equality
+// between them can never go red — that is exactly what B1's assertion had become).
+// The host half MINTS `targets[].outcome`; the client half must PHRASE every token
+// it can mint. Both sides are read from SOURCE here — the host's mint sites and the
+// client's `OUTCOME_PHRASES` literal — so adding an enum value on the host without
+// giving the card a phrase is RED, and the client cannot quietly drop a token
+// either (the set equality runs both ways).
+//
+// Extraction scope (as-of 2026-09-20, `lib/index.js` has 3 such literals):
+//   - `outcome: "…"`        — direct row construction (`fanout`'s no-holder and
+//     exception rows, `deliverToTarget`'s delivered return);
+//   - `outcome === "…"`     — `buildSendCard`'s summary branches, which enumerate
+//     the SAME token set as a decidable four-way switch — so a new bucket cannot
+//     be added without landing here as well.
+// BOUNDARY (honest): a token reaching `targets[].outcome` through a variable that
+// appears in NO literal site is invisible to a static read. That path does not
+// exist today (the delivered return carries the literal, and every other site is
+// one of the two shapes above); if it ever appears, it appears as a comparison or
+// a construction at the point the token is chosen.
+const hostOutcomeLiterals = new Set([...hostSource.matchAll(/\boutcome[ \t]*(?::|===)[ \t]*"([^"]+)"/gu)].map((match) => match[1]));
+const hostOutcomeTokens = [...hostOutcomeLiterals].sort();
+const clientOutcomeMap = /const OUTCOME_PHRASES = Object\.freeze\(\{([\s\S]*?)\}\);/u.exec(clientSource);
+const clientOutcomePhrases = clientOutcomeMap === null ? [] : [...clientOutcomeMap[1].matchAll(/"([^"]+)":\s*"([^"]+)"/gu)].map((match) => [match[1], match[2]]);
+const clientOutcomeTokens = clientOutcomePhrases.map(([outcome]) => outcome).sort();
+/** Host tokens the client has NO phrase for — the exact condition that must red. */
+const unphrasedOutcomes = hostOutcomeTokens.filter((token) => !clientOutcomeTokens.includes(token));
+check(`§12.5 跨半边: both halves were really read (host mints ${hostOutcomeTokens.length} literal outcome tokens, the client phrases ${clientOutcomePhrases.length})`, hostOutcomeTokens.length === 4 && clientOutcomePhrases.length === 4);
+check(`§12.5 跨半边行为锁: every outcome token the host can mint has a client phrase — a new enum value without one is RED (unphrased: ${unphrasedOutcomes.length === 0 ? "none" : unphrasedOutcomes.join(",")}; host: ${hostOutcomeTokens.join(",")}; client: ${clientOutcomeTokens.join(",")})`, unphrasedOutcomes.length === 0 && hostOutcomeTokens.join(",") === "delivered,no-agent,no-holder,refused");
+check("§12.5 跨半边行为锁: ... and the client phrases no token the host cannot mint — the two sets are EQUAL, so neither half can drift alone", clientOutcomeTokens.join(",") === hostOutcomeTokens.join(","));
+// The retired assertion's own boundary is kept, in the form the design still holds:
+// `detail` stays on the card (it is the model-visible fact source and the plain
+// row's text), while a call-level envelope note is not any target's result line
+// and so is not copied into a row.
 check("U13: a literal session id is not an addressing expression, so the row carries no expr", receiptCard.targets[0].expr === undefined);
-// B1's other side: with a truncated envelope ref the report grows a call-level
-// note, and the row must NOT — the note is not that target's result line, and the
-// fan-out path keeps it out of every row the same way (`report.lines.push`).
 const notedEnv = fanEnv({ pairs: [pairSelf("session-worker-a")] });
 const notedArgs = { targetSessionId: "session-worker-a", message: "带长引用", meta: { ref: "r".repeat(17) } };
 const { value: notedText, card: notedCard } = await sendWithCard(notedEnv, notedArgs, execFor(notedEnv.senderAgent));
-check("B1: a truncated meta.ref appends its note to the TEXT report (the U7 behavior the card deliberately does not copy)", notedText.includes("注意：meta.ref 超过 16 字符（原 17 字符）"));
-check("B1: ... while the row detail stays the per-target sentence — the report's FIRST line, with the note left out", notedCard.targets[0].detail === notedText.split("\n")[0] && !notedCard.targets[0].detail.includes("注意：") && notedCard.targets[0].detail !== notedText);
+check("B1 边界（保留）: a truncated meta.ref appends its CALL-level note to the TEXT report only — the card's row keeps that target's own sentence", notedText.includes("注意：meta.ref 超过 16 字符（原 17 字符）") && notedCard.targets[0].detail === notedText.split("\n")[0] && !notedCard.targets[0].detail.includes("注意："));
+check("B1 边界（保留）: ... and the row still CARRIES `detail` for the model-visible/fallback path, even though A no longer renders it", typeof notedCard.targets[0].detail === "string" && notedCard.targets[0].detail.length > 0 && notedCard.targets[0].detail.startsWith("已投递到 session-worker-a"));
 check("B1: ... and the truncated envelope itself still rides the card", sameJson(notedCard.meta, { ref: "r".repeat(16) }));
 check("U13: the summary counts the row kinds (delivered/refused/noAgent/noHolder/deduped)", sameJson(receiptCard.summary, { delivered: 1, refused: 0, noAgent: 0, noHolder: 0, deduped: 0 }));
 check("U13: the body is carried in full when it is inside the cap (chars = code points, truncated false)", !receiptCard.message.truncated && receiptCard.message.chars === [..."裁决：走 A 方案"].length && receiptCard.message.text === "裁决：走 A 方案");
@@ -4651,8 +4689,8 @@ check("U18 文档漂移: prepare's fallback text no longer claims 「本插件�
 // The host module is read from the test file's OWN location (`import.meta.url`),
 // not from `import.meta.resolve("./lib/index.js")` — the latter resolves against
 // the process cwd, so the run would silently read nothing under another cwd.
-const hostSourcePath = fileURLToPath(new URL("./lib/index.js", import.meta.url));
-const hostSource = await readFile(hostSourcePath, "utf8");
+// (Both source reads live up in the U13 block: the §12.5 cross-half lock there
+// needs them, and one read per file is enough for the whole run.)
 // DEFECT-2 源码锁：整模块只有**一处** attach/detach 调用点（② 与 ③a 共用同一个
 // `createRootAgent`，不存在第二个挂载点），`agents.create(` 仍是那**一处**。
 check("DEFECT-2 源码锁: 全模块 `.attachSession(` / `.detachSession(` 各**恰一处**（② 与 ③a 共用同一条创建路径，不存在第二个挂载点），`agents.create(` 仍恰一处", (hostSource.match(/\.attachSession\(/gu) ?? []).length === 1 && (hostSource.match(/\.detachSession\(/gu) ?? []).length === 1 && (hostSource.match(/agents\.create\(/gu) ?? []).length === 1);
@@ -4722,7 +4760,7 @@ check("U19 schema: team_link_send's argument surface is unchanged (mutually-excl
 // The read-only half of the same red line, on the OTHER module: the client face
 // cannot write a session event either — its bundle has no import at all (the
 // client-half suite asserts nothing else may be added to it).
-const clientSource = await readFile(fileURLToPath(new URL("./lib/client.js", import.meta.url)), "utf8");
+// (`clientSource` is read once, in the U13 block, for the §12.5 cross-half lock.)
 check("U19 日志事件: the client half is a pure reader too — its bundle imports nothing at all, so ① cannot reach a log-write API from there either", [...clientSource.matchAll(/^import .*$/gmu)].length === 0 && !/\bappendEvent\b/u.test(clientSource));
 // Gates: the three concrete behaviors that ARE 「投递双门」, each re-asserted
 // through the same fixtures the standalone cases use.
