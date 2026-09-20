@@ -4,7 +4,7 @@
 >
 > 原名 `dsh-session-link-pro`（0.2.4 及之前），**GitHub 仓库已于 2026-09-18 改名为 `dsh-team-link`**（旧地址由 GitHub 自动重定向）。历史会话日志里的旧工具名 `session_link_pro_*` 与消息 id 前缀 `slp-` 保持原样——它们是取证链，不做回写。
 
-[![tests](https://img.shields.io/badge/tests-848%20%2B%20146%20assertions-brightgreen)](#十测试)
+[![tests](https://img.shields.io/badge/tests-855%20%2B%20146%20assertions-brightgreen)](#十测试)
 [![version](https://img.shields.io/badge/version-0.3.7-blue)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
@@ -592,7 +592,7 @@ sequenceDiagram
 
 `/team_rotate` **只做机制**：`CommandResult` 的文本由派发它的 UI 渲染、**进不了模型上下文**，所以命令**无法**自己产出交接正文——那必须由模型起草。命令也**不建任何会话**（零创建、零 `pending`、不改信任）；真正的新建 + 交班在工具侧，且**必过一次确认框**。命令与工具入口并存，工具入口是兜底。
 
-**确认（§11.4.1）**：新建会话 + 交班是爆炸半径大的动作，工具路径在建会话之前必过一次 `userQuestions.ask`，框内写明**新建几个会话（`successor:"auto"` 每次恰 1 个，§11.2 逐角色）、新会话 id、cwd、模型情形（本路径不指定 provider/model——新会话继承默认选择；preset 取**宿主缺省**，缺省也解析并挂载，见 §10.2 的 DEFECT-1 修复）、保守成本口径、将触碰的信任面、取消 = 零副作用**。**无确认服务 → fail-closed**（不建、不铸令牌、不广播 freeze）。
+**确认（§11.4.1）**：新建会话 + 交班是爆炸半径大的动作，工具路径在建会话之前必过一次 `userQuestions.ask`，框内写明**新建几个会话（`successor:"auto"` 每次恰 1 个，§11.2 逐角色）、新会话 id、cwd、模型情形（本路径没有 `model`/`provider` 参数 ⇒ 两半都由插件**解析并带上宿主缺省模型选择**（`agentDefaultModel.currentSelection()`，§10.2.2 模板第 ④ 步——**不是**「新会话继承默认选择」，那条判断已被真机推翻，见 DEFECT-3）；preset 取**宿主缺省**，缺省也解析并挂载，见 §10.2 的 DEFECT-1 修复）、保守成本口径、将触碰的信任面、取消 = 零副作用**。**无确认服务 → fail-closed**（不建、不铸令牌、不广播 freeze）。
 
 **自建继任者（§11.4.2）**：与 `/team_session` 完全同源——**根会话**（`meta` 只放 `cwd` / `agentPreset`（缺省也解析出的那一个），`origin` / `parentSession` / `delegationDepth` / `parentAgent` 一律不写）、id 形如 `team-link-<team>-<role>-<uuid8>`、**从插件根 ctx 创建并由插件持有 handle**（所以 §10.2.5 的生命周期代价同样适用）；`cwd` 取**发起会话**的工作目录，取不到就拒绝——绝不用宿主进程的 `process.cwd()` 顶替。**这一条是 DEFECT-1 影响面最大的地方**：继任者与 worker 走的是**同一个** `createRootAgent`（原先只叫 `buildTeamSessionCreateOptions`），所以「缺省不挂 preset」在换届路径上意味着「令牌投给了一个跑不起来的持钥者、而旧任已冻结」。**DEFECT-2 的影响面同源**：同一个函数也负责**把会话挂进工作区**（`workspaceRegistry.create` → `meta.cwd = workspace.path` → `attachSession`），所以不修则换届后的新协调者在侧边栏里同样找不到。
 
@@ -875,12 +875,12 @@ DSH 默认装配均有。
 ## 十、测试
 
 ```
-npm test                    # host 848 项 + client 146 项（合计 994 项）
+npm test                    # host 855 项 + client 146 项（合计 1001 项）
 node host-half.test.mjs     # 宿主半边，stub 风格（真 cordis Context）
 node client-half.test.mjs   # 浏览器半边
 ```
 
-断言总数由两个套件**各自在结尾打印**（`assertion total: 848 (failed: 0)` / `assertion total: 146 (failed: 0)`），文档里的计数即取自这两行——改测试后请同步本行、下面的徽章与 `CHANGELOG.md`。**不要从「上一版计数 ± 本轮新增条数」反推**：② 收口轮的 WIP 就被这样算成了 640，而那次提交自带的实测是 **639**（`506 + 133`）。
+断言总数由两个套件**各自在结尾打印**（`assertion total: 855 (failed: 0)` / `assertion total: 146 (failed: 0)`），文档里的计数即取自这两行——改测试后请同步本行、下面的徽章与 `CHANGELOG.md`。**不要从「上一版计数 ± 本轮新增条数」反推**：② 收口轮的 WIP 就被这样算成了 640，而那次提交自带的实测是 **639**（`506 + 133`）。
 
 **覆盖地图**（按能力划分）：
 
@@ -957,6 +957,7 @@ node client-half.test.mjs   # 浏览器半边
 **修法**：把模板时序落成**一个函数**（`createRootAgent(ctx, rootCtx, plan, entry, cwd)` —— 全模块唯一的创建落点，② 与 ③a 共用）：`openTeamSessionWorkspace`（`ctx.get("workspaceRegistry")`，与 `agentPresets` 同款的创建时取用）→ `meta.cwd = workspace.path` → `agents.create` → `attachTeamSession`（attach + 模板回滚）。服务缺席是**唯一**允许跳过 workspace 面的分支，且**每个新建会话恰留一行 warn** 点名「未挂进工作区，可能不会出现在侧边栏」；服务在而 `create` 抛错则**传播**（批次按「失败即停」如实报，零创建）。
 **与模板的一处有意差异（已写进代码注释）**：模板用 `attached` 标志门着 detach，这里**无条件**调 `detachSession`（幂等）。理由：真实 `attachSession` 先 `host.rememberSessionPath()` 再写记录，写记录抛错时 `attached` 仍是 false，而会话已在 registry 的路径索引里——那个标志会跳过真正需要的回滚。判据里因此专设一条**半成品**对照（已写进成员名单之后才抛 ⇒ detach 仍被调用、名单里不留它）。
 **本轮的「故意不做」清单（模板有、我们不做的每一步与理由，交设计裁定）**：`permissionPresets.resolve/set`（`/team_session` 没有权限档参数，设计契约里也没有——不替用户选档）、`sessionTitle.rename`（设计逐字契约里没有标题，三个 worker 该叫什么属于用户可见的交互决定，不自造）、`agentDefaultModel.currentSelection()`（缺省模型由宿主自己决定，命令确认框写的就是「（本会话默认）」；我们只在调用方给了 `model=` 时才装 `agent/request` 钩子）、`signal.throwIfAborted()`（webhook 注册生命期语义，本路径在一条命令内完成；补它要改两处调用点签名与断言面，属另一轮）、`snapshotDelivery` 与 `WebhookRuntime` 的 6 项 `inject`（webhook 投递侧与本插件的红线——模块级 `inject` 仍 4 项）。
+> **⚠️ 前向指针（2026-09-20 补，本清单保持原样——它是那一轮如实上交的记录）**：上面 `agentDefaultModel.currentSelection()` 那一条**后来被真机推翻**：宿主缺省只在宿主**自己的装配流程**里生效，而由 `agents.create` 造出来、不带 `agentOptions` 的 agent 走不到那里 ⇒ `deployment:persona-prefix` 的 `{{model}}` 无值、首回合直接失败（`本轮运行失败 / prompt variable "{{model}}" has no value`）。见真机缺陷记录 **DEFECT-3**（`DEFECT-3-model-selection-missing.md`，落在会话工作区目录 `dsh-session-link-pro/.goal/` 下）与本节的「DEFECT-3 收尾轮」条目（CHANGELOG 的 0.3.9 收尾条目由父代理同批同步）。**教训**：列入「故意不做」的每一条都是**一条未经证实的判断**，「我认为宿主会兜底」不是判据。
 **红绿证据（断言先落地、修复后补；红相在 `%TEMP%` 的独立 harness 里跑「新断言 × 修复前的 `lib/index.js`」快照，绿相在仓库树上跑）**：新增 **13 条**断言（`793 → 806`），**红相** `806 (failed: 11)` —— 11 条一次全中（② 的 create/attach/成员名单/`meta.cwd` 来源/降级 warn + ③a 的继任者与降级 + 回滚两条 + 半成品 + 源码锁），**另外 2 条在红相里就是绿的**（② 的「服务缺席降级不阻断创建」与 ③a 的「同一份判据」——它们描述的是**降级与同源**这两个不变量，修复前的树本来就满足，作用是把判据钉住而不是复述实现），且**修复前的树上 795 条既有断言全绿**（新 fixture 零回归）；**绿相** `806 (failed: 0)`；客户端 `138 (failed: 0)` 全程未触碰。第一版绿相曾 `806 (failed: 2)`：两条**源码级**锁（`.attachSession(` 计数、U19 的 `agents.create(` 计数）被我自己新写的注释文本误伤（注释里写了 `agents.create(...)` 与 `workspace.attachSession(sessionId)`）——改注释措辞而不是放宽锁，锁的严格度不动。
 **本轮的三处「同改」**（都由同一条事实驱动）：① 测试骨架新增 `workspaceRegistry` 服务桩（默认提供：`create` 记录路径并返回带 `sessionIds` 成员名单的 workspace、`attachSession`/`detachSession` 记录并改名单；`omitWorkspaceRegistry` 降级开关 + `workspaceRegistryOptions` 透传 `refuseAttach` / `registerThenRefuse` / `normalize` 三种 fixture），`teamSessionEnv` / `rotateEnv` 各自转发；② 新的读数 `workspaceBindingOf` / `workspaceBoundOnce` 按**会话 id** 配对（不按位置），② 与 ③a 共用同一份判据；③ 源码锁从「一处 `agents.create(`」扩到「`.attachSession(` / `.detachSession(` / `agents.create(` 各恰一处」。
 **边界**：`CHANGELOG.md` 与 `docs/` 本轮未同步（任务明令不得改；§10.2.2 的「模板完整时序」由父代理写进设计）；真机复验（重启后建一个 worker，看它是否**直接**出现在调用会话所在工作区的侧边栏里，无需手动切）需要一次用户批准的窗口。
@@ -1003,6 +1004,12 @@ node client-half.test.mjs   # 浏览器半边
 - **#4 `autoHandover` 事实段计数取自对话框前的快照 → 改为确认后重读**：现在在确认框**之后、写文档之前**重读一次 `policy.get()` 再算 `held` / `plan` / `members`，使「文档里的数目 == `prepare` 即将快照的那份状态」；retiree / successor 仍取头部已写明的值，所以「这份文档说的是哪次换届」不随重读漂移。加**行为锁**：对话框挂起期间往 `pairs` 加一条指向退役者的记录（3 → 4）⇒ 文档事实段必须写 **4 条**且不得出现 3；删掉那次重读即回落成 3 ⇒ 红（**红相本轮未跑**，复现方式已记录：`factsView`→`view`、`factsTeam`→`admission.team`）。
 - **#2 计数漂移**：由父侧在 `90b2007` 修掉（0.3.8 的验证块改为当次实测，并写明「历轮时点计数保留原文，口径一律以套件自报那两行为准」）。
 - **选 ①（重读）而不是指针式的理由**：§11.9.6 的指针口径是给**写文档时不可能知道**的事实（freeze 的逐目标投递结果发生在文档之后）准备的；这三个计数不是那种事实——它本来就是一次**可读的读数**，只是原先读早了。改成指针等于用「去问 `rotationBackup`」换掉审计件里本就该有的数目。
+
+**DEFECT-3 收尾轮：半条路由、两处确认框文案、无可达空分支（2026-09-20；当次实测 `855 (failed: 0)` / `146 (failed: 0)`，基线 `848` / `146`）**：本轮新增 **7 条**断言（3 条半边路由 + 3 条确认框正文与其反锁 + 1 条形态锁），逐条对应父侧裁定。
+- **裁定 1「半条路由」→ `model=X` / `provider=Y` 各一条真判据**：规则从「两侧都没给才解析缺省」改为「**任一侧**缺失就从**同一次** `currentSelection()` 的读数补齐缺的那一半」（两侧都缺 ⇒ 一对全取缺省；两侧都给 ⇒ **完全不问服务**，行为与修复前逐字相同）。两条半边各走一条到得了的路：`model=` 侧端到端跑一条命令（`model=deepseek-v4` 就是文法能表达的形状），provider 侧在文法里不可达（`model=` 只会给出「两侧都给」或「只给 model」）⇒ 直接驱动 §10.2.2 那个**真实的**创建选项构造器（② 与 ③a 共用的唯一落点），为此把 `buildTeamSessionCreateOptions` 加进 `__testing`（测试面，零运行时行为）。**红相实测**：断言先落地、`lib/index.js` 只把解析规则回退成修复前的两侧判据 → `851 (failed: 3)`，**三条一次全中且都是干净红**（报出判据本身：`{"id":"…","model":"deepseek-v4","hook":"undefined"}` / `{"installed":false}` / `{"provider":"someone-else"}`），其余 848 条既有断言全绿、套件跑到底打印 `assertion total`；改回规则 → `851 (failed: 0)`。
+- **裁定 2「两处确认框文案按实现改准」**：`teamSessionDialogText` 的模型行从「（本会话默认）」改为**按三种形状如实渲染**（两侧都没给 / 只给一半并**点名缺的是哪一半** / 两侧都给则原样列出那一对且不提缺省解析）；`rotationAutoDialogText` 的模型行从「本路径不指定 provider/model（新会话继承默认选择）」改为「两半都由插件解析并带上宿主缺省模型选择（`agentDefaultModel.currentSelection()`，§10.2.2 模板第 ④ 步）+ 不解析的后果」。README 里逐字复述后者的那处（本文件 §自动换届的「确认」段）同批改。判据落在**人在框里读到的正文**上（② 用导出的 `teamSessionDialogText` 三种形状直接读、③a 读 `autoEnv` 捕获到的确认框正文），另加一条源码级反锁：那句已不成立的话在 `lib/index.js` 里**一处都不剩**。
+- **裁定 3「消除不可达的空分支」**：`agentOptions` 改为**无条件传**（与模板 `dsh-webhook:106` 的 `agentOptions: resolved.agentOptions,` 同形）。解析/补齐之后「空对象」已不可达 ⇒ **没有任何行为断言能咬住它**（改回条件式，全部行为读数一字不变），因此如实锁**形态**：`lib/index.js` 里不再有 `Object.keys(agentOptions)`、且存在无条件的 `agentOptions,`。**这条锁第一版只认 `\n`，而本仓库源码是 CRLF ⇒ 它在本该为真的树上误报（`855 (failed: 1)`，红的就是它），且第一版没把读数打进失败信息**——同一处改成 CRLF 容错 + 补上 `{noDeadBranch, unconditional}` 两个读数（下一次变异会直接报出是哪一半为假）后转绿。
+- **边界**：`CHANGELOG.md` 与 `docs/` 由父代理同步（任务明令不得改）；真机复验（演练 9：`/team_session` 建 1 个 → 首回合不再报 `prompt variable "{{model}}" has no value`）仍需一次用户批准的重启窗口。
 
 ---
 

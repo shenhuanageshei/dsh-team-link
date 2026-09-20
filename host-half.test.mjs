@@ -4758,6 +4758,59 @@ check("DEFECT-3 ② 服务在但读不出可用的 provider/model ⇒ 同样拒�
 const explicitNoServiceEnv = teamSessionEnv({ askScript: ["创建"], omitAgentDefaultModel: true });
 const explicitNoServiceOut = await explicitNoServiceEnv.run("n=1 team=defect3 roles=worker-a model=deepseek/deepseek-v4");
 check("DEFECT-3 服务只服务缺省分支: 显式给了 model= 时 agentDefaultModel 缺席不影响创建（拒绝只针对解析不出缺省的那条路）", explicitNoServiceEnv.creates.length === 1 && explicitNoServiceOut.kind === "success" && explicitNoServiceEnv.creates[0].agentOptions?.provider === "deepseek" && explicitNoServiceEnv.creates[0].agentOptions?.model === "deepseek-v4");
+
+// --- DEFECT-3 收尾 · 裁定 1：「半条路由」——只给一半，缺的那一半从缺省读数补齐 ---------
+// 真机缺陷 #3 的**同一个缺陷类的另一半**：`model=X` 而漏写 `provider=` 的人类用户拿到的
+// 是一个**跑不起来的会话**（`agentOptions = {model}` 会被 `dsh-agent-loop` 以
+// 「has no provider/model」拒绝），失效形态与 DEFECT-1/3 一模一样。所以规则不是「两侧都没给
+// 才解析」，而是「**任一侧**缺失就补齐缺的那一半」：两侧都缺 ⇒ 一对全取缺省（上一组）、
+// 两侧都给 ⇒ 完全不问服务（再上一组）、只给一半 ⇒ 从**同一次** `currentSelection()` 的
+// 读数补齐缺的那一半（本节三条）。
+//
+// 两条半边各走一条真正到得了的路：`model=` 侧是**端到端**（`model=deepseek-v4` 就是
+// `/team_session` 的文法能表达的形状），provider 侧在文法里不可达（`model=` 只会给出
+// 「两侧都给」或「只给 model」）⇒ 直接驱动 §10.2.2 那个**真实的**创建选项构造器
+// （`buildTeamSessionCreateOptions`，② 与 ③a 共用的唯一落点），而不是复刻一个解析器。
+const halfModelEnv = teamSessionEnv({ askScript: ["创建"] });
+const halfModelOut = await halfModelEnv.run("n=1 team=defect3 roles=worker-a model=deepseek-v4");
+const halfModelRow = at(modelSelectionOf(halfModelEnv), 0, {});
+check(`DEFECT-3 收尾 裁定 1（只给 model=）: 缺的 provider 从 currentSelection() 补齐 —— 写进 agentOptions 的是**可运行的一对**（给的 model 原样保留 + 补上的 provider 就是缺省读数），服务**恰被问一次**（补的是「那一次」读数，不是两次）${halfModelRow.provider === STUB_DEFAULT_PROVIDER && halfModelRow.model === "deepseek-v4" ? "" : `（实测：${show(halfModelRow)}）`}`, halfModelOut.kind === "success" && halfModelEnv.creates.length === 1 && halfModelEnv.creates[0].agentOptions?.provider === STUB_DEFAULT_PROVIDER && halfModelEnv.creates[0].agentOptions?.model === "deepseek-v4" && halfModelEnv.agentDefaultModel.calls.length === 1 && halfModelRow.hook === "function" && halfModelRow.setupAgentId === halfModelRow.id);
+const halfModelHook = await probeModelHook(halfModelEnv.created[0]?.agent, { provider: STUB_DEFAULT_PROVIDER, model: "deepseek-v4", reasoningEffort: "high" });
+check(`DEFECT-3 收尾 裁定 1（只给 model=）判据是「能用」: 装进 agent 的那个模型选择钩子携带的就是**补齐后的那一对**（同路由 ⇒ 抹掉继承来的 reasoningEffort；换路由 ⇒ 原样放行），不是只挂了个函数${halfModelHook.installed === true && halfModelHook.out.reasoningEffort === undefined ? "" : `（实测：${show(halfModelHook)}）`}`, halfModelHook.installed === true && halfModelHook.out.provider === STUB_DEFAULT_PROVIDER && halfModelHook.out.model === "deepseek-v4" && halfModelHook.out.reasoningEffort === undefined);
+const { buildTeamSessionCreateOptions: buildCreateOptions } = __testing;
+const halfProviderEnv = teamSessionEnv();
+const halfProviderEntry = { sessionId: "team-link-defect3-worker-p-00000000", role: "worker-p" };
+const halfProviderOptions = await buildCreateOptions(halfProviderEnv.ctx, { preset: undefined, provider: "someone-else", model: undefined }, halfProviderEntry, TEAM_WS);
+const halfProviderBound = [];
+await halfProviderOptions.setup({ agentId: halfProviderEntry.sessionId, on(event, listener) { halfProviderBound.push({ event, listener }); return () => {}; } });
+const halfProviderHook = at(halfProviderBound, 0, {});
+const halfProviderResolved = typeof halfProviderHook.listener === "function" ? await halfProviderHook.listener({ agent: { session: { requestHeader: () => undefined } } }, async () => ({ provider: "someone-else", model: STUB_DEFAULT_MODEL, reasoningEffort: "high" })) : {};
+check(`DEFECT-3 收尾 裁定 1（只给 provider、未给 model）: 同款处理 —— 缺的 model 从同一次 currentSelection() 补齐，agentOptions 与装进 agent 的钩子都是那一对（provider 原样保留）${halfProviderOptions.agentOptions?.model === STUB_DEFAULT_MODEL ? "" : `（实测：${show(halfProviderOptions.agentOptions)}）`}`, halfProviderEnv.agentDefaultModel.calls.length === 1 && halfProviderOptions.agentOptions?.provider === "someone-else" && halfProviderOptions.agentOptions?.model === STUB_DEFAULT_MODEL && halfProviderHook.event === "agent/request" && typeof halfProviderHook.listener === "function" && halfProviderResolved.provider === "someone-else" && halfProviderResolved.model === STUB_DEFAULT_MODEL && halfProviderResolved.reasoningEffort === undefined);
+
+// --- DEFECT-3 收尾 · 裁定 2（两处确认框文案按实现改准）与裁定 3（不可达空分支的形态锁）---
+// 裁定 2：两处对话框的**模型行**各有一句已被实现推翻的话——`teamSessionDialogText` 在
+// `model=` 缺省时写「（本会话默认）」，`rotationAutoDialogText` 写「本路径不指定
+// provider/model（新会话继承默认选择）」。两句都不成立：DEFECT-3 证明不带 `agentOptions`
+// 的 agent 走不到宿主的缺省；收尾（裁定 1）之后**只给一半**也会被解析补齐。判据落在
+// **人在框里真正读到的正文**上，不是落在源码措辞上。
+const dialogPlan = (model, provider) => ({ team: "defect3-dialog", creating: [{ role: "worker-a" }], skipped: [], sessions: [{ role: "worker-a", sessionId: "team-link-defect3-dialog-worker-a-00000000", skip: false }], task: undefined, preset: undefined, model, provider });
+const dialogNoRoute = teamSessionDialogText(dialogPlan(undefined, undefined), TEAM_WS, "session-self");
+const dialogHalfRoute = teamSessionDialogText(dialogPlan("deepseek-v4", undefined), TEAM_WS, "session-self");
+const dialogFullRoute = teamSessionDialogText(dialogPlan("deepseek-v4", "deepseek"), TEAM_WS, "session-self");
+check("裁定 2 ②: 批量确认框的模型行三种形状都如实——两侧都没给 / 只给一半（**点名缺的是哪一半**）/ 两侧都给（原样列出那一对、且不提缺省解析，因为那条路根本不问服务）；「（本会话默认）」那种被真机推翻的说法不再出现", !dialogNoRoute.includes("本会话默认") && dialogNoRoute.includes("两半都解析并带上宿主缺省模型选择") && dialogHalfRoute.includes("缺的 provider 那一半") && dialogHalfRoute.includes("model=deepseek-v4") && dialogFullRoute.includes("model=deepseek-v4（provider=deepseek）") && !dialogFullRoute.includes("宿主缺省模型选择"));
+const autoDialogBody = autoEnv.uq.requests[0]?.questions?.[0]?.question ?? "";
+check("裁定 2 ③a: 自动换届确认框的模型行不再说「本路径不指定 provider/model」（实现现在会解析并带上宿主缺省的模型选择），并点名不解析的后果（真机缺陷 #3 的 `{{model}}`）", autoDialogBody.includes("解析并带上宿主缺省模型选择") && !autoDialogBody.includes("本路径不指定 provider/model") && autoDialogBody.includes("真机缺陷 #3") && autoDialogBody.includes("{{model}}"));
+check("裁定 2 ③a 反锁: 那句已不成立的话在 lib/index.js 里**一处都不剩**（源码级：它只可能从这两处对话框文案回来）", !HANDOFF_SOURCE.includes("本路径不指定 provider/model"));
+// 裁定 3：`agentOptions` 无条件传（与模板 `dsh-webhook:106` 的
+// `agentOptions: resolved.agentOptions,` 同形）。解析/补齐之后「空对象」已经**不可达**，
+// 所以这条**没有行为断言能咬住**（改回条件式，所有行为读数一字不变）——如实锁形态本身。
+// （形态锁的读数按 `\r\n` 写：本仓库的源码是 CRLF，只认 `\n` 的正则会在 CRLF 树上空过——
+// 这条锁第一版就是这么红的，报出来的是 `unconditional: false` 而不是别的。）
+const createOptionsShape = {
+	noDeadBranch: !HANDOFF_SOURCE.includes("Object.keys(agentOptions)"),
+	unconditional: /(?:^|[\r\n])\t*agentOptions,[\r\n]/u.test(HANDOFF_SOURCE),
+};
+check(`裁定 3 形态锁: 创建选项里不再有「agentOptions 为空就不传」那条不可达分支，改为无条件传（与模板 \`dsh-webhook:106\` 同形）${createOptionsShape.noDeadBranch && createOptionsShape.unconditional ? "" : `（实测：${show(createOptionsShape)}）`}`, createOptionsShape.noDeadBranch && createOptionsShape.unconditional);
 // --- U18: 生命周期 (the handle belongs to the plugin's OWN context) ----------
 const controller = sessionControllerFor(okEnv.ctx);
 check("U18 生命周期: the batch controller lives on the plugin's own context (not a command-handler temp ctx) and owns its handles", controller !== undefined && controller.rootCtx === okEnv.ctx && okIds.every((id) => controller.hasHandle(id)) && okIds.every((id) => controller.handleFor(id).agent.id === id));
