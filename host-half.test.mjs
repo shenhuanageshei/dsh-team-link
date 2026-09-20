@@ -136,8 +136,11 @@ function makeUserQuestions(script) {
 				if (next === undefined) throw Object.assign(new Error("no scripted answer"), { code: "NO_PROVIDER" });
 				// A scripted entry may be a FUNCTION: the case then runs while the dialog
 				// is still pending, which is how the R1 retire race is reproduced (plugin
-				// state changes between the dialog opening and the write-back).
-				const choice = typeof next === "function" ? await next() : next;
+				// state changes between the dialog opening and the write-back). It is
+				// handed the REQUEST as well, so a case can wait on the very signal the
+				// plugin passed in — which is how the claim dialog's abort/timeout shapes
+				// are reproduced (缺口1: the caller's bridge aborts the waiting dialog).
+				const choice = typeof next === "function" ? await next(request) : next;
 				// An ARRAY entry is the multi-select answer (the M4 rotation dialog lists every
 				// candidate pair as an option of ONE question); a scalar is the single-select
 				// answer. Every question of a request gets the same scripted selection — which is
@@ -388,7 +391,11 @@ function workspaceServiceWarns(env) {
  * 形状照真服务：`rename` 拿的是**会话对象**（不是 id）、标题必须是可见字符、会话不在册
  * 就抛。两个失败 fixture 各对应实现的一条降级分支（`omitSessionTitle` = 服务整个缺席、
  * `refuseRename` = 服务在但改名失败），两档都必须**只留一行 warn、不阻断创建**。
- */
+ *
+ * **桩不模拟上游的字节截断**（那是 `dsh-session-title` 的职责：`maxTitleBytes: 80`，
+ * 只留能装下的最长码点前缀）。所以桩记下的是**插件交出去的那一份**；缺口2 的判据据此
+ * 自己按上游语义算一遍 `upstreamTitle`——「交出去的这一份已经超预算」本身就是那条判据要
+ * 抓的东西，桩若顺手替它截断，反而会把缺陷藏起来。 */
 function makeSessionTitle({ refuseRename = false } = {}) {
 	const renames = [];
 	const service = {
@@ -2803,6 +2810,87 @@ check("U6 常量文案: rotation-expired states the rollback, the retained incum
 const rotRollbackSend = await rotProvEnv.send.execute({ targetSessionId: "session-worker-a", message: "回退之后" }, rotProvEnv.exec(SUCCESSOR));
 check("U6: after the rollback the channel is gone — a send goes through the normal gates again", rotRollbackSend.includes("确认服务（userQuestions）不可用") && !rotRollbackSend.includes("provisional 通道"));
 
+// --- §3.6.1 原则 4 的无人值守分支：读到「超时」的调用方必须被告知变更已经落盘 -------------
+//
+// 真机（2026-09-20 15:03，v038d-probe 队）：逐项勾选对话框无人应答，外层工具桥在 ~120s 用
+// `{name:"AbortError", code:"ABORTED"}` 中止了这次嵌套调用 —— **调用方读到的只有「超时」**，
+// 而 claim 已经走完无人值守分支并落盘（roster 落定、14 条 pairs 转 provisional）。
+// 「对话框超时」与「调用失败」在调用方读数上同形，后果却相反（已换届 vs 未换届）⇒ 超时这条
+// 路径的读数必须**自报**：已按设计以 provisional 迁移 + 具体到期时刻 + 批准路径（谁批、在哪批）。
+// 下面两条各复现一个入口：① 调用方中止（真机那个形状）；② 插件的 3 分钟计时器到点。
+/** 报告里的某一行（按行首标签取）。判据落在**那一行自己**身上：调用方可能只读得到它。 */
+const reportLine = (text, label) => (String(text).split("\n").find((line) => line.startsWith(label)) ?? "");
+/** 报告里两处**独立渲染**的到期时刻：迁移行那个数来自 pair 自己的 `expiresAt`（同一份事实的
+ * 另一个读面），窗口句那个数来自 `now + TTL`。超时读数必须与它们**同一个值**——那不是把
+ * 数字再抄一遍，而是钉住「自报的到期时间 == 迁移真正落下的那个时刻」。 */
+const expiryBefore = (text) => (String(text).match(/到期 (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/u) ?? [])[1];
+const windowExpiry = (text) => (String(text).match(/provisional 回退窗口：(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) 到期/u) ?? [])[1];
+const timeoutReadingOf = (text) => {
+	const reading = reportLine(text, "批准状态：");
+	const expiry = expiryBefore(text);
+	return reading.includes("未获应答") && reading.includes("这不是「调用失败」") && reading.includes("已按设计") && reading.includes("provisional") && reading.includes("已落盘")
+		&& expiry !== undefined && reading.includes(expiry) && windowExpiry(text) === expiry
+		&& reading.includes("人类") && reading.includes("设置 UI");
+};
+
+const dialogAbortEnv = rotateEnv({ pairs: [rotPair("session-worker-a"), rotPair("session-worker-b")] });
+const dialogAbortToken = tokenOf(await dialogAbortEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: SUCCESSOR }, execFor(dialogAbortEnv.senderAgent)));
+const dialogAbortController = new AbortController();
+let markDialogOpen;
+const dialogOpened = new Promise((resolve) => { markDialogOpen = resolve; });
+dialogAbortEnv.uq.script.push((request) => {
+	markDialogOpen();
+	return new Promise((_resolve, reject) => {
+		request.signal.addEventListener("abort", () => reject(Object.assign(new Error("tool call aborted"), { name: "AbortError", code: "ABORTED" })));
+	});
+});
+const dialogAbortPending = dialogAbortEnv.rotate.execute({ action: "claim", team: "night-shift", role: "coordinator", token: dialogAbortToken }, { agent: dialogAbortEnv.agentFor(SUCCESSOR), signal: dialogAbortController.signal });
+await dialogOpened;
+dialogAbortController.abort();
+const dialogAbortOut = await dialogAbortPending;
+
+check("缺口1 前提（后果为真）: 调用方中止**不会**取消无人值守分支——roster 照常落定、两条 pairs 真的成了 provisional 通道（自报的后果必须是真的，否则那条读数只是在说话）",
+	dialogAbortEnv.role().current === SUCCESSOR && dialogAbortEnv.role().pending === null && dialogAbortEnv.role().provisional !== null && pairSummary(dialogAbortEnv) === "session-new↔session-worker-a(provisional) session-new↔session-worker-b(provisional)");
+check("缺口1 超时读数自报真实后果（调用方中止）: 「批准状态」那一行**自己**写明——未获应答（超时）、这不是「调用失败」、全部候选已按设计以 provisional 迁移并已落盘、回退窗口的**具体到期时刻**、以及批准路径（谁批=人类 / 在哪批=设置 UI）",
+	timeoutReadingOf(dialogAbortOut));
+
+// ② 计时器入口：3 分钟是人等待的预算，测试不等它——把这次调用里所有 ≥1 分钟的等待压成一个
+// tick（插件照旧调它自己的常量，覆写的是**宿主计时器**，不是插件逻辑）。
+const dialogTimeoutEnv = rotateEnv({ pairs: [rotPair("session-worker-a"), rotPair("session-worker-b")] });
+const dialogTimeoutToken = tokenOf(await dialogTimeoutEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: SUCCESSOR }, execFor(dialogTimeoutEnv.senderAgent)));
+dialogTimeoutEnv.uq.script.push((request) => new Promise((_resolve, reject) => {
+	request.signal.addEventListener("abort", () => reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORTED" })));
+}));
+const realSetTimeout = globalThis.setTimeout;
+let dialogTimeoutOut;
+globalThis.setTimeout = (fn, ms, ...rest) => {
+	if (!(typeof ms === "number" && ms >= 60000)) return realSetTimeout(fn, ms, ...rest);
+	const timer = realSetTimeout(fn, 0, ...rest);
+	// 对话框预算在生产里是 unref 的（等一个人不该把壳吊住）；这里那个被压缩过的计时器
+	// 恰恰是本轮唯一还活着的 handle，所以桩把它重新 ref 住（否则 node 以 exit 13 收场）。
+	timer.unref = () => timer;
+	return timer;
+};
+try {
+	dialogTimeoutOut = await dialogTimeoutEnv.rotate.execute({ action: "claim", team: "night-shift", role: "coordinator", token: dialogTimeoutToken }, dialogTimeoutEnv.exec(SUCCESSOR));
+} finally {
+	globalThis.setTimeout = realSetTimeout;
+}
+check("缺口1 超时读数自报真实后果（计时器到点）: 同一个读数构造器、同三段后果——计时器入口与调用方中止入口在读数上只差「发生了什么」那半句",
+	dialogTimeoutEnv.role().current === SUCCESSOR && timeoutReadingOf(dialogTimeoutOut)
+		&& reportLine(dialogTimeoutOut, "批准状态：").includes("分钟内未获应答")
+		&& reportLine(dialogTimeoutOut, "批准状态：").slice(reportLine(dialogTimeoutOut, "批准状态：").indexOf("——这不是「调用失败」")) === reportLine(dialogAbortOut, "批准状态：").slice(reportLine(dialogAbortOut, "批准状态：").indexOf("——这不是「调用失败」")));
+
+// 与「真的失败」分流：同一条无应答形状里只有 abort/timeout 算超时；一次**自己抛错**的对话框
+// 仍逐字走既有失败文案，且两条读数不相等、超时那三个判据词一个都不出现在失败读数里。
+const dialogFailEnv = rotateEnv({ askScript: [() => { throw new Error("dialog exploded"); }], pairs: [rotPair("session-worker-a"), rotPair("session-worker-b")] });
+const dialogFailToken = tokenOf(await dialogFailEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: SUCCESSOR }, execFor(dialogFailEnv.senderAgent)));
+const dialogFailOut = await dialogFailEnv.rotate.execute({ action: "claim", team: "night-shift", role: "coordinator", token: dialogFailToken }, dialogFailEnv.exec(SUCCESSOR));
+const dialogFailReading = reportLine(dialogFailOut, "批准状态：");
+check("缺口1 互不混淆（失败 ≠ 超时）: 对话框自己抛错（非 abort/timeout）**逐字**仍走既有失败文案（那 30 个字一句未改），且与超时读数不同形——不相等，也不带超时那三个判据词",
+	dialogFailReading === "批准状态：换届确认对话框失败（dialog exploded）——按无人值守路径处理：全部域内 pairs 以 provisional 迁移，24h 内未批准自动回退。（全部 2 条域内候选以 provisional 迁移。）"
+		&& dialogFailReading !== reportLine(dialogAbortOut, "批准状态：") && !dialogFailReading.includes("未获应答") && !dialogFailReading.includes("这不是「调用失败」") && !dialogFailReading.includes("已落盘"));
+
 // --- claim idempotency (the crash window between migration and settlement) --
 
 const rotReplayEnv = rotateEnv({ pairs: [{ a: SUCCESSOR, b: "session-worker-a", createdAt: 5 }] });
@@ -4204,6 +4292,18 @@ check("Y1 对照: 同一个非 coordinator 角色走 `revive` 仍被窄域拒绝
 check("U29 红线: 恢复路径不新增日志事件类型——宿主动作仍只有既有的几种（settings 写 + 确认框 + 广播投递 + resume，本轮没有第四种），writerGate 原样，policy 的顶层键一个不多", reapEnv.actionLog.every((entry) => entry === "create" || entry === "followup" || entry === "resume") && __testing.writerGate.length === 2 && sameJson(Object.keys(reapEnv.ns.data).sort(), ["blockedSenders", "pairs", "receiveMode", "rememberTargets", "teams", "trustedSenders"]));
 check("U29 schema: 恢复没有新增任何顶层 policy key（recoveries 是 role 行内字段）——八项一个不多", sameJson(Object.keys(reapEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"]) && reapEnv.role().recoveries !== undefined && reapEnv.ns.data.recoveries === undefined);
 
+// --- 缺口1 的第三半：claim 的超时读数**不得**与 fail-closed 同形 -----------------------
+//
+// 放在这里是因为对照物就在上面：`reviveNoConfirm` / `reapNoConfirm` 是两条**真正的失败
+// 路径**（无确认服务 ⇒ fail-closed）的实证文案。要求是「超时不许与失败同形」，所以判据用
+// 那份真文案来做差集，而不是拿一句转述去比。同时钉住那两条**一字未改**。
+const timeoutApprovalReading = reportLine(dialogAbortOut, "批准状态：");
+const failClosedPhrase = "确认服务（userQuestions）不可用——恢复必须有人在对话框里点一下；无确认即不执行（fail-closed，§11.9.5②）。刻意没有 provisional / 无人值守变体：pair 迁移可被自动回退，身份不可。";
+check("缺口1 互不混淆（超时 ≠ fail-closed）: claim 的超时读数与两条 fail-closed 读数（revive / reappoint，均无确认服务）既不相等、也不共享它们的判据语；而那两条 fail-closed 文案本轮**一字未改**，且仍自带「confirm 服务缺席 ⇒ 不执行」的可分性",
+	timeoutApprovalReading !== "" && timeoutApprovalReading !== reviveNoConfirm && timeoutApprovalReading !== reapNoConfirm
+		&& !timeoutApprovalReading.includes("fail-closed") && !timeoutApprovalReading.includes("刻意没有 provisional") && !timeoutApprovalReading.includes("恢复必须有人在对话框里点一下")
+		&& reviveNoConfirm.includes(failClosedPhrase) && reapNoConfirm.includes(failClosedPhrase));
+
 // ---------------------------------------------------------------------------
 // §11.2 `/team_rotate <role>`（③a 的人类入口）：命令只做机制，正文由模型起草
 // ---------------------------------------------------------------------------
@@ -4865,6 +4965,40 @@ const crossTeamOut = await crossTeamEnv.run("n=2 team=alpha roles=worker-a,worke
 const distinctTitleRows = [...sessionTitleOf(wsEnv), ...sessionTitleOf(crossTeamEnv)];
 const distinctTitles = distinctTitleRows.map((row) => row.title);
 check(`DEFECT-4 ② 可区分性: 同一批里不同 role 的标题两两不同，同名 role 在两个团队之间也不同名（${distinctTitleRows.length} 个标题全不重复，且无一等于工作区名或会话 id）${new Set(distinctTitles).size === distinctTitles.length ? "" : `（实测：${show(distinctTitles)}）`}`, distinctTitleRows.length === 4 && new Set(distinctTitles).size === 4 && distinctTitleRows.every((row) => typeof row.title === "string" && row.title !== path.basename(TEAM_WS) && row.title !== row.id) && crossTeamOut.kind === "success");
+// 判据 ⑤（**缺口2**：DEFECT-4 的派生边界）：团队名只受 `[a-z0-9-]+` 约束、**没有长度上限**，
+// 而宿主按 `maxTitleBytes: 80`（UTF-8 字节；`dsh-base/cordis.patch.yml:60`）**剪尾巴**——
+// 被剪掉的恰好是 role 段，于是同一队两个 role 撞成同一个前缀：可区分性在这一档整段失效
+// （修前实测：79 字节的团队名把两个标题都剪成 `…-then-some ` 这一模一样的前缀）。
+// 修法：**团队段过长就截团队**（保留可辨识前缀 + 省略号），**role 段一个字节都不许少**。
+const LONG_TEAM = "team-with-an-extremely-long-name-that-eats-the-whole-title-budget-and-then-some";
+const longTeamEnv = teamSessionEnv({ askScript: ["创建"] });
+const longTeamOut = await longTeamEnv.run(`n=2 team=${LONG_TEAM} roles=worker-a,worker-b`);
+/** 上游 `dsh-session-title` 的截断语义（`truncateTitleUtf8`，`lib/index.js:33-45`）：保留能装进
+ * 预算的最长码点前缀、**不追加任何标记**。于是「写进 rename 的标题」与「落盘的标题」只在这份
+ * 派生值**自己**超预算时才不同——而那时被剪掉的正是尾巴（role）。这条判据因此断言两件事：
+ * 落盘值两两不同，且**派生值本身**已在预算之内（上游那一剪根本咬不到 role）。 */
+const upstreamTitle = (title) => {
+	if (typeof title !== "string") return null;
+	let used = 0;
+	let out = "";
+	if (Buffer.byteLength(title, "utf8") <= 80) return title;
+	for (const character of title) {
+		const bytes = Buffer.byteLength(character, "utf8");
+		if (used + bytes > 80) break;
+		out += character;
+		used += bytes;
+	}
+	return out;
+};
+const longTitleRows = sessionTitleOf(longTeamEnv).map((row) => ({
+	...row,
+	role: row.id === plannedId(longTeamEnv, LONG_TEAM, "worker-a") ? "worker-a" : "worker-b",
+}));
+check(`缺口2 超长团队名下 role 段活下来: 同队两个 role 的标题**两两不同且都非空**，各自仍以**自己的完整 role** 结尾，团队段被截（保留可辨识前缀 + 省略号），且**派生值本身**就落在宿主的 80 字节预算内（上游那一剪再也咬不到 role）${new Set(longTitleRows.map((row) => upstreamTitle(row.title))).size === longTitleRows.length ? "" : `（实测：${show(longTitleRows.map((row) => ({ title: row.title, landed: upstreamTitle(row.title) })))}）`}`,
+	longTitleRows.length === 2 && longTeamOut.kind === "success"
+		&& longTitleRows.every((row) => typeof row.title === "string" && row.title !== "" && row.title.endsWith(row.role))
+		&& longTitleRows.every((row) => Buffer.byteLength(row.title, "utf8") <= 80 && row.title.startsWith(LONG_TEAM.slice(0, 20)) && row.title.includes("…") && row.title !== row.id)
+		&& upstreamTitle(at(longTitleRows, 0, {}).title) !== upstreamTitle(at(longTitleRows, 1, {}).title));
 // 降级（服务缺席）：标题是**呈现面**——一个改不了名的新会话仍然是能用的 worker ⇒ **一行
 // warn、不阻断创建**。这与 preset / 模型选择那两处的 fail-fast 口径**故意不同**：那两处
 // 决定的是会话**能不能跑**（缺了首回合就死），标题只决定它在侧边栏里长什么样。
