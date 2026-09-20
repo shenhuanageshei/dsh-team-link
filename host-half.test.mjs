@@ -178,6 +178,79 @@ function makeCommands() {
 	return state;
 }
 
+/** The host's `defaultId` as this fixture models it: what `resolve(undefined)`
+ * answers with. DEFECT-1 is precisely about a creation path that never asked. */
+const STUB_DEFAULT_PRESET = "dsh-default";
+
+/**
+ * `agentPresets` service stub (§10.2.2's template = `dsh-webhook`'s
+ * `createWebhookSession`). The plugin reaches it the way that template does —
+ * `resolve` (+ `standingKeyFor`) BEFORE `agents.create`, then `mount(agentCtx,
+ * id)` inside `setup` — and this stub keeps the two properties those calls must
+ * satisfy, because a stub that only counted calls could not tell 「建出来了」
+ * from 「能用」:
+ *
+ * - `resolve(id)` treats an ABSENT id as the host's `defaultId`
+ *   ({@link STUB_DEFAULT_PRESET}) — the real service's own fallback. The call is
+ *   recorded verbatim, so 「缺省也解析」 is asserted at the PROVIDER side rather
+ *   than inferred from the plugin's own report;
+ * - `mount(agentCtx, id)` refuses a context with no agent identity exactly as the
+ *   real service refuses an unscoped one ("refusing to compose an unscoped
+ *   context"), and records the `(agentId, id)` PAIR. That pair is the reading the
+ *   DEFECT-1 assertions use: the preset an agent was COMPOSED FROM, tied to the
+ *   agent it was composed for — the persona-prefix assembly source itself, not
+ *   merely "some mount happened somewhere".
+ *
+ * An unknown id throws (`agent-preset/not-found`), like the real service — the
+ * `preset=<bogus>` case is there to prove a named-but-unresolvable preset fails
+ * loudly instead of quietly producing an uncomposable session.
+ */
+function makeAgentPresets({ defaultId = STUB_DEFAULT_PRESET, known = [STUB_DEFAULT_PRESET, "coder", "reviewer"] } = {}) {
+	const resolved = [];
+	const standings = [];
+	const mounts = [];
+	const notFound = (id) => new Error(`agent-presets: preset "${id}" not found (available: ${known.join(", ")})`);
+	const service = {
+		async resolve(id) {
+			resolved.push(id);
+			const wanted = id ?? defaultId;
+			if (!known.includes(wanted)) throw notFound(wanted);
+			return { id: wanted };
+		},
+		async standingKeyFor(id) {
+			standings.push(id);
+			return { agentPreset: id };
+		},
+		async mount(agentCtx, id) {
+			if (agentCtx === undefined || agentCtx === null || typeof agentCtx.agentId !== "string") {
+				throw new Error("agent-presets: refusing to compose an unscoped context; the scope key is what joins an agent to its preset");
+			}
+			if (!known.includes(id)) throw notFound(id);
+			mounts.push({ agentId: agentCtx.agentId, id, ctx: agentCtx });
+			return { id };
+		},
+	};
+	return { service, resolved, standings, mounts, defaultId };
+}
+
+/** DEFECT-1 的端到端读数，按**会话 id** 配对（不按位置）：`meta.agentPreset`
+ * （宿主此后要读的那一份）与 `mount` 真正绑定的 preset（agent 的 persona-prefix
+ * 组装源）必须同源，且各恰一次。① 缺省、② 显式 preset=、③a `successor:"auto"`
+ * 三条路径共用这一个判据 —— 判据只写一处，才不会出现「三处口径」。 */
+function presetBindingOf(env) {
+	return env.creates.map((options) => {
+		const mounted = env.agentPresets.mounts.filter((entry) => entry.agentId === options.sessionId);
+		return { id: options.sessionId, meta: options.meta.agentPreset, mounts: mounted.length, mountedId: mounted[0]?.id ?? null };
+	});
+}
+function presetBoundOnce(env) {
+	return env.creates.length > 0 && presetBindingOf(env).every((row) => row.mounts === 1 && typeof row.meta === "string" && row.meta === row.mountedId);
+}
+/** The one NAMED degradation line of the preset face, per created session. */
+function presetServiceWarns(env) {
+	return env.log.lines.warn.filter((line) => line.includes("agentPresets service unavailable"));
+}
+
 /**
  * `agents` service stub with the §10.2.2 create face: every `create` call is
  * recorded (options included, which is how the lineage assertions read `meta`),
@@ -252,8 +325,15 @@ function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, a
 			resumedAgents.push(agent);
 			if (typeof options.setup === "function") {
 				const setupCalls = { requests: [] };
-				await options.setup({ on(event, listener) { setupCalls[event] = listener; return () => {}; } }, agent);
+				// The fixture's stand-in for the agent's SCOPE identity. The real
+				// service binds `scopeOf(agentCtx)`, and that binding IS the agent's
+				// persona-prefix composition source; without an identity on the
+				// context this stub could only answer "did some mount happen", which
+				// is the exact confusion DEFECT-1 is about (「建出来了」 ≠ 「能用」).
+				const agentCtx = { agentId: options.sessionId, on(event, listener) { setupCalls[event] = listener; return () => {}; } };
+				await options.setup(agentCtx, agent);
 				agent.setupCalls = setupCalls;
+				agent.setupCtx = agentCtx;
 			}
 			onCreated?.(agent, options);
 			return { agent, async dispose() { const index = extraAgents.indexOf(agent); if (index >= 0) extraAgents.splice(index, 1); } };
@@ -283,8 +363,15 @@ function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, a
 			// as the real factory documents.
 			if (typeof options.setup === "function") {
 				const setupCalls = { requests: [] };
-				await options.setup({ on(event, listener) { setupCalls[event] = listener; return () => {}; } }, agent);
+				// The fixture's stand-in for the agent's SCOPE identity. The real
+				// service binds `scopeOf(agentCtx)`, and that binding IS the agent's
+				// persona-prefix composition source; without an identity on the
+				// context this stub could only answer "did some mount happen", which
+				// is the exact confusion DEFECT-1 is about (「建出来了」 ≠ 「能用」).
+				const agentCtx = { agentId: options.sessionId, on(event, listener) { setupCalls[event] = listener; return () => {}; } };
+				await options.setup(agentCtx, agent);
 				agent.setupCalls = setupCalls;
+				agent.setupCtx = agentCtx;
 			}
 			onCreated?.(agent, options);
 			return { agent, async dispose() { const index = extraAgents.indexOf(agent); if (index >= 0) extraAgents.splice(index, 1); } };
@@ -350,8 +437,13 @@ const tick = () => new Promise((resolve) => { setTimeout(resolve, 0); });
  * exercise the fast path — the shape the real host has; `omitCommands` is the
  * degradation fixture (plugin loads, one warn, every other tool face unaffected)
  * and `lateCommands` + `provideCommands()` the late-provider one.
+ *
+ * §10.2.2's `agentPresets` is provided by default for the same reason (the real
+ * host has it and `dsh-webhook` calls it unconditionally). `omitAgentPresets` is
+ * the DEFECT-1 degradation fixture: it is the ONE branch that may skip the preset
+ * face, and it has to leave one warn per created session when it does.
  */
-function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0 } = {}) {	const ctx = new Context();
+function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0 } = {}) {	const ctx = new Context();
 	// Every plugin log line lands in `log.lines` instead of the console: the
 	// service-attach red line (§5.3) is asserted on the lines themselves.
 	const log = makeLogger();
@@ -464,6 +556,13 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	// provider's lifetime owned by cordis.
 	const commands = makeCommands();
 	if (!omitCommands && !lateCommands) ctx.provide("commands", commands.service());
+	// §10.2.2's template service. Provided by default (the shape the real host has:
+	// `dsh-webhook`'s `createWebhookSession` calls it unconditionally), so the
+	// ordinary cases exercise the resolve → `meta.agentPreset` → `setup` mount path;
+	// `omitAgentPresets` is the degradation fixture (the whole preset face is gone,
+	// so one warn per created session must say so and the session must still exist).
+	const agentPresets = makeAgentPresets();
+	if (!omitAgentPresets) ctx.provide("agentPresets", agentPresets.service);
 	apply(ctx);
 	const tool = (name) => registeredTools.find((candidate) => candidate.name === name);
 	/** U9 handle: the settings provider going active AFTER the plugin loaded. */
@@ -505,7 +604,7 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	const invoke = (rawInput, agent = senderAgent) => ({ commandId: "cmd-test", agent, rawInput, attachments: [], signal: new AbortController().signal });
 	/** G2 handle: the provider-side peak of concurrent `agents.create` calls. */
 	const maxCreateInFlight = () => createInFlight.max;
-	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
+	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentPresets, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
 }
 
 function execFor(agent) {
@@ -2133,7 +2232,7 @@ const rotRoles = () => [
  * and the trust state a rotation operates on. `receiveMode: accept` keeps notice
  * delivery out of the receiver dialog; the notice cases set their mode explicitly.
  */
-function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitResume = false, extraAgents = undefined } = {}) {
+function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitResume = false, extraAgents = undefined } = {}) {
 	const env = setup({
 		sessions: [],
 		useSettings: true,
@@ -2148,6 +2247,10 @@ function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trus
 		// the §11.2 degradation / late-provider fixtures.
 		omitCommands,
 		lateCommands,
+		// §10.2.2's preset face rides the same optional channel: `omitAgentPresets`
+		// is the degradation fixture for the auto path too (it creates through the
+		// SAME `buildTeamSessionCreateOptions`).
+		omitAgentPresets,
 		// §11.9.4 L1's two fixtures: `omitResume` is the documented "no factory /
 		// no session persistence" failure mode, and the stub's own record/hidden
 		// bookkeeping is what the revive cases read.
@@ -2891,7 +2994,7 @@ check("U22 确认: 自动换届必过一次确认框（新建 1 个会话 + 交�
 		&& text.includes(autoId) && text.includes(TEAM_WS) && text.includes("保守成本口径") && text.includes("零创建、零令牌、零 freeze")
 		&& text.includes("本次确认不迁移任何 pairs");
 })());
-check("U20 自建继任者: 一个根会话被建出来，id 形如 team-link-<team>-<role>-<uuid8>，meta 只有 cwd（不含 origin/parentSession/delegationDepth/parentAgent）", autoEnv.creates.length === 1 && /^team-link-night-shift-coordinator-[A-Za-z0-9_-]{8}$/u.test(autoId) && sameJson(Object.keys(autoEnv.creates[0].meta).sort(), ["cwd"]) && autoEnv.creates[0].meta.cwd === TEAM_WS);
+check("U20 自建继任者: 一个根会话被建出来，id 形如 team-link-<team>-<role>-<uuid8>，meta 恰 {cwd, agentPreset}（不含 origin/parentSession/delegationDepth/parentAgent）—— auto 路径不指定 preset，故这里是宿主缺省解析出来的那一个（DEFECT-1：它必须真的挂上，否则继任者跑不起来）", autoEnv.creates.length === 1 && /^team-link-night-shift-coordinator-[A-Za-z0-9_-]{8}$/u.test(autoId) && sameJson(Object.keys(autoEnv.creates[0].meta).sort(), ["agentPreset", "cwd"]) && autoEnv.creates[0].meta.cwd === TEAM_WS && autoEnv.creates[0].meta.agentPreset === STUB_DEFAULT_PRESET);
 check("U20 生命周期: AgentHandle 由插件持有（§10.2.5——它是「插件自建」这句话的可检事实，也是 §11.5 点名孤儿会话的判据）", __testing.teamSessionFor(autoEnv.ctx).hasHandle(autoId) === true && autoEnv.agentFor(autoId) !== undefined && autoCreatedCalls !== undefined);
 check("U20 令牌: 令牌绑定到插件自建的继任者（pending.session 就是它），30 分钟 TTL", autoEnv.role().pending !== null && autoEnv.role().pending.session === autoId && autoEnv.role().pending.team === "night-shift" && autoEnv.role().pending.role === "coordinator" && autoEnv.role().pending.expiresAt - autoEnv.role().pending.createdAt === 30 * 60000);
 check("U20 交接文档: 已落盘（团队 workspace 的黑板目录）且头部指向前任/继任者、令牌只以掩码出现", autoDoc.path !== null && path.dirname(autoDoc.path) === path.join(TEAM_WS, "team", "night-shift") && autoDocText.includes(`previous: ${ROT_SELF}`) && autoDocText.includes(`successor: ${autoId}`) && autoDocText.includes(`tokenMask: tok-${autoEnv.role().pending.token.slice(0, 4)}…${autoEnv.role().pending.token.slice(-4)}`) && !autoDocText.includes(autoEnv.role().pending.token));
@@ -2910,6 +3013,21 @@ check("U21 投递: followup 驱动（不是 inject），正文含令牌明文与
 check("U21 红线: 交接消息的 source 仍恰三成员 {kind, form, senderSessionId}，发送方是旧任", sameJson(Object.keys(autoFollowup.source).sort(), ["form", "kind", "senderSessionId"]) && autoFollowup.source.kind === "agent-message" && autoFollowup.source.form === "relay" && autoFollowup.source.senderSessionId === ROT_SELF);
 check("U24 无新日志事件: 整条自动路径只经 settings 写 + agents.create + followup 三个出口（提供方侧动作日志里没有第四种动作）", autoEnv.actionLog.every((entry) => entry === "create" || entry === "followup") && autoEnv.actionLog.includes("create") && autoEnv.actionLog.includes("followup"));
 check("U20 意图闭环: prepare 成功后台账里的 pending-create 意图被回填（否则启动清扫会把已就位的继任者当成孤儿）", (autoEnv.ns.data.pendingCreates ?? []).length === 0 && (autoEnv.ns.data.pendingCreates ?? []).every((entry) => entry.sessionId !== autoId));
+
+// --- DEFECT-1 ③a（§11.4.2 复用 §10.2.2 的同一个 create 函数）-------------------
+// 影响面比 ② 更大：同一个 `buildTeamSessionCreateOptions` 造继任者 ⇒ 若它跳过
+// preset，换届会失败在「继任者跑不起来 ⇒ 无法 claim」这一步，而令牌已经投给它、
+// 旧任已经冻结（信任迁移路径上的失败）。所以这里断言的不是「继任者建出来了」，
+// 而是**同一件事的两个读数**：meta 里记着的 preset 与它真被挂上的 preset 同源、
+// 恰一次，且那条 mount 绑的就是这个继任者自己的 setup 上下文。
+check("DEFECT-1 ③a 继任者: `successor:\"auto\"` 建出的会话**同样有 persona-prefix 来源** —— resolve(undefined)（宿主缺省）→ meta.agentPreset === 实际挂载的那个 preset，且每个继任者恰挂一次", presetBoundOnce(autoEnv) && autoEnv.creates.length === 1 && autoEnv.agentPresets.resolved.length === 1 && autoEnv.agentPresets.resolved[0] === undefined && autoEnv.agentPresets.mounts.length === 1 && autoEnv.agentPresets.mounts[0].agentId === autoId && autoEnv.agentPresets.mounts[0].id === autoEnv.creates[0].meta.agentPreset);
+check("DEFECT-1 ③a 判据是「能用」: 那条 mount 的 agentCtx 就是继任者自己的 setup 上下文（同一个对象）——不是「建出来了」的同义反复", autoEnv.created.length === 1 && autoEnv.created[0].agent.id === autoId && autoEnv.created[0].agent.setupCtx.agentId === autoId && autoEnv.agentPresets.mounts[0].ctx === autoEnv.created[0].agent.setupCtx);
+// The degradation branch, on the SAME function: a missing service must not make
+// the rotation fail (the intent/token/document contract stays intact), but it
+// must not be silent either.
+const autoNoPresetEnv = rotateEnv({ askScript: ["创建并交班"], omitAgentPresets: true, teams: handoffTeam(path.join(HANDOFF_WS, "nopreset")) });
+const autoNoPresetOut = await autoNoPresetEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: handoffAll }, execFor(autoNoPresetEnv.senderAgent));
+check("DEFECT-1 ③a 降级: agentPresets 缺席时继任者照常自建、换届不因此失败（不因服务缺失让整条创建失败），并恰留一行 warn 点名它没有 persona-prefix 组装源", autoNoPresetEnv.creates.length === 1 && autoNoPresetEnv.agentPresets.mounts.length === 0 && autoNoPresetEnv.log.lines.warn.filter((line) => line.includes("agentPresets service unavailable")).length === 1 && autoNoPresetOut.includes("自建继任者"));
 
 // --- U22: 拒/取消/无确认服务 —— 三条都是「零副作用」 ---------------------------
 
@@ -2978,6 +3096,9 @@ check(`U24 红线: 自动换届没有跳过 claim 的任何一步——令牌校
 	+ (autoFullProbe.asks === 2 && autoFullProbe.claimId === "rotation-migrate" && autoFullProbe.multi === true && autoFullProbe.pairs === autoFullExpectedPairs && autoFullProbe.retireeGone && !autoFullProbe.trusted && !autoFullProbe.remembered && autoFullProbe.current && autoFullProbe.pending === null && autoFullProbe.done ? "" : `（实测：${JSON.stringify(autoFullProbe)}）`),
 autoFullProbe.asks === 2 && autoFullProbe.claimId === "rotation-migrate" && autoFullProbe.multi === true && autoFullProbe.pairs === autoFullExpectedPairs && autoFullProbe.retireeGone && !autoFullProbe.trusted && !autoFullProbe.remembered && autoFullProbe.current && autoFullProbe.pending === null && autoFullProbe.done);
 check("U24 无新日志事件: 一次完整的自动换届（prepare + claim）里，宿主动作仍只有 create/followup 两种（settings 写不在这个日志里，它是另一个出口）", autoFullEnv.actionLog.every((entry) => entry === "create" || entry === "followup"));
+// DEFECT-1 的 ③a 端到端对照：认领并落定的那个继任者，就是被挂载过 preset 的那个
+// 会话（信任迁移路径上「会建 ≠ 能用」的那一面）。
+check("DEFECT-1 ③a 全流程: auto → claim 里认出并落定的那个继任者就是被挂载过 preset 的那个会话，且它自己恰挂一次（否则令牌投给的是一个跑不起来的持钥者）", presetBoundOnce(autoFullEnv) && autoFullEnv.agentPresets.mounts.filter((entry) => entry.agentId === autoFullId).length === 1 && autoFullEnv.creates.filter((options) => options.sessionId === autoFullId).length === 1 && autoFullEnv.role().current === autoFullId);
 
 // --- §11.2 宣传面 = 实现面（命令/描述教的语法必须真能用） ----------------------
 const autoTool = autoEnv.tool("team_link_rotate");
@@ -3686,8 +3807,8 @@ check("🔵 #4: a webServer without register() is named by its reason code — �
  * real `CommandInvocation` so the assertions cover the handler and not a
  * re-implementation of it.
  */
-function teamSessionEnv({ teams = [], askScript = [], omitUserQuestions = false, omitCommands = false, lateCommands = false, failCreateAt = -1, selfCwd = TEAM_WS, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {
-	const env = setup({ sessions: [], useSettings: true, askScript, selfCwd, omitUserQuestions, omitCommands, lateCommands, failCreateAt, createdHook, actionLog, pendingSeed });
+function teamSessionEnv({ teams = [], askScript = [], omitUserQuestions = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, failCreateAt = -1, selfCwd = TEAM_WS, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {
+	const env = setup({ sessions: [], useSettings: true, askScript, selfCwd, omitUserQuestions, omitCommands, lateCommands, omitAgentPresets, failCreateAt, createdHook, actionLog, pendingSeed });
 	const ns = env.settings.namespaces.get("team-link");
 	ns.data.teams = structuredClone(teams);
 	return {
@@ -3837,11 +3958,35 @@ check("U16 端到端文法: each role resolves to its own session id (the lookup
 check("U18 血统: meta carries exactly {cwd, agentPreset} — no origin / parentSession / delegationDepth", okEnv.creates.every((options) => Object.keys(options.meta).sort().join(",") === "agentPreset,cwd") && okEnv.creates.every((options) => options.meta.origin === undefined && options.meta.parentSession === undefined && options.meta.delegationDepth === undefined && options.meta.isSeeded === undefined));
 check("U18 血统: no parentAgent and no seed — the session is a ROOT session, not a subagent (§10.3)", okEnv.creates.every((options) => options.parentAgent === undefined && options.seed === undefined && options.inheritedEventCount === undefined));
 check("U18 血统: the session ids follow team-link-<team>-<role>-<uuid8> and the cwd is the caller's absolute path", okIds.every((id) => /^team-link-night-shift-worker-[ab]-[0-9a-f]{8}$/u.test(id)) && okEnv.creates.every((options) => path.isAbsolute(options.meta.cwd) && options.meta.cwd === TEAM_WS));
-// The preset is optional at runtime (agentPresets is NOT in the module-level
-// inject): the session is still created, and the degradation is NAMED — the
-// setup callback really runs (the stub awaits it, as the factory does), so this
-// is the composed path's own line and not a comment about it.
-check("U18 降级: with no agentPresets service the preset cannot be mounted, the session is still created, and one line per session says so", okEnv.creates.length === 2 && okEnv.log.lines.warn.filter((line) => line.includes("agentPresets service unavailable")).length === 2 && okEnv.creates.every((options) => typeof options.setup === "function"));
+// --- DEFECT-1（§10.2.2 模板 = `dsh-webhook`）: preset 缺省也解析，且总是挂载 ---
+// 真机缺陷 #1：`preset=` 没给时整条 preset 路径被跳过 ⇒ 会话**建出来了**却没有
+// persona-prefix 的组装源，首回合直接死在 `prompt variable "{{model}}" has no value
+// for this assembly (section "deployment:persona-prefix")`。所以这里的判据不是
+// 「建出来了」，而是「这个会话既在 `meta` 里记着某个 preset、又真的被挂到那个 preset
+// 的组成上，且恰好挂一次」——下面的读数就是判据本身，缺省与显式两个 env 共用。
+// `agentPresets` 仍是**可选**服务（不进模块级 inject），但它缺席是**唯一**允许
+// 的上游分支，且必须留一行 warn。
+
+const noPresetEnv = teamSessionEnv({ askScript: ["创建"] });
+const noPresetOut = await noPresetEnv.run("n=2 team=defect1 roles=worker-a,worker-b task=验缺省 preset");
+check("DEFECT-1 缺省也解析: 没给 preset= 时仍然调用 resolve(undefined)（宿主的 defaultId）并把真实 preset id 写进 meta —— 「有才挂」那条分支不存在了", noPresetOut.kind === "success" && noPresetEnv.agentPresets.resolved.length === noPresetEnv.creates.length && noPresetEnv.agentPresets.resolved.every((id) => id === undefined) && noPresetEnv.creates.every((options) => options.meta.agentPreset === STUB_DEFAULT_PRESET) && noPresetEnv.agentPresets.standings.length === noPresetEnv.creates.length && noPresetEnv.agentPresets.standings.every((id) => id === STUB_DEFAULT_PRESET));
+check("DEFECT-1 总是挂载: 每个新会话的 preset 各挂**恰一次**，且挂的就是 meta 里那一个（真机现象的反面：persona-prefix 组装源真的接上了）", presetBoundOnce(noPresetEnv) && noPresetEnv.agentPresets.mounts.length === noPresetEnv.creates.length && presetBindingOf(noPresetEnv).every((row) => row.mountedId === STUB_DEFAULT_PRESET));
+check("DEFECT-1 判据是「能用」不是「建出来了」: 每条 mount 绑定的 agentCtx 就是**那个会话自己的** setup 上下文（同一个对象、agentId 即会话 id），不是别人的、也不是空上下文", noPresetEnv.created.length === 2 && noPresetEnv.created.every((item) => item.agent.setupCtx?.agentId === item.agent.id && noPresetEnv.agentPresets.mounts.filter((entry) => entry.ctx === item.agent.setupCtx).length === 1));
+check("U18 preset= 显式给出: 走的是**同一条**代码（resolve(\"coder\") → meta → mount 恰一次），不是缺省路径之外的第二个分支", okEnv.agentPresets.resolved.length === 2 && okEnv.agentPresets.resolved.every((id) => id === "coder") && presetBoundOnce(okEnv) && okEnv.agentPresets.mounts.every((entry) => entry.id === "coder"));
+// The degradation is NAMED and it is the ONLY branch that can skip the preset:
+// the session is still created AND driven, and one line per session says what
+// the missing composition costs (the setup callback really runs — the stub awaits
+// it, as the factory does — so this is the composed path's own line).
+const noPresetServiceEnv = teamSessionEnv({ askScript: ["创建"], omitAgentPresets: true });
+const noPresetServiceOut = await noPresetServiceEnv.run("n=2 team=defect1 roles=worker-a,worker-b");
+check("DEFECT-1 降级（唯一允许跳过的分支）: agentPresets 服务缺席 ⇒ 零 mount、meta 只剩 cwd、每个新会话恰一行 warn，而会话照建、照驱动（不因服务缺失让整条创建失败）", noPresetServiceEnv.creates.length === 2 && noPresetServiceEnv.agentPresets.mounts.length === 0 && noPresetServiceEnv.creates.every((options) => Object.keys(options.meta).sort().join(",") === "cwd") && presetServiceWarns(noPresetServiceEnv).length === 2 && noPresetServiceEnv.created.every((item) => item.calls.followedup.length === 1) && noPresetServiceOut.kind === "success");
+check("DEFECT-1 降级: 那行 warn 说清了后果（没有 persona-prefix 组装源、首回合可能起不来），不是一句无声的「跳过了」", presetServiceWarns(noPresetServiceEnv).length === 2 && presetServiceWarns(noPresetServiceEnv).every((line) => line.includes("persona-prefix")));
+// A preset that IS named but cannot be resolved is a REAL failure, not a reason
+// to create an uncomposable session: `buildTeamSessionCreateOptions` throws, the
+// batch reports it, and no session is created (宁可不建).
+const bogusPresetEnv = teamSessionEnv({ askScript: ["创建"] });
+const bogusPresetOut = await bogusPresetEnv.run("n=1 team=defect1 roles=worker-a preset=nope");
+check("DEFECT-1 不静默降级: preset= 指了一个解析不出来的 id ⇒ 创建失败并如实报出原因（`not found`），零创建", bogusPresetEnv.creates.length === 0 && bogusPresetOut.kind === "error" && bogusPresetOut.text.includes("not found") && bogusPresetOut.text.includes("创建失败"));
 
 // --- U18: 生命周期 (the handle belongs to the plugin's OWN context) ----------
 const controller = sessionControllerFor(okEnv.ctx);
