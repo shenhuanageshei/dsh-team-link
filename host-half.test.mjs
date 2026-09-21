@@ -5753,11 +5753,60 @@ check("U9 (c) 对话框代价声明: 选「自建继任者」的代价写在框�
 	return ok || (console.log(`     实测读数 ${reading}`), false);
 })());
 
-// --- U10 (§4.2 (c) 1): 无 agents.create 的宿主 → fail-closed 且**零弹框** -------
-const noCreateEnv = rotateEnv({ askScript: [[__testing.SELF_SUCCESSOR_LABEL]], omitAgentsCreate: true, teams: reapTeam(reapRoles()), extraAgents: reapAgents() });
+// --- U10 (§4.2 (c) ①，**批次 4 收窄**): 闸门只关「自建继任者」这条支路 ----------
+// 语义变更（差异审计第 5 条 / N1）：闸门原先在**动词入口**，于是无 `agents.create` 的宿主上
+// 「改任给活成员」被整动词一并拒掉——那是本批之前不存在的回归，而旧断言恰好把它钉成了判据
+// （「零弹框」）。旧断言按新语义**改写**（不是删除），红相读数见 verification-log 批次 4。
+// 新语义两条：① 弹框照开、候选里只列活成员、选中后 prepare 照常跑完；② 仅当活成员候选也为 0
+// 时才 fail-closed 且零弹框（紧跟其后的那条）。
+const noCreateEnv = rotateEnv({ askScript: [["session-worker-b"]], omitAgentsCreate: true, teams: reapTeam(reapRoles()), extraAgents: reapAgents() });
 noCreateEnv.setHiddenAgent(REAP_DEAD, true);
 const noCreateOut = await noCreateEnv.tool("team_link_recover").execute({ action: "reappoint", team: "night-shift", role: "coordinator" }, execFor(noCreateEnv.agentFor("session-worker-a")));
-check("U10 (c): 宿主没有 agents.create ⇒ 能力闸门在**对话框之前** fail-closed——零弹框、零创建、零令牌、零 freeze、零写入，并给出三条既有路径", noCreateOut.includes("没有可用的 agents.create") && noCreateOut.includes("team_link_rotate action=prepare") && noCreateOut.includes("设置 UI") && noCreateOut.includes("本次恢复调用自身零写入") && noCreateEnv.uq.requests.length === 0 && noCreateEnv.creates.length === 0 && noCreateEnv.role().pending === null && noCreateEnv.team().rotationBackup === null && (noCreateEnv.role().recoveries ?? []).length === 0);
+check("U10 (c，批次 4 收窄): 宿主没有 agents.create 时**弹框照开**、候选里只列活成员（不出现「自建继任者」），选中活成员后 prepare 逐字跑完、零创建——活成员改任这条路不需要该服务（N1：只降级该面子面）", (() => {
+	const ask = noCreateEnv.uq.requests[0];
+	const labels = ask === undefined ? [] : ask.questions[0].options.map((option) => option.label);
+	const question = String(ask?.questions?.[0]?.question ?? "");
+	const ok = noCreateEnv.uq.requests.length === 1
+		&& labels.join(",") === "session-target,session-worker-a,session-worker-b"
+		&& !labels.includes(__testing.SELF_SUCCESSOR_LABEL)
+		&& question.includes("本宿主没有可用的 agents.create")
+		&& !question.includes("活成员 ∪ 插件自建继任者")
+		&& noCreateOut.includes("已按 §11.9.4 L2 铸好换届包")
+		&& noCreateOut.includes("不在候选里")
+		&& noCreateEnv.creates.length === 0
+		&& noCreateEnv.role().pending !== null
+		&& noCreateEnv.role().pending.session === "session-worker-b"
+		&& noCreateEnv.team().rotationBackup !== null;
+	return ok || (console.log(`     实测读数 ${JSON.stringify({ labels, dialogs: noCreateEnv.uq.requests.length, creates: noCreateEnv.creates.length, pending: noCreateEnv.role().pending?.session ?? null })}`), false);
+})());
+// ② 两条路同时不存在（无 agents.create + 零活成员候选）⇒ 仍是 fail-closed 报告 + 零弹框。
+// 夹具：唯一的活会话 session-target 已不是任何角色的现任（它是 coordinator 的**前任**），
+// 于是活成员候选恰为 0——这正是「零弹框」在新语义下唯一还存在的那一格。
+const noCreateNoLiveEnv = rotateEnv({
+	askScript: [[__testing.SELF_SUCCESSOR_LABEL]],
+	omitAgentsCreate: true,
+	teams: reapTeam([
+		seededRole("coordinator", REAP_DEAD, { history: [{ session: "session-target", from: 1_700_000_000_000, until: 1_700_000_100_000 }, { session: REAP_DEAD, from: 1_700_000_100_000, until: null }] }),
+		seededRole("worker-a", "session-dead-a"),
+		seededRole("worker-b", "session-dead-b"),
+	]),
+// no extraAgents: the only live sessions are the setup's own stubs, and none of them
+// seats a role — so `reapCandidateRoles` finds zero live candidates.
+});
+const noCreateNoLiveOut = await noCreateNoLiveEnv.tool("team_link_recover").execute({ action: "reappoint", team: "night-shift", role: "coordinator" }, execFor(noCreateNoLiveEnv.agentFor("session-target")));
+check("U10 (c) 收窄的另一半: **仅当活成员候选也为 0** 时 fail-closed——零弹框、零创建、零令牌、零 freeze、零写入，并给出三条既有路径", (() => {
+	const ok = noCreateNoLiveOut.includes("没有可用的 agents.create")
+		&& noCreateNoLiveOut.includes("任何可改任的活成员")
+		&& noCreateNoLiveOut.includes("team_link_rotate action=prepare")
+		&& noCreateNoLiveOut.includes("设置 UI")
+		&& noCreateNoLiveOut.includes("本次恢复调用自身零写入")
+		&& noCreateNoLiveEnv.uq.requests.length === 0
+		&& noCreateNoLiveEnv.creates.length === 0
+		&& noCreateNoLiveEnv.role().pending === null
+		&& noCreateNoLiveEnv.team().rotationBackup === null
+		&& (noCreateNoLiveEnv.role().recoveries ?? []).length === 0;
+	return ok || (console.log(`     实测读数 ${JSON.stringify({ dialogs: noCreateNoLiveEnv.uq.requests.length, creates: noCreateNoLiveEnv.creates.length, out: String(noCreateNoLiveOut).slice(0, 160) })}`), false);
+})());
 
 // --- U11 (§4.2 (c) 回归): 合成候选常驻**不**削弱取消语义 -----------------------
 check("U11 (c 回归): 候选集里多了常驻的合成候选之后，「什么都不勾选 = 什么都不做」一字未变——对话框里确实有合成候选，而本次调用零令牌、零 freeze、零写入", reapCancel.includes("未改任（reappoint）") && reapCancelEnv.uq.requests[0].questions[0].options.map((option) => option.label).includes(__testing.SELF_SUCCESSOR_LABEL) && reapCancelEnv.role().pending === null && reapCancelEnv.team().rotationBackup === null && (reapCancelEnv.role().recoveries ?? []).length === 0);
@@ -5769,6 +5818,57 @@ check("§4.2 收敛性: 候选集的合成项由插件常驻产出（label 是�
 	return rows.length === 2 && rows[0].session === "session-ti-coord" && rows[0].synthetic === false && rows[1].synthetic === true && rows[1].label === __testing.SELF_SUCCESSOR_LABEL && __testing.candidateLabel(rows[0]) === "session-ti-coord" && __testing.candidateLabel(rows[1]) === __testing.SELF_SUCCESSOR_LABEL;
 })());
 
+
+// ---------------------------------------------------------------------------
+// 批次 4（审计 A–D 收口）：合成链路**补投递** · task-and-goal 接 goals 读数
+// ---------------------------------------------------------------------------
+// 变异基线（修复前必红）:
+//  (C) `appointSelfBuiltSuccessor` 止于审计留痕 ⇒ 刚建出的继任者**从未收到**令牌与交接
+//      文档（对照 `successor:"auto"` 的结尾是 `handle.agent.followup(…)`，见 §11.4.5），
+//      即：新建的继任者空转（审计第 9 条）；
+//  (D) `selfBuiltHandoffBody` 把 `task-and-goal` 硬编码成「未知」，而它算出的 goals 读数只
+//      落到了 `in-flight` ⇒ 该节**声明的数据源从未被消费**（审计第 8 条）。
+// 两条判据都读**真函数/真投递**，不抄一份进测试。
+
+// --- C (§11.4.5): 投递令牌与交接正文给刚建出的继任者 -------------------------
+// `threatEnv` 就是 U9 的那条合成链路：它已经跑完（`prepare` 落盘、三处留痕、文档写出），
+// 所以这里读的是那条链路**投出去的**东西，而不是重跑一遍。
+const tiCreated = at(threatEnv.created, 0, {});
+const tiFollowups = tiCreated?.calls?.followedup ?? [];
+const tiDelivered = at(tiFollowups, 0, undefined);
+check("C: 新建的继任者真的收到了令牌与交接正文——一次 followup（不是 inject：任务需要驱动），正文含明文令牌、交接文档路径与五硬节正文", tiFollowups.length === 1 && tiDelivered !== undefined && typeof tiDelivered.content?.[0]?.text === "string" && tiDelivered.content[0].text.includes(String(threatEnv.role("b").pending.token)) && tiDelivered.content[0].text.includes(tiDocument.path) && tiDelivered.content[0].text.includes("## task-and-goal") && tiDelivered.content[0].text.includes("## mission"));
+check("C: ... 且这条投递走的是那条被审计的三成员 source（kind/form/senderSessionId），没有第四个成员", tiDelivered !== undefined && Object.keys(tiDelivered.source).join(",") === "kind,form,senderSessionId" && tiDelivered.source.kind === "agent-message" && tiDelivered.source.form === "relay" && tiDelivered.source.senderSessionId === "session-ti-coord");
+check("C: ... 回执如实报出投递这一步（§11.4.5），而不是把「铸好了令牌」当成「已经交给它了」", tiOut.includes("投递（§11.4.5）：已用 followup 把令牌与交接正文投给") && tiOut.includes(String(tiMinted)));
+
+// --- D (§4.2 (c) ④): task-and-goal 接 goals 读数 ------------------------------
+/** One `## <name>` section of a hand-over body, up to the next `## ` heading. */
+const handoffSection = (body, name) => {
+	const parts = String(body).split(/^## /mu);
+	const hit = parts.find((part) => part.startsWith(`${name}\n`));
+	return hit === undefined ? "" : hit;
+};
+const selfBodyWithGoal = typeof buildSelfBody !== "function" ? "" : buildSelfBody({
+	teamName: "threat-intel",
+	roleName: "b",
+	incumbent: TI_DEAD_B,
+	caller: "session-ti-coord",
+	cwd: TI_ROOT,
+	goal: { readable: true, text: "phase=active · activation=armed · rounds=3/8" },
+	trust: { pairs: 2, trustedSenders: 1, rememberTargets: 0 },
+});
+check("D: goals 有读数时 task-and-goal 填的就是那份读数（不再是硬编码的「未知」）——这一节声明的数据源真的被消费了", (() => {
+	const section2 = handoffSection(selfBodyWithGoal, "task-and-goal");
+	const ok = section2.includes("phase=active · activation=armed · rounds=3/8") && !section2.includes("**未知**") && section2.includes("停工时刻的快照") && section2.includes(TI_DEAD_B);
+	return ok || (console.log(`     实测读数 ${JSON.stringify(section2.slice(0, 160))}`), false);
+})());
+check("D 对照（真的读不到时）: 没有读数的那一支仍然如实标未知并给出原因——「读不到才标未知」的另一半", (() => {
+	const section2 = handoffSection(selfBody, "task-and-goal");
+	return section2.includes("**未知**") && section2.includes("请由人类，或在场的旧任，补写这一节") && section2.length > 0;
+})());
+check("D unknowns 对照: goal 有读数之后，unknowns 不再声称「前任的 goal 未知」，改说这份读数**覆盖不到**的那一部分（读数只到 phase / activation / rounds）", (() => {
+	const section2 = handoffSection(selfBodyWithGoal, "unknowns");
+	return !section2.includes("前任的 goal：") && section2.includes("正文与后续意图") && handoffSection(selfBody, "unknowns").includes("前任的 goal：");
+})());
 
 // ---------------------------------------------------------------------------
 // 批次 1 (§4.1): the download route behind the platform's trust fence

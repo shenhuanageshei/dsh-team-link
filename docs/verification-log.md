@@ -300,14 +300,23 @@ node .test-tmp/s2-red/host-half.test.mjs   →   assertion total: 920 (failed: 2
 
 21 条 FAIL 全部落在本批断言上：
 
+> **计数勘误（批次 4 重跑实测定档）**：本表原先记 U9 = 10、语义变更 = 5，两项**自相矛盾**——加总是 22，与同一次实测的 `920 (failed: 21)` 差一条（差异审计第 4 条）。批次 4 用**同一取法**重跑了这一次红相（`.test-tmp/s2-red/` = `git show 8d40343:host-half.test.mjs` + `git show b48b34e:lib/index.js` + `git show 8d40343:lib/client.js` + `git show 8d40343:README.md`，**在夹具目录里**跑：该版套件的 `TEAM_TMP` 是相对 cwd 的 `.test-tmp`，在仓库根跑会把它自己删掉）⇒
+
+```
+node .test-tmp/s2-red/host-half.test.mjs   →   assertion total: 920 (failed: 21)
+```
+
+**逐条点数（21 条 FAIL 的实测名单）**：U7 (a) 2 条 · U8 (B3) 1 条 · U9 (c) **9** 条 · U10 1 条 · U11 与收敛性 2 条 · 既有断言的语义变更 **6** 条 = **21**。两处错的根因：① U9 组里的「新建的会话是根会话（meta 里没有 origin / parentSession / delegationDepth / parentAgent）」在修复前**本来就为真**（旧实现从不 `create`，`creates` 为空 ⇒ `creates[0]?.meta?.origin === undefined`），它在红相里是 `PASS`，**不是**红相的一员；② 语义变更那一组实为 **6** 条（原文列了 6 个名字却记 5 条）。计数与列表在本次编辑里同批改准（本仓文档卫生红线）。
+
 | 组 | 条数 | 红相读到的 |
 |---|---|---|
 | U7 (a) | 2 | 插件自建的死 worker 被**角色门**拒（`本工具只为 coordinator 角色恢复（请求的是 worker-a）`），`resumeCalls === 0` |
 | U8 (B3) | 1 | **连所有权门的文案都读不到**——角色门先拒，所以「人类自建 ⇒ 深链指引」这条既有行为在红相里根本走不到（这本身就是「角色门挡在适用域之前」的实证） |
-| U9 (c) | 10 | 对话框里没有合成候选；没有创建；没有交接文档；没有三处留痕（连 `role("b").recoveries` 都是空） |
+| U9 (c) | **9** | 对话框里没有合成候选；没有创建；没有交接文档；没有三处留痕（连 `role("b").recoveries` 都是空）。**同组里「新建的会话是根会话（meta 无血统字段）」那一条不在红相里**——修复前根本没有 create，`creates` 为空 ⇒ 它的判据（`creates[0]?.meta?.origin === undefined`）**本来就为真**（批次 4 重跑实测：那条 `PASS`） |
 | U10 | 1 | 无 `agents.create` 时既没有闸门也没有「零弹框」（连对话框都照常弹） |
 | U11 / 收敛性 | 2 | 取消语义里没有合成候选这回事；`reapCandidateRoles` 的返回形状里没有合成项 |
-| 既有断言的语义变更 | 5 | U26 窄域 / Y1 对照 / Y1 双向锁（README+描述）/ Y2 宣传面 / U27 候选由插件算 / U27 全队皆死 —— 设计 §9 **A7** 点名的「既有断言可能把『非 coordinator 一律拒』钉死」**实测成立** |
+| 既有断言的语义变更 | **6** | U26 角色面（批次 2 改写）/ Y1 对照（批次 2 改写）/ Y1 文档面=实现面（双向锁）/ Y2 宣传面=实现面 / U27 候选由插件算（批次 2 改写）/ U27 全队皆死（批次 2 改写）—— 设计 §9 **A7** 点名的「既有断言可能把『非 coordinator 一律拒』钉死」**实测成立** |
+| **合计** | **21** | 与 `920 (failed: 21)` 逐字对上 |
 
 **改写而不是删除**：这 6 条旧锁每一条都改成咬**新语义**（`revive` 不再被角色门拒；候选集含常驻合成候选；全队皆死时对话框照常弹出且唯一候选就是合成候选；README 与工具描述都说「两个动词都受理任意角色」且旧窄域措辞一处不剩），并在注释里写明「旧断言在这里被推翻、为什么」。语义变更本身**不是**缺陷，所以锁要跟着事实走，而不是把事实按锁改写。
 
@@ -331,3 +340,196 @@ node .test-tmp/s2-red/host-half.test.mjs   →   assertion total: 920 (failed: 2
 - **自建继任者的 cwd**：团队 `workspace` 优先、发起会话 cwd 回落；都拿不到绝对路径 ⇒ fail-closed（零创建）。§4.2 (c) 没写 cwd 从哪来。
 - **交接文档写在 `prepare` 之前**：按 §11.9.6 的 abort-before-prepare 与 `successor:"auto"` 同序（§4.2 (c) 的编号是元素清单、不是时序），并把这一点写进了代码注释与 CHANGELOG，免得下一个读者以为是先后写错。
 - **真机演练（§6 复验点 2：用 threat-intel 真实 roster 形做一次演练）未执行**：本轮用的是同形夹具（coordinator 活、b/c 人类 id dead）。与 0.3.8 同口径，不把未验的说成已验。
+
+---
+
+## 批次 3（§4.3 侧栏「会话工具」入口 · §4.4 深链聚焦修复）（2026-09-21；当次实测 `257 (failed: 0)` / `920 (failed: 0)`，基线 `170` / `920`）
+
+> **后续变更（批次 4，2026-09-21）**：列表的可见性规则改为**丢弃当前会话**（owner 裁定 ③ / 设计 §4.3.2），因此本节末尾「如实标注」里那条『**列表包含当前会话**』的说明**已被取代**——原文保留（本文件只追加），但**不再**是当前行为。当前行为的判据与读数见文末「批次 4 · 客户端与文档收口」。
+
+**本轮新增 87 条断言**（`257 − 170`，浏览器半边：10 条红相守卫/可测面 + 77 条 §4.3/§4.4 断言），另**改写 9 条既有断言**（新语义下这一次 `apply()` 多了一次槽位注册：`fresh.length` 4→5、`names()` 多一行；逐条留证见下）。设计见 `hardening-and-recovery-design-2026-09-21.md` §4.3 / §4.4 / §5 B7–B9 / §6 U12–U14。
+
+### 病灶（修复前必红，实测读数）
+
+两个隔离夹具（都在 `.test-tmp/`，已 gitignore；红相隔离的正是**本批的实现改动**，而不是一个手写的工作树快照）：
+
+1. **整批红相**：`.test-tmp/s3-red/` = 本批新测试 + `git show 8d40343:lib/client.js`（批次 2 提交时的浏览器半边，既无 §4.3 也无 §4.4）。
+
+```
+node .test-tmp/s3-red/client-half.test.mjs  →  assertion total: 193 (failed: 27)
+```
+
+27 条 FAIL 全部落在本批断言上（红相报的是判据本身，不是"不相等"）：
+
+| 组 | 条数 | 红相读到的 |
+|---|---|---|
+| §4.3 红相守卫 | 9 | 入口未注册进 `sidebar.footer.action`；入口/弹窗组件工厂不存在；五条纯规则（选择与排序 / 搜索 / 三句空态 / 有界标注 / 两态状态点 / 相对时间措辞）不存在 |
+| §4.3 可测面 | 1 | 导出面上没有冻结的 `__testing` |
+| 既有断言的语义改写 | 9 | 旧实现只注册 4 行 ⇒ H2/F3/B3 那 9 条「注册数 / names()」断言全部读不到第 5 行 |
+| U14 | 7 | 深链打开后**当前会话 id 不变**、重试循环里聚焦的是不存在的方法、失败无痕、源码里仍是 `ctx.sessions.open(` |
+
+```
+FAIL  §4.3 红相守卫: the「会话工具」entry is registered into the official sidebar.footer.action slot
+FAIL  §4.3 红相守卫: the entry component factory exists (makeSessionToolsEntry)
+FAIL  §4.3 红相守卫: the dialog component factory exists (makeSessionToolsDialog)
+FAIL  §4.3 红相守卫: the selection/ordering rule exists (visibleSessionRows)
+FAIL  §4.3 红相守卫: the search rule exists (filterSessionRows)
+FAIL  §4.3 红相守卫: the three-sentence emptiness rule exists (emptySessionToolsState)
+FAIL  §4.3 红相守卫: the bounded-presentation rule exists (sessionToolsBoundNote)
+FAIL  §4.3 红相守卫: the two-state status dot rule exists (sessionDotState)
+FAIL  §4.3 红相守卫: the relative-time wording helper exists (relativeTimeText)
+FAIL  U14 判据: ... and the CURRENT SESSION ID really changed to the target (retainedBy.mainView is the judgement)
+assertion total: 193 (failed: 27)
+```
+
+2. **U14 单独红相**（设计 §6 点名要求的「修复前深链打开后当前会话 id 不变」）：`.test-tmp/s34-red/` = 本批新测试 + **当前** `lib/client.js`，**只**把 §4.4 那一行还原成 `ctx.sessions.open(id)`（其余一字未动）。
+
+> **复现（两个夹具都可随时重建；`.test-tmp/` 已 gitignore，不在仓里）**：夹具 = 一个含 `lib/client.js` 的目录 + 本批的 `client-half.test.mjs`（测试用相对 `./lib/client.js` 读源码，所以放同一目录即可）。① 的源码来自 `git show 8d40343:lib/client.js`；② 的源码是当前实现**只**改回那一行。注意：PowerShell 的 `>` 默认写 UTF-16，落盘要用 `Set-Content -Encoding utf8`（或 node 的 `fs.writeFileSync`），否则第一行就崩。
+
+```
+node .test-tmp/s34-red/client-half.test.mjs  →  assertion total: 257 (failed: 7)
+FAIL  U14: the deep link focuses the linked session at boot through the public navigation face
+FAIL  U14 判据: ... and the CURRENT SESSION ID really changed to the target (retainedBy.mainView is the judgement)
+FAIL  U14 对照: ... while the session the app booted on no longer holds the main view (so the assertion is about movement)
+FAIL  U14: the deep link is applied once, not once per retry
+FAIL  U14: ... and the frame is focused the moment it appears in the list
+FAIL  U14: a navigation that fails leaves exactly ONE trace line and does not break the open flow
+FAIL  U14 病灶锁: the silent CALL is gone from the bundle's code (the sessions face has no open() to call)
+```
+
+**同一夹具的仪表读数**（与上面同一套桩：会话列表里 `session-here` 持有主视图，深链目标是 `session-target`）：
+
+```
+RED   (§4.4 还原)  →  openSession calls: []                  | current session id: session-here
+GREEN (本次实现)   →  openSession calls: ["session-target"]  | current session id: session-target
+```
+
+即：修复前**深链打开了页面、主视图却停在启动时那个会话上**（`ctx.sessions.open` 在服务上根本不存在，TypeError 被 `try/catch` 吞掉）——这正是 §2.4 描述的静默失效，也是 U14 判据的落点。
+
+### 修复（绿相）
+
+`node client-half.test.mjs` → **`257 (failed: 0)`**；`node host-half.test.mjs` → **`920 (failed: 0)`**（本批未触碰宿主半边，读数与批次 2 相同）。
+
+- **§4.3 入口**：`registerSessionTools(ctx, require)` 注册进官方 list 槽位 `sidebar.footer.action`（`id: team-link-session-tools`、`order: 0`、`locale: dsh-team-link`）——**不改任何官方文件**；`guardedSlot` 多接一个可选的 `consequence` 参数，让这一行的降级文案如实说"入口没挂上"而不是"退回通用渲染器"。
+- **§4.3.5 的可选性两半**：先 `ctx.get` **立即读**三个服务（这一读才让"缺任一项 ⇒ 一行 warn"成立——依赖不满足的 `ctx.inject` 回调根本不会跑），再挂 `ctx.inject(["sessions","workspaces","uiWorkspace"], …)` 让迟到的服务把入口补上；`warned` 一次性门保证**一个未就绪窗口只留一行痕**。`Modal` 来自 shell 的 seed 模块（`require("@deepseek-ai/dsh-client-ui-primitives")`，**不写进** `dsh.client.inject`），它缺席也算同一个 gap。
+- **弹窗与行**：官方 `Modal`（`open`/`onClose`/`title`/`description`/`closeLabel`/`footer`/`contentClassName`）；`visibleSessionRows` 逐字沿用官方会话浏览器的可见性规则（丢 subagent、丢已归档、blank 行只留当前）与 `updatedAt` 倒序 + id 兜底；两态状态点只读 `SessionSummary.running`。
+- **§4.4**：`focusDeepLinkedSession(ctx, id)` → 运行时 `ctx.inject(["uiWorkspace"], …)` → `openSession(id)`；重试循环（`sessions.list` 里出现目标 id 再聚焦、200ms × 50）原样保留；导航抛错只记一行痕，无 `ctx.inject` 时退化为直接读 `ctx.uiWorkspace`。
+- **`package.json`**：`dsh.client.inject` 三项新增（ui-workspace / api-session-controller / api-workspace-controller）；模块级 `inject` 仍恒三项。
+
+### 同改清单（都由同一条事实驱动，逐条留证）
+
+1. **测试骨架**：React 桩升级为**最小 hook 运行时**（`mount()`：`instance.tree` 在每次 setState 后重取）——带状态的入口与弹窗必须能被**驱动**（点开、输入、复制），而不是只看初始树；`createElement` 顺手补上 ref 挂载与 `focus()` 记录，供 §4.3.7 的"焦点归还"判据用。既有的直接 `component(props)` 调用在实例上下文外仍然拿到初值 + 空 setter，语义未变。
+2. **服务桩的形状**：`sessionsServiceStub` **刻意没有 `open()`**——真实 `ISessions` 面就没有它，这正是 §4.4 的病灶；桩里凭一个不存在的方法把缺陷盖住是不允许的。`applyWith` 的默认上下文改为"所有服务都在"（与它自己的注释同口径），并新增 `get()` / 按 spec 分发的 `inject()`。
+3. **9 条既有断言按新语义改写**（`fresh.length` 4→5、`names()` 多 `sidebar.footer.action`）：改写而不是删除，且每条都保留原来的判据意图（"一次拒绝只丢那一行"）。
+4. **新增可测面** `module.exports.__testing`（客户端半边的冻结导出面，与宿主半边的 `__testing` 同构）：纯规则（选择与排序 / 搜索 / 三句空态 / 有界标注 / 两态 / 相对时间）、组件工厂（入口 / 弹窗）、四个字面常量与 gap 判定。测试以 Y7 纪律**先判类型再调用**（外加一道显式的 `sessionToolsSurfacePresent` 守卫），所以红相会**跑到底并把断言总数打印出来**，而不是崩在缺失的可测面上——那正是 Y7 存在的理由。
+5. **README**：§二 新增「侧栏「会话工具」入口」小节（含三种空态与已知限制）、深链段加聚焦修复指针、§九 加「浏览器半边的模块声明」、§十 读数与**标签口径**纠正（原写「0.3.8 收口时点」并挂着 889/170 两个数——标签是错的，改为「实跑时点」+ 920/257）、设计文档索引登记本档并修正既有的 ③b「未实施」失真、版本徽章 0.3.7→0.3.8、架构图加侧栏入口节点与导出边；`CHANGELOG.md` 新增 0.3.9 批次 3 条目。
+
+### 如实标注（设计未逐字规定、由实现定夺的地方）
+
+- **列表包含当前会话**：§4.3.2 的可见性规则没有任何"排除当前会话"的话，反而明确要求"blank 行只保留当前会话"（以当前会话在列表里为前提）⇒「暂无其他会话」出现在**可见集为空**时。判据因此做成"可见集非空时绝不显示空句"（`session-cur` 单独在场时列表如实显示那一行）。
+- **打开成功后关闭弹窗**：导航即回答，关闭顺带把焦点还给入口；只有打开**失败**才保留弹窗 + 一行痕。
+- **行结构**：`<li>` + 一个可点 `<button>`（Enter/Space 免费可用），两个动作按钮是**兄弟**而非嵌套（`role="button"` 里嵌按钮是交互内容套交互内容）；"焦点即浮现"由 `:focus-within` 承担。
+- **当前工作区的取法**：成员关系优先、其次 `cwd` 匹配；都认不出时回落到「全部工作区」（用未知工作区过滤会给出假的空列表）。
+- **列表上限 50**、**入口图标 `IconLinkOutline16/14`**：设计未规定，逐条记在 CHANGELOG 的"如实标注"里。
+- **真机复验点 3 未执行**：3080 页面上的宽态 / 收起态 / 标题栏收起态渲染与相对位置需重建客户端 bundle + 刷新页面。与 0.3.8 同口径，不把未验的说成已验。
+
+---
+
+## 批次 4 · 宿主半边（分歧审计 A–D 收口）（2026-09-21；当次实测 `927 (failed: 0)` / `257 (failed: 0)`，基线 `920` / `257`）
+
+**本轮新增/改写 7 条断言**（`927 − 920`，宿主半边；其中 1 条是**改写**——旧 `U10` 断言把「无 `agents.create` ⇒ 零弹框」钉成判据，而那正是审计判为 **N1 回归**的行为），客户端半边在本轮阶段一未动。测面设计见 `hardening-and-recovery-design-2026-09-21.md` §4.2 (c) ①/④、§6 U10。
+
+**四条改动（各对应审计的一条）**：
+
+1. **A 能力闸门收窄**（审计第 5 条 / N1）：`reapIncumbent` 的闸门从**动词入口**移到**「自建继任者」支路**——无 `agents.create` 时**弹框照开**、候选里只列活成员；**仅当活成员候选也为 0** 时才 fail-closed 报告且零弹框。理由：活成员改任**不需要** `agents.create`，放在入口会把它一并拒掉（本批之前不存在的回归）。
+2. **B 恢复面文案与实现对齐**（审计第 3 条 / N3）：`recoveryBoundaryText()` 第 ③ 项从「候选由插件从**活成员**计算」改为「**活成员 ∪ 常驻的「自建继任者（新建会话）」**」；同批核过 `team_link_recover` 的 `description`（能力闸门段 + 合成链路收尾）与 `recoveryDiagnosticLines` 的恢复入口行，三处一并改准。
+3. **C 合成链路补投递**（审计第 9 条）：`appointSelfBuiltSuccessor` 原来**止于审计留痕**，刚建出的继任者从未收到令牌与交接正文（对照 `successor:"auto"` 的结尾是 `handle.agent.followup(…)`，§11.4.5）⇒ 新建的继任者**空转**。补齐同一条投递（`followup`，不是 `inject`；消息 source 仍恰三成员），回执如实报出投递结果（失败也有自己的文案与出口）。
+4. **D 五硬节的 `task-and-goal`**（审计第 8 条）：`selfBuiltHandoffBody` 原来把该节硬编码成「未知」，而它算出的 goals 读数只落到 `in-flight` ⇒ **该节声明的数据源从未被消费**。现在该节渲染 goals 读数（读不到才标未知），`unknowns` 同步改成「读数覆盖不到的那一部分」而不是继续声称 goal 未知。
+
+### 病灶（修复前必红，实测读数）
+
+红相取法是**隔离夹具**：`.test-tmp/s1-red/` = **本轮测试文件**（含新断言）+ `git show HEAD:lib/index.js`（本轮实现改动之前的树，`lib/index.js` 自上批提交后未动）+ 当前 `lib/client.js`（宿主套件会读它做跨半边锁）+ `README.md`；在**夹具目录里**跑（该套件的 `TEAM_TMP` 是相对 cwd 的 `.test-tmp-team`，在仓库根跑会把夹具自己删掉）。
+
+```
+node .test-tmp/s1-red/host-half.test.mjs   →   assertion total: 927 (failed: 7)
+```
+
+7 条 FAIL 恰是本轮每一条判据（逐条读数）：
+
+| 组 | 条数 | 红相读到的 |
+|---|---|---|
+| A（U10 改写） | 1 | `实测读数 {"labels":[],"dialogs":0,"creates":0,"pending":null}`，返回文案是「本宿主没有可用的 agents.create……（连确认框都不弹）」——**整动词被闸门拒掉**，「改任给活成员」这条本可用的路消失 |
+| A（收窄的另一半） | 1 | 旧文案里没有「任何可改任的活成员」这一格（当时那条路不存在） |
+| C | 3 | 继任者建出后 `followedup.length === 0`——令牌与交接正文从未投出（空转），回执里也没有「投递」这一步 |
+| D | 2 | `task-and-goal` 一节逐字为「`- 该角色的任务与目标：**未知**——前任没有活动代理，goals 按 agent 取读数，因此取不到；本文件禁止编造。` + 请由人类补写」；`unknowns` 同时声称「前任的 goal」未知 |
+
+（D 的第 3 条是**对照**：读不到时仍标未知——它在红相里本来就是绿的，因为它锁的是**未变**的那一半。）
+
+### 修复（绿相）
+
+`node host-half.test.mjs` → **`927 (failed: 0)`**；`node client-half.test.mjs` → **`257 (failed: 0)`**（阶段一未触碰浏览器半边）。
+
+### 如实标注（设计未逐字规定、由实现定夺的地方）
+
+- **D 的「读到读数」那一支在生产里不可达**：本动词的前提就是前任**没有活动代理**（`recoveryPreflight` 先拒掉活现任），而 goals 按 agent 取读数 ⇒ `ctx.agents.get(incumbent)` 必为 `undefined`，读数取不到。这一支是按 §4.2 (c) ④ 的契约实现的（「读不到**才**标未知」），判据直接驱动**真函数** `selfBuiltHandoffBody`（与既有 `U9 (c) 交接正文` 同一条纪律：读真函数，不抄一份）。真读不到的路径仍如实标未知（既有断言，本轮未改）。
+- **合成链路里投递的位置**：排在审计留痕（⑦）之后作为第 ⑧ 步。§4.2 (c) 的编号是**元素清单**不是时序，而 `successor:"auto"` 的顺序是 prepare → 清 pending → followup；两种排法都不影响「令牌落盘之后才投递」这条实质约束，本批取「留痕先、投递后」，并在代码注释里写明。
+- **`mission` 节的一句话被改准**：原文写「全队没有可改任的活成员」，那是**收窄之前**的触发形；收窄后合成支路在**有**活成员时也可被选中（事故现场就是这样），所以改为「人类在候选里选的是由插件新建一个会话，而不是改任给某位活成员」。
+
+---
+
+## 批次 4 · 客户端与文档收口（G / E / F / H）（2026-09-21；当次实测 `259 (failed: 0)` / `927 (failed: 0)`，基线 `257` / `920`）
+
+宿主半边的 A–D 见上一节；本节是同一轮的另外四条。
+
+### G 客户端列表丢弃当前会话（审计第 7 条 / owner 裁定 ③ / §4.3.2）
+
+**语义变更**：`visibleSessionRows` 现在**丢弃当前会话**（`retainedBy.mainView > 0` 的那一行）。理由：本面板的用途是「**其他**会话」，当前会话的复制/导出已在会话头部按钮上；把它列进来会让「暂无其他会话」这句话与实际行为不一致。**副作用如实写明**：官方会话浏览器那条「blank 行只在它是当前会话时保留」随之退化为「blank 行一律丢」——那条唯一的例外正是本面板永不列出的那一行。
+
+**红相（隔离夹具，实测留证）**：夹具 = 当前 `client-half.test.mjs` + 当前 `lib/client.js` **只把 §4.3.2 的可见性那一行还原成** `if (row.blank === true && id !== currentId) continue;`（其余一字未动，`.test-tmp/s2g-red/`）：
+
+```
+node .test-tmp/s2g-red/client-half.test.mjs   →   assertion total: 259 (failed: 14)
+     实测读数 {"empty":"","rows":["session-cur"]}          ← 修复前：那一行真的被画出来了，且不显示空态句
+```
+
+14 条 FAIL = **7 条 G 的语义判据**（G 本体 / G 对照 / 当前工作区范围 / 「全部工作区」范围 / 选择与排序 ×2 / 每行一个会话）+ **7 条按行序号索引的跟随断言**（列表从 3 行变 2 行，`[1]` → `[0]` 随事实走：行的标题、两个动作、复制、导出、行内导航）。
+
+**绿相**：`node client-half.test.mjs` → **`259 (failed: 0)`**（基线 257；**净 +2 条**断言，另**改写 10 条**既有断言的表达式——5 条语义/范围/排序/行序期望 + 5 条按行序号索引的跟随表达式）。验收点「工作区里只剩当前会话 ⇒ 显示『暂无其他会话』且一行都不画」由新断言咬住。
+
+### E 批次 2 红相计数按实跑读数重算（审计第 4 条）
+
+见上文**批次 2** 小节里的「计数勘误」：重跑实测定档为 U7 (a) 2 + U8 (B3) 1 + U9 (c) **9** + U10 1 + U11/收敛性 2 + 既有断言语义变更 **6** = **21**（与 `920 (failed: 21)` 逐字对上）。两处错的根因与逐条名单都在那里，计数与列表同一次编辑改准。
+
+### F 跨档同步（审计第 2、6 条 / 设计 §10 清单）
+
+| 档 | 改了什么 |
+|---|---|
+| `docs/team-upgrade-design-2026-09-17.md` §9.1.3 | 增补**双服务 fail-closed 的挂载语义**（批次 1 要求做、当时未做）：挂载期要求 `webServer` **与** `connection` 齐备才注册路由（缺任一半 ⇒ 不注册 + 一行 warn），晚挂改为 `ctx.inject(["webServer","connection"], …)`；请求期 handler 首句实时复检栅栏（缺席/抛错 ⇒ 503）、非 GET ⇒ 405；并声明本节的否决理由（不把服务写进 `inject`）逐字适用 |
+| `docs/collab-enhancements-design-2026-09-19.md` §11.9.5 ③ **条目本体** | 由旧规则「候选由插件从 **live 成员** 计算」改为「**候选由插件计算 = 本队活成员 ∪ 常驻的「自建继任者（新建会话）」**」，并显式标注旧措辞已被取代（审计第 6 条：原文同时陈述新旧两条规则） |
+| 同档 §11.9.5 ③ 的 2026-09-21 注解 | 能力闸门口径改准为「**只约束自建继任者支路**；无该服务 ⇒ 弹框照开、该候选不出现；仅当活成员候选也为 0 才 fail-closed 零弹框」 |
+| 同档 §11.9.4 增补第 2 条 · 验收表 U27 行 | 同一条事实的两处旧口径（「能力闸门 → … → 审计行」的链路、「候选由插件从 live 成员计算」）一并改准——**同一条事实不再有两处口径** |
+
+### H 真机复验点 1：对运行中的 3080 重放三条 curl（原始读数）
+
+**方法**：`curl.exe`（Windows 自带），对 `http://127.0.0.1:3080` 逐条重放，每条两种标记（**无 token** / **`Host: evil.example:3080`**；导出那一条另加 `Origin: http://evil.example` + `Sec-Fetch-Site: cross-site`）。会话 id 取一个**真实**会话（`team_link_list_sessions` 读出，`d38e2c6f-8c20-4e5f-a623-d51ce0ee0d3a`）。**读数时间**：2026-09-21 18:41（本机时区）。
+
+| 请求 | 无 token | `Host: evil.example:3080`（导出那条另加跨站标记） |
+|---|---|---|
+| `GET /`（核心路由） | **401**（68 B） | **401**（68 B） |
+| `GET /open-in-app/apps`（内置插件，同一 webServer） | **401**（0 B） | **403**（0 B） |
+| `GET /team-link/export?session=<真实 id>&format=json` | **200**，**5,479,970 B** | **200**，**5,479,970 B** |
+
+导出那一条的响应头与正文头（跨站标记下）：
+
+```
+HTTP/1.1 200 OK
+content-type: application/json; charset=utf-8
+content-disposition: attachment; filename="d38e2c6f-8c20-4e5f-a623-d51ce0ee0d3a.json"
+
+{"exporter": "dsh-team-link", "exportedAt": "2026-09-21T10:41:51.562Z", "session": { "version": 3, "id": "d38e2c6f-…", …
+（正文事件流 2,713 个 `"type":` 记号；本插件导出的 JSON 顶层键正是 exporter / exportedAt / session / title / eventCount / events）
+```
+
+**结论（如实报告，不粉饰）**：三条请求里 **`/` 与 `/open-in-app/apps` 与内置路由同判 401/403，而本插件路由在跨站标记下仍返回 200 + 整份会话数据** ——即**运行中的 3080 进程仍是修复前的宿主半边**。这与 0.3.9 的发布状态行一致（**①② 属宿主半边，需 DSH 重启才在真机生效**），也解释了为什么本轮的绿相在本机不可得：**真机点 1 的红相实测留证完成，绿相需要在一次 DSH 重启窗口里复跑同六条**（预期：本插件路由与 `/open-in-app/apps` 同判 401/403，且 `sessionQuery.readSession` 不再被调用）。本轮**刻意不重启**（重启会拆掉运行中的会话代理，属父侧操作）。
+
+**真机复验点 3**（侧栏入口的收起态 / 标题栏收起态两态渲染）：需要驱动浏览器并在 3080 页面上切侧栏形态，本轮无法执行（无浏览器驱动面）——与批次 3 同口径**留给父侧**，不把未验的说成已验。

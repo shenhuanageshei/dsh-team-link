@@ -662,6 +662,7 @@ function createPolicyStore(ctx) {
 - **调用点迁移**：`migrateLegacyPolicy()` 由「apply 当场调用」改为「attach 之后调用」（apply 当场调用在 ③ 未修时恒为 no-op）。
 - **同类竞态的第三处（会诊 O6，本设计一并覆盖）**：`registerExportRoute`（lib/index.js:3909-3913）同样在 apply 期取 `ctx.get("webServer")` 时点快照；它已有 warn 与安全降级，但**同样受时序支配**——当前之所以导出路由可用，只是因为 webServer 的提供方恰好先于本插件 active（日志中**从未**出现 `:3912` 的 warn 即为此反证）。同一「晚挂 + 重试」模式覆盖：不可用时 `ctx.inject(["webServer"], child => registerExportRoute(child))`。
 - **已评估并否决的备选（会诊 O5）**：把 `"settings"` / `"webServer"` 直接加入 `inject` 数组。否决理由：`inject` 是**硬依赖**——依赖缺失时 cordis 令整个插件 fiber 不激活（`Fiber._refresh` → INACTIVE），本插件会连深链与导出工具一起消失，与 `:3912` 已声明的降级语义相抵；而 `ctx.inject` 与 `inject` 在**确定性**上等价（同样等待 provider 完成 `[Service.init]`，cordis/lib/index.js:1306）。**判决可逆**：若设计评审倾向 `inject`，回退为一行改动。
+- **第三处的后续（0.3.9 批次 1，`hardening-and-recovery-design-2026-09-21.md` §4.1 —— 本节的第二半）**：该站点在 0.3.9 被再收紧一层，且这一层的失败语义是 **fail-closed** 而不是降级：**挂载期**要求**双服务齐备**才注册路由——除 `webServer` 外还要 `connection`（平台的信任栅栏，`dsh-client-connection` 的 `requestRejection`：Host/Origin → 403、浏览器鉴权 → 401）。缺任一半（新增 reason code `no-connection` / `no-rejection`）⇒ **不注册路由** + 沿用本节「每个未挂载窗口恰一行 warn」的留痕口径；晚挂从 `ctx.inject(["webServer"])` 改为 `ctx.inject(["webServer", "connection"])`（cordis 在依赖齐备时回调 ⇒ 天然「双到齐才挂」，提供方顺序无关）。**请求期**再加一层纵深：handler 的**首句**实时复检栅栏，取不到或抛错 ⇒ `503` + 不吐数据；非 `GET` ⇒ `405`（`allow: GET`）。**本节的否决理由逐字适用**：`connection` 与 `webServer` 都**不进** `inject` 数组——服务缺失只丢「导出路由」这一个面，导出工具与其余功能照常（设计 §5 B1/B2）。
 
 #### 9.1.4 测试回归锁（说明真实缺口）
 

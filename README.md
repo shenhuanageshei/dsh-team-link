@@ -4,8 +4,8 @@
 >
 > 原名 `dsh-session-link-pro`（0.2.4 及之前），**GitHub 仓库已于 2026-09-18 改名为 `dsh-team-link`**（旧地址由 GitHub 自动重定向）。历史会话日志里的旧工具名 `session_link_pro_*` 与消息 id 前缀 `slp-` 保持原样——它们是取证链，不做回写。
 
-[![tests](https://img.shields.io/badge/tests-889%20%2B%20170%20assertions-brightgreen)](#十测试)
-[![version](https://img.shields.io/badge/version-0.3.7-blue)](CHANGELOG.md)
+[![tests](https://img.shields.io/badge/tests-927%20%2B%20259%20assertions-brightgreen)](#十测试)
+[![version](https://img.shields.io/badge/version-0.3.8-blue)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
 Fork 自 [PwnKY/dsh-session-link](https://github.com/PwnKY/dsh-session-link)——深链复制、`/s/<id>` 打开器与深链上下文注入保留自上游；本仓库在其上长出了完整的多会话协作层。
@@ -89,6 +89,7 @@ flowchart TB
         subgraph Client["浏览器半边 · lib/client.js"]
             CARD["📡 消息卡片<br/>chat.node keyed slot"]
             BTN["会话头部按钮<br/>复制深链 / 导出"]
+            SLOT["侧栏「会话工具」入口<br/>sidebar.footer.action<br/>任意会话：复制 / 导出 / 打开"]
         end
     end
     S1["会话 A（协调者）"] -->|team_link_send| T
@@ -99,6 +100,7 @@ flowchart TB
     T -->|best-effort 镜像| BB[("&lt;workspace&gt;/team/&lt;name&gt;/<br/>roster.md · decisions.md · discipline.md")]
     R --> CARD
     BTN --> R
+    SLOT -->|导航 /team-link/export| R
 ```
 
 要点：
@@ -405,11 +407,38 @@ flowchart TD
 
 复制 `dsh://session/<id>`，粘贴到任意会话即注入该会话的**只读快照**作为上下文。这是上游 `dsh-session-link` 的能力，本仓库保留其解析行为不变（`register-protocol.ps1` / `dsh-open.cmd` 负责协议注册与打开）。
 
+**聚焦这一步**（打开之后真的切到那个会话）**0.3.9 起修复**：此前用的是 `ctx.sessions.open(id)`——会话服务上**没有**这个方法（同名的 `Session.open()` 是历史加载，另一回事），调用抛错被 `try/catch` 吞掉 ⇒ 静默空调用；见[侧栏「会话工具」入口](#侧栏会话工具入口039-起)一节的末段。
+
 ### `team_link_export`
 
 任意会话全量导出：markdown（人可读，含信封首行）+ JSON（无损事件流）。同一个导出能力也挂在 `GET /team-link/export?session=<id>&format=md|json`（会话头部 ⬇ 按钮消费），路由与工具**共用同一个文件名安全不变式**（`fileSafeSessionId()`）。
 
 **下载路由走平台的信任栅栏**（0.3.9 起）：路由只注册给**同时**拿到 `webServer` 与 `connection`（栅栏服务）的宿主，并且**每个请求**都先问一次 `connection.requestRejection(req)`——Host/Origin 栅栏（跨站/DNS rebinding → 403）与浏览器鉴权（未登录 → 401）都由平台裁决，裁决结果**原样写回**（响应体与官方的 RPC 通道一致：401 `unauthorized`、403 `forbidden`）；被拒时**不读会话**。栅栏取不到（服务缺席、没有 `requestRejection`、或它在挂载之后消失）⇒ **503 + 不吐数据**：宁可没有这条路由，也不要一条无门路由。非 GET 方法一律 405（`allow: GET`）。同源且已登录的浏览器下载**行为不变**。
+
+### 侧栏「会话工具」入口（0.3.9 起）
+
+侧栏底部（消耗卡片之下、【设置】之上）多一个入口，点开是**任意会话**的列表：**复制链接 / 导出会话 / 打开会话**——不必先进入那个会话。入口注册进官方槽位 `sidebar.footer.action`（**不改任何官方文件**）。
+
+| 面 | 行为 |
+|---|---|
+| 位置与形态 | `id: team-link-session-tools`、`order: 0`（升序 ⇒ 落在消耗卡片 `order: -10` 之下、【设置】之上）；宽态=图标 + 文字「会话工具」，收起态（56px 轨道）**只渲染图标**，文字转 `aria-label`/`title` |
+| 弹窗 | 官方 **`Modal`**（居中、挂 body——收起态轨道只有 56px，锚定面板会被裁切）：标题 + 当前计数 → 搜索框 → 会话列表（可滚动）→ 有界呈现标注 → 底部（范围切换 + 关闭） |
+| 数据源 | `ctx.sessions.list` / `ctx.workspaces.list`：丢弃 `origin === 'subagent'`、丢弃已归档、丢弃 blank 行、**丢弃当前会话**（本面板的用途是「**其他**会话」——当前会话的复制/导出已在会话头部按钮上；丢弃它之后官方那条「blank 行只在它是当前会话时保留」自然退化为「blank 行一律丢」），按 `updatedAt` 倒序；当前会话 = `retainedBy.mainView > 0` 的那一行（官方同款约定，只用于**定位当前工作区**与**把它从列表里剔除**）；**默认范围 = 当前工作区**，底部可切「全部工作区」 |
+| 列表行 | 状态点（**恰两态**：运行中 / 空闲，唯一数据源 `SessionSummary.running`）+ 标题（超长省略）+ 相对时间（切「全部工作区」时追加工作区名）；「复制链接」「导出会话」**默认隐藏，鼠标悬停该行或该行获得键盘焦点才浮现**；点行本身 = 打开该会话 |
+| 三个动作 | **复制链接** = 剪贴板 `dsh://session/<id>`（与会话头部按钮**同一格式**）+ 短暂「已复制 ✓」+ `aria-live` 播报；**导出会话** = **导航** `GET /team-link/export?session=…&format=md`（同源自动带 cookie、天然过栅栏、零 CORS 面；参数必须编码）；**打开会话** = `ctx.uiWorkspace.openSession(id)` |
+| 三种空态 | **三句不同的话**：读取中… / 没有匹配「xx」的会话 / 暂无其他会话（「还没读到」「搜不到」「真的没有」不许混） |
+| 有界呈现 | 列表上限 **50** 行；超过时在列表末尾写明「**共 N 个，仅显示前 M 个（搜索可收窄）**」 |
+| 服务缺失 | `sessions` / `workspaces` / `uiWorkspace`（以及 seed 模块的 `Modal`）缺任一项 ⇒ **入口不注册 + 一行 warn**，绝不渲染一个点了没反应的假按钮；其余面（深链、消息卡片、头部按钮）照常 |
+| 键盘与无障碍 | Tab 进入、Enter/Space 打开；关闭（Esc / 关闭按钮 / 成功打开）**把焦点还给入口**；动作按钮带独立无障碍名（含会话标题）；尊重 `prefers-reduced-motion` |
+| 边界 | 只做「看 / 复制 / 导出 / 打开」——**不做**会话写操作（改名 / 分叉 / 归档），不加右键菜单，不动会话行内菜单 |
+
+**已知限制**：
+
+1. **收起侧栏 + Windows 标题栏模式**（`[data-windows-titlebar]`）下，官方 CSS 会隐藏整个 `footArea`（连同【设置】）⇒ 本入口一并不可见；展开侧栏即可用。
+2. 状态点**刻意只有两态**：第三态「无活动代理」是**宿主侧**事实（宿主半边读 `ctx.agents.get(id)`），而客户端公开面里 `SessionSummary` 没有 liveness 字段、`SessionProjectionMap` 的三个键也没有，且本插件浏览器半边**没有任何跨半边取数通道** ⇒ 画第三态只能靠编造读数，因此不画（官方侧栏自己的状态点同样不含 liveness，口径一致）。
+3. 入口的可用性取决于三个客户端服务**都**在场（见 §九「浏览器半边的模块声明」）；缺席时按上表「服务缺失」降级。
+
+**深链聚焦修复（§4.4，0.3.9 起）**：用 `dsh://session/<id>` 打开会话时，最后那步「切到该会话」此前**从未生效**——`lib/client.js` 调的是 `ctx.sessions.open(id)`，而会话服务（`ISessions` 公开面）**没有 `open` 方法**（同名的 `Session.open()` 是历史加载，另一回事），调用抛出的 TypeError 被外层 `try/catch` 吞掉 ⇒ **静默空调用**。现在改用公开导航面 `ctx.uiWorkspace.openSession(id)`，**运行时**经 `ctx.inject(["uiWorkspace"], …)` 取用（缺席只丢「聚焦」这一步，不阻断打开），「等会话出现在 `sessions.list` 再聚焦」的重试循环**原样保留**，失败只留一行痕。
 
 ---
 
@@ -676,7 +705,7 @@ sequenceDiagram
 
 **角色面（两个动词都受理任意角色，差别在动词语义上）**：**`revive` 受理任意角色**（0.3.9 批次 2 §4.2 (a) 放开了原来的 coordinator 窄域）——重载拆掉的是**所有**插件自建会话，不只 coordinator 的；而 §11.9.1 只论证过「死的 coordinator 必须可救」，从未论证「死的 worker 不许救活」，那条窄域是**范围最小化选择、不是安全属性**。放开它不移动红线一寸：`revive` 是**身份不变**的操作——不写 roster、不铸令牌、不动 `pairs`/`trustedSenders`/`rememberTargets`、也不碰 `policy`。**所有权门原样不动**（只对插件自建会话开放）。**`reappoint`** 也受理任意角色——授权从不源自 coordinator 身份（唯一来源是对话框里人类那一下点击）。两者的差别在动词上：`revive` = 同一个会话复活（零写），`reappoint` = 换人（令牌 + 快照 + 冻结，走完整 M4）。不带 `role` 时只输出诊断（每角色一行：现任 + 活性 + 在飞令牌），**零副作用**。
 
-**选「自建继任者」时发生什么（§4.2 (c)，与 `successor:"auto"` 逐条同源）**：候选列表**常驻**一项「自建继任者（新建会话）」——它**始终存在**，不是「只在没有活候选时才出现」（事故当场的场候选长度是 **1 不是 0**，条件式触发根本不会激活）。选中后的链路一步不新造：能力闸门（宿主无 `agents.create` ⇒ **fail-closed 报告，本次零创建/零令牌/零 freeze**）→ 按 §10.2.2 铸 id（`team-link-<team>-<role>-<uuid8>`，与 `/team_session`、`successor:"auto"` 同源）→ 交接文档由**插件从 roster 事实**生成五硬节（`mission` / `in-flight` / `commitments` / `unknowns` / `task-and-goal`；读不到的项——前任的进行中工作与 goal、未提交的改动——**如实标未知**，不编造）→ `prepare` 逐字跑 → 审计行 `verb=reappoint`。**代价如实声明**：继任者是**空上下文的新会话**，历史不迁移；信任靠它本人 `claim` 时逐项勾选迁移。收敛性红利：此后每次恢复的终态都是插件自建 id，而插件自建 id 正是 `revive` 的适用域。
+**选「自建继任者」时发生什么（§4.2 (c)：链路的每一步都与既有机制同源，收尾的投递与 `successor:"auto"` 同一条）**：候选列表**常驻**一项「自建继任者（新建会话）」——宿主可编程创建会话时它**始终在列**，不是「只在没有活候选时才出现」（事故当场的候选长度是 **1 不是 0**，条件式触发根本不会激活）。**能力闸门只约束这条支路，不在动词入口**（0.3.9 批次 4 收窄）：宿主没有 `agents.create` ⇒ **弹框照开，只是候选里不出现「自建继任者」**（只列活成员——活成员改任不需要该服务），**仅当连一个活成员候选都没有**时才 fail-closed 报告且零弹框。选中后的链路一步不新造：按 §10.2.2 铸 id（`team-link-<team>-<role>-<uuid8>`，与 `/team_session`、`successor:"auto"` 同源）→ 交接文档由**插件从 roster 事实**生成五硬节（`mission` / `in-flight` / `commitments` / `unknowns` / `task-and-goal`；读不到的项**如实标未知**，不编造——`task-and-goal` 一节填的是 `goals` 服务的读数，读不到才标未知）→ `prepare` 逐字跑 → 审计行 `verb=reappoint` → **用 `followup` 把令牌与交接正文投给刚建出的继任者**（与 `successor:"auto"` 的投递同一条：不是 `inject`，任务需要驱动；消息 `source` 仍恰三成员）。**代价如实声明**：继任者是**空上下文的新会话**，历史不迁移；信任靠它本人 `claim` 时逐项勾选迁移。收敛性红利：此后每次恢复的终态都是插件自建 id，而插件自建 id 正是 `revive` 的适用域。
 
 **发起域（§11.9.5 的「发起 ≠ 授权 ≠ 复权」）**：发起者只能是**该团队现任成员**或**该角色最近一任前任**（发起权不依赖信任、只依赖身份资格；旧任上下文最完整，「回聘旧任」本就是最自然的恢复）。域外的活会话被**拒绝**，拒绝文案点名现任成员集合、该角色的前任与调用会话，并指出**设置 UI（R2 级，用户在那里是超级写者）仍是永远可用的出口**——挡住的只是会话路径，不是人。**代价如实声明**：不属于本队的活会话（人类随手开的、没登记进 roster 的会话）**不能发起恢复**，这是有意的收窄；带 `role` 的诊断读态不受此限（它零写入）。
 
@@ -823,11 +852,15 @@ dev_install_package { dir: "<你的目录>/dsh-team-link", profile: "web" }
 
 DSH 默认装配均有。
 
+**浏览器半边的模块声明（`dsh.client.inject`）**：除既有的 `@deepseek-ai/dsh-client-locale` 与 `@deepseek-ai/dsh-client-ui-conversation`，0.3.9 起另声明三项——`@deepseek-ai/dsh-client-ui-workspace`（会话导航 `uiWorkspace.openSession`）、`@deepseek-ai/dsh-api-session-controller`（`ctx.sessions.list`）、`@deepseek-ai/dsh-api-workspace-controller`（`ctx.workspaces.list`）。三者都随已发布的 web 组合恒在；**服务本身是否可用仍逐项运行时判定**：`ctx.inject(["sessions", "workspaces", "uiWorkspace"], …)` 齐备才注册侧栏入口，缺任一项 ⇒ 入口不注册 + 一行 warn（见 §二）。
+
+纯 React 原子模块 `@deepseek-ai/dsh-client-ui-primitives`（弹窗用的官方 `Modal`、相对时间分桶、剪贴板写入）**不写进** `dsh.client.inject`：它是 shell 的 **seed 模块**（与 react 同级由 shell 注入），官方插件如 `dsh-better-sidebar` 引用它时同样不声明。
+
 ---
 
 ## 十、测试
 
-**当前读数（0.3.8 收口时点，一律取套件自报的那两行）**：`node host-half.test.mjs` → **889**（failed: 0）；`node client-half.test.mjs` → **170**（failed: 0）。
+**当前读数（实跑时点，一律取套件自报的那两行）**：`node host-half.test.mjs` → **927**（failed: 0）；`node client-half.test.mjs` → **259**（failed: 0）。
 
 ```
 node host-half.test.mjs     # 宿主半边：工具面 / 策略 / 换届 / 恢复 / 红线锁
@@ -836,7 +869,7 @@ node client-half.test.mjs   # 浏览器半边：卡片渲染 / 降级路径 / �
 
 两条都是**自报计数**的脚本（结尾打印 `assertion total: N (failed: 0)` 并以退出码表态）；**不要**用 `node --test`（沙箱下 `spawn EPERM`）。
 
-> **逐轮的 红相/绿相 证据账本已移到 [`docs/verification-log.md`](docs/verification-log.md)**——0.3.1 → 0.3.8 每一轮的审计变异、修复前必红读数，以及本仓库的「变异验证」验收文化。本节的定位是**面向读者**：怎么跑、现在多少条、红线是什么。
+> **逐轮的 红相/绿相 证据账本已移到 [`docs/verification-log.md`](docs/verification-log.md)**——0.3.1 → 0.3.9 每一轮的审计变异、修复前必红读数，以及本仓库的「变异验证」验收文化。本节的定位是**面向读者**：怎么跑、现在多少条、红线是什么。
 
 **红线由哪些断言把守**（宿主套件内的源码级与运行时锁）：模块级 `inject` 恒 4 项；投递 `source` 恰三成员；**不引入任何新的会话日志事件类型**；`PolicyConfig` 的键集；`writerGate` 函数体逐字节不变。
 ## 设计文档索引
@@ -844,16 +877,17 @@ node client-half.test.mjs   # 浏览器半边：卡片渲染 / 降级路径 / �
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/team-upgrade-design-2026-09-17.md`](docs/team-upgrade-design-2026-09-17.md) | **实施级设计（v1.4）**：M1–M5 机制、伪代码与 schema、安全边界与红线、验收标准（U1–U11 + 集成演练）、§9 收尾修复设计、会诊 #27 与清单闭合台账 |
-| [`docs/collab-enhancements-design-2026-09-19.md`](docs/collab-enhancements-design-2026-09-19.md) | **协作增强设计**：§10 ① 发送方可见性 **A+D**（已实施，U13–U15 见上）/ ② `/team_session` 自动建队（**已实现**，U16–U19 见上）/ §11 ③a 自动换届主路径（**已实现**，U20–U24 / U28 见上；③b 的恢复工具 `team_link_recover` 见 §11.9.4，**未实施**）——**三项都未发布、未真机验证**（宿主半边与 H1/H3/H4 要等 DSH 重启窗口）。会诊 #37 纪要见 `docs/consult-minutes/2026-09-19-consult-37-minutes.md`，会诊 #43（§11.9 的裁定）见 `docs/consult-minutes/2026-09-20-consult-43-minutes.md` |
+| [`docs/collab-enhancements-design-2026-09-19.md`](docs/collab-enhancements-design-2026-09-19.md) | **协作增强设计**：§10 ① 发送方可见性 **A+D**（已实施，U13–U15 见上）/ ② `/team_session` 自动建队（**已实现**，U16–U19 见上）/ §11 ③a 自动换届主路径（**已实现**，U20–U24 / U28 见上）/ §11.9 ③b 团队恢复工具 `team_link_recover`（**已实现**，0.3.8 随 ③ 一批落地；0.3.9 批次 2 又把 `revive` 的角色面放开到任意角色、给 `reappoint` 加了常驻的「自建继任者」候选）。**发布与验证状态**：①（发送方可见性）0.3.8 已发布并经真机验证（§12.1）；② ③ 的宿主半边要等 DSH 重启窗口；H1/H3/H4 的结论见该档 §12。会诊 #37 纪要见 `docs/consult-minutes/2026-09-19-consult-37-minutes.md`，会诊 #43（§11.9 的裁定）见 `docs/consult-minutes/2026-09-20-consult-43-minutes.md` |
+| [`docs/hardening-and-recovery-design-2026-09-21.md`](docs/hardening-and-recovery-design-2026-09-21.md) | **加固与恢复设计（v1，0.3.9）**：① 导出路由接入平台信任栅栏 · ② 恢复能力加宽（`revive` 角色面 / `reappoint` 自建继任者）· ③ 侧栏「会话工具」入口（§4.3 是本入口 UI/交互的唯一事实源）· ④ 深链聚焦修复（§4.4）；含 §5 红线 B1–B9、§6 判据 U1–U14、§9 假设与待验项、§11 分批。会诊 #62 纪要见 `docs/consult-minutes/2026-09-21-consult-62-minutes.md` |
 | [`docs/team-upgrade-research-2026-09-17.md`](docs/team-upgrade-research-2026-09-17.md) | 调研：一次 16+ 小时真实多会话联调的复盘，与升级提案（**其 §5 已被设计取代**，以设计文档为准） |
 | [`docs/consult-minutes/`](docs/consult-minutes/) | 多模型会诊纪要（含裁定层：逐条采纳/不采纳与理由、分歧父侧裁定、教训、不可验清单） |
-| [`docs/verification-log.md`](docs/verification-log.md) | **验证账本**（证据，不是说明书）：0.3.1 → 0.3.8 逐轮的红相/绿相读数、审计变异矩阵、以及每次真机验证的原始取证（含 0.3.7 那次「静默失效一整天」的完整调试历程） |
+| [`docs/verification-log.md`](docs/verification-log.md) | **验证账本**（证据，不是说明书）：0.3.1 → 0.3.9 逐轮的红相/绿相读数、审计变异矩阵、以及每次真机验证的原始取证（含 0.3.7 那次「静默失效一整天」的完整调试历程） |
 
 ---
 
 ## Changelog
 
-完整变更史见 **[CHANGELOG.md](CHANGELOG.md)**——0.3.1 → 0.3.8 逐版条目，每版按「修了什么 → 为什么 → 怎么验证」组织，行为修复都附**变异验证**证据（修复前必红 / 修复后全绿）。
+完整变更史见 **[CHANGELOG.md](CHANGELOG.md)**——0.3.1 → 0.3.9 逐版条目，每版按「修了什么 → 为什么 → 怎么验证」组织，行为修复都附**变异验证**证据（修复前必红 / 修复后全绿）。
 
 **最近一次发布：0.3.8（2026-09-20）**——发送方可见性（A/D 卡片）· `/team_session` 自动建队 · 自动换届交接（`successor:"auto"` + 交接文档契约）与团队恢复工具 `team_link_recover`，外加真机验证暴露的一批缺陷修复（DEFECT-1…5）。**逐轮红相/绿相读数**见 [`docs/verification-log.md`](docs/verification-log.md)。
 ---

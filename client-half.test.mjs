@@ -27,17 +27,129 @@ function check(label, cond) {
 
 const SOURCE = await readFile(new URL("./lib/client.js", import.meta.url), "utf8");
 
-/** Minimal React stand-in: createElement returns an inspectable plain tree. */
+/** The component instance whose hooks are being read, if any. Outside `mount()`
+ * it stays null and every hook degrades to its initial value with no-op setters —
+ * which is what keeps the plain `component(props)` calls below working. */
+let currentInstance = null;
+/** Elements whose `focus()` was called: §4.3.7's focus-return assertion reads
+ * this instead of trusting the props. */
+const focusCalls = [];
+
+/** Minimal React stand-in: createElement returns an inspectable plain tree, plus a
+ * tiny hook runtime so the stateful faces under test (the sidebar entry, the
+ * dialog) can be DRIVEN — the entry opens on click, the search narrows the list,
+ * a copy flashes — instead of being inspected at their initial state only. */
 const React = {
-	createElement(type, props, ...children) { return { type, props: props === null || props === undefined ? {} : props, children }; },
-	useState(initial) { return [initial, () => {}]; },
+	createElement(type, props, ...children) {
+		const element = { type, props: props === null || props === undefined ? {} : props, children };
+		const ref = element.props.ref;
+		if (ref !== null && ref !== undefined && typeof ref === "object") ref.current = element;
+		element.focus = () => { focusCalls.push(element); };
+		return element;
+	},
+	useState(initial) {
+		const value = typeof initial === "function" ? initial() : initial;
+		if (currentInstance === null) return [value, () => {}];
+		const instance = currentInstance;
+		const index = instance.hookIndex++;
+		if (!(index in instance.hooks)) instance.hooks[index] = value;
+		return [instance.hooks[index], (next) => {
+			instance.hooks[index] = typeof next === "function" ? next(instance.hooks[index]) : next;
+			instance.render();
+		}];
+	},
+	useRef(initial) {
+		if (currentInstance === null) return { current: initial };
+		const instance = currentInstance;
+		const index = instance.hookIndex++;
+		if (!(index in instance.hooks)) instance.hooks[index] = { current: initial };
+		return instance.hooks[index];
+	},
+	useSyncExternalStore(_subscribe, getSnapshot) { return getSnapshot(); },
 	useCallback(fn) { return fn; },
 	Fragment: Symbol("Fragment"),
 };
 
+/** Render one component through a live hook instance. `instance.tree` is the
+ * component's own element tree, re-read after every state update its handlers
+ * trigger. */
+function mount(Comp, props) {
+	const instance = { hooks: [], hookIndex: 0, tree: null };
+	instance.render = () => {
+		instance.hookIndex = 0;
+		const previous = currentInstance;
+		currentInstance = instance;
+		try {
+			instance.tree = Comp(props);
+		} finally {
+			currentInstance = previous;
+		}
+	};
+	instance.render();
+	return instance;
+}
+
+/** Walk an UNFLATTENED element tree (function-typed elements stay unexpanded, so
+ * their own state can be driven afterwards). */
+function rawFind(tree, test) {
+	if (tree === null || tree === undefined || typeof tree !== "object") return null;
+	if (Array.isArray(tree)) {
+		for (const child of tree) {
+			const hit = rawFind(child, test);
+			if (hit !== null) return hit;
+		}
+		return null;
+	}
+	if (test(tree)) return tree;
+	return rawFind(tree.children, test);
+}
+
+/** First node in a FLATTENED tree with this element type ("modal", "div", …). */
+function treeByType(tree, type) {
+	if (tree === null || tree === undefined || typeof tree !== "object") return null;
+	if (Array.isArray(tree)) {
+		for (const child of tree) {
+			const hit = treeByType(child, type);
+			if (hit !== null) return hit;
+		}
+		return null;
+	}
+	if (tree.type === type) return tree;
+	return treeByType(tree.children, type);
+}
+
 function createElementStub() {
 	return { dataset: {}, style: {}, textContent: "", setAttribute() {}, appendChild() {} };
 }
+
+/** The shell's SEED module of pure atoms (§4.3.5: required, never declared in
+ * `dsh.client.inject`). `Modal` renders body + footer into one inspectable tree
+ * the way the real, body-portaled one does; `writeClipboard` records instead of
+ * writing; `relativeTime` is the official bucketing contract (unit + n). */
+const clipboardWrites = [];
+const primitivesStub = {
+	Modal(props) {
+		return {
+			type: "modal",
+			props,
+			children: [props.children === undefined ? null : props.children, props.footer === undefined ? null : props.footer],
+		};
+	},
+	relativeTime(at, now) {
+		const minutes = Math.floor((now - at) / 60000);
+		if (minutes < 1) return { unit: "now", n: 0 };
+		if (minutes < 60) return { unit: "minutes", n: minutes };
+		const hours = Math.floor(minutes / 60);
+		if (hours < 24) return { unit: "hours", n: hours };
+		const days = Math.floor(hours / 24);
+		if (days < 30) return { unit: "days", n: days };
+		const months = Math.floor(days / 30);
+		return months < 12 ? { unit: "months", n: months } : { unit: "years", n: Math.floor(months / 12) };
+	},
+	writeClipboard(text) { clipboardWrites.push(text); return Promise.resolve(true); },
+	IconLinkOutline16(props) { return { type: "icon16", props, children: [] }; },
+	IconLinkOutline14(props) { return { type: "icon14", props, children: [] }; },
+};
 
 const styleTags = [];
 const documentStub = {
@@ -61,10 +173,15 @@ new Function("window", "document", SOURCE)(windowStub, documentStub);
 check("client bundle registers its module definition", definition !== null && definition.id === "dsh-team-link");
 check("client bundle exposes a factory", definition !== null && typeof definition.factory === "function");
 
+let primitivesAvailable = true;
 const required = [];
 const moduleExports = definition.factory((specifier) => {
 	required.push(specifier);
 	if (specifier === "react") return React;
+	if (specifier === "@deepseek-ai/dsh-client-ui-primitives") {
+		if (primitivesAvailable === true) return primitivesStub;
+		throw new Error("seed module not served by this shell");
+	}
 	throw new Error(`unstubbed require: ${specifier}`);
 });
 check("factory only requires react", required.length === 1 && required[0] === "react");
@@ -89,6 +206,39 @@ const uiConversationStub = {
 		register(definition) { definitionRegistrations += 1; registeredDefinition = definition; return () => {}; },
 	},
 };
+/** The three client services §4.3.5 reads at runtime. `sessions` deliberately
+ * carries NO `open()`: the real ISessions face (dsh-api-session-controller
+ * contract/sessions.d.ts) has none — that absence IS the §4.4 defect, and a stub
+ * that invented the method would hide it. */
+const sessionsServiceStub = { list: { getSnapshot() { return { ids: [], byId: {}, phase: "ready" }; } } };
+const workspacesServiceStub = { list: { getSnapshot() { return { items: [], archivedSessionIds: [] }; } } };
+const uiWorkspaceServiceStub = { openSession() {} };
+
+/** The scoped context cordis hands an `inject` callback: every service the
+ * callback asked for, readable both as a property and through `get` (the real
+ * nested context carries the parent's services, a fact §4.3.5 relies on). */
+function scopedContext(overrides = {}) {
+	const scope = {
+		uiConversation: uiConversationStub,
+		sessions: sessionsServiceStub,
+		workspaces: workspacesServiceStub,
+		uiWorkspace: uiWorkspaceServiceStub,
+		...overrides,
+	};
+	scope.get = (name) => scope[name];
+	return scope;
+}
+
+/** The same three services through `ctx.get` — the immediate, time-point read. */
+function serviceGet(name, overrides = {}) {
+	if (overrides[name] === null) return undefined;
+	if (Object.prototype.hasOwnProperty.call(overrides, name)) return overrides[name];
+	if (name === "sessions") return sessionsServiceStub;
+	if (name === "workspaces") return workspacesServiceStub;
+	if (name === "uiWorkspace") return uiWorkspaceServiceStub;
+	return undefined;
+}
+
 const ctx = {
 	effect(fn) { const disposer = fn(); return typeof disposer === "function" ? disposer : () => {}; },
 	locale: {
@@ -100,15 +250,17 @@ const ctx = {
 		register(options, component) { registrations.push({ options, component }); return () => {}; },
 		entries() { return []; },
 	},
-	sessions: { list: { getSnapshot() { return { byId: {} }; } }, open() {} },
+	sessions: sessionsServiceStub,
+	get(name) { return serviceGet(name); },
 	// cordis: `inject` runs the callback on the context that holds the services.
 	// The stub is the "already active" case.
-	inject(_specs, callback) { return callback({ uiConversation: uiConversationStub }); },
+	inject(_specs, callback) { return callback(scopedContext()); },
 };
 
 moduleExports.apply(ctx);
 const nodeSlot = registrations.find((entry) => entry.options.name === "conversation.chat.node");
 const headerSlot = registrations.find((entry) => entry.options.name === "conversation.session.header.actions");
+const sessionToolsSlot = registrations.find((entry) => entry.options.name === "sidebar.footer.action");
 check("relay card shadows the keyed context slot", nodeSlot !== undefined && nodeSlot.options.key === "context" && nodeSlot.options.priority === -100);
 check("header action strip still registered", headerSlot !== undefined);
 check("styles injected once", styleTags.length === 1 && String(styleTags[0].textContent).includes(".dshsl-relay{"));
@@ -889,10 +1041,12 @@ function applyWith(overrides = {}) {
 			},
 			entries() { return []; },
 		},
-		sessions: { list: { getSnapshot() { return { byId: {} }; } }, open() {} },
+		sessions: sessionsServiceStub,
+		get(name) { return serviceGet(name); },
 		// cordis `inject`: the default models "every service is there"; the cases
-		// below override it to model a shell that lacks `uiConversation`.
-		inject(_specs, callback) { return callback({ uiConversation: uiConversationStub }); },
+		// below override it to model a shell that lacks a service — §4.3.5's three,
+		// or `uiConversation`.
+		inject(_specs, callback) { return callback(scopedContext()); },
 		...ctxOverrides,
 	};
 	const realWarn = console.warn;
@@ -916,7 +1070,7 @@ function applyWith(overrides = {}) {
 const refusing = applyWith({ inject(_specs, callback) { return callback({ uiConversation: { events: { register() { throw new Error("registry refused"); } } } }); } });
 check("U15: a registry that REFUSES the definition does not throw out of apply()", refusing.thrown === null);
 check("U15: ... it costs only the top-level card, and says so once in the browser console", refusing.warnings.length === 1 && refusing.warnings[0].includes("uiConversation.events.register") && refusing.warnings[0].includes("top-level message card stays off"));
-check("U15: ... while every other registration still lands (the header strip, the tool row, both chat rows)", refusing.fresh.length === 4 && refusing.fresh.filter((entry) => entry.options.name === "conversation.chat.node").length === 2 && refusing.fresh.some((entry) => entry.options.name === "tool.call.toolview" && entry.options.key === "team_link_send"));
+check("U15: ... while every other registration still lands (the header strip, the tool row, both chat rows, the §4.3 sidebar entry)", refusing.fresh.length === 5 && refusing.fresh.filter((entry) => entry.options.name === "conversation.chat.node").length === 2 && refusing.fresh.some((entry) => entry.options.name === "tool.call.toolview" && entry.options.key === "team_link_send"));
 // --- F3 (差异审计): the missing service costs the TOP-LEVEL CARD only --------
 // Pre-F3 the module-level `inject` array carried `uiConversation`, so a shell
 // without that service never ran `apply()` at all: the header strip, the export
@@ -925,13 +1079,13 @@ check("U15: ... while every other registration still lands (the header strip, th
 // cordis's `ctx.inject` (registry mixin, `cordis/lib/index.js:743`), and a
 // callback whose deps are unmet simply never runs.
 const serviceless = applyWith({ inject(_specs, callback) { return callback({}); } });
-check("F3: a shell without the uiConversation service loses ONLY the top-level card — no definition is registered, the other four registrations all land", serviceless.thrown === null && serviceless.warnings.length === 0 && serviceless.fresh.length === 4 && serviceless.definitionCalls === 0 && serviceless.fresh.some((entry) => entry.options.name === "tool.call.toolview") && serviceless.fresh.some((entry) => entry.options.name === "conversation.chat.node" && entry.options.key === "context"));
+check("F3: a shell without the uiConversation service loses ONLY the top-level card — no definition is registered, the other registrations all land", serviceless.thrown === null && serviceless.warnings.length === 0 && serviceless.fresh.length === 5 && serviceless.definitionCalls === 0 && serviceless.fresh.some((entry) => entry.options.name === "tool.call.toolview") && serviceless.fresh.some((entry) => entry.options.name === "conversation.chat.node" && entry.options.key === "context"));
 // The real cordis shape when the service is absent (or not yet provided): the
 // injected callback is never called at all and nothing throws.
 const waiting = applyWith({ inject() { return undefined; } });
-check("F3: ... and a context whose inject callback never fires (the real cordis shape without the service) still applies to completion with the same registrations", waiting.thrown === null && waiting.warnings.length === 0 && waiting.fresh.length === 4 && waiting.definitionCalls === 0);
+check("F3: ... and a context whose inject callback never fires (the real cordis shape without the service) still applies to completion with the same registrations", waiting.thrown === null && waiting.warnings.length === 0 && waiting.fresh.length === 5 && waiting.definitionCalls === 0);
 const injectless = applyWith({ inject: undefined });
-check("U15: a client context that cannot inject at all is still applied to completion", injectless.thrown === null && injectless.warnings.length === 0 && injectless.fresh.length === 4 && injectless.definitionCalls === 0);
+check("U15: a client context that cannot inject at all is still applied to completion", injectless.thrown === null && injectless.warnings.length === 0 && injectless.fresh.length === 5 && injectless.definitionCalls === 0);
 check("F3: the module-level inject array is back to the three services apply() cannot live without — uiConversation is NOT one of them (a hard dependency here would kill the whole client half)", moduleExports.inject.join(",") === "slots,sessions,locale" && moduleExports.inject.indexOf("uiConversation") === -1);
 check("F3: the definition still reaches the registry through the dynamic injection when the service IS there (the §10.1.5 contract is a fallback, not a removal)", moduleExports.inject.indexOf("uiConversation") === -1 && registeredDefinition !== null && registeredDefinition.kind === "team-link-send");
 
@@ -943,19 +1097,19 @@ check("F3: the definition still reaches the registry through the dynamic injecti
 const names = (result) => result.fresh.map((entry) => entry.options.name === "conversation.chat.node" ? `${entry.options.name}:${entry.options.key}` : entry.options.name).sort().join(",");
 const toolRowRefused = applyWith({ refuseRegister: (options) => options.name === "tool.call.toolview" });
 check("B3: a refused tool row does not abort apply()", toolRowRefused.thrown === null);
-check("B3: ... and the two chat rows plus the header strip still land (3 of 4, minus the refused one)", names(toolRowRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.session.header.actions" && toolRowRefused.warnings.length === 1 && toolRowRefused.warnings[0].includes("tool.call.toolview") && toolRowRefused.warnings[0].includes("other slots are unaffected"));
+check("B3: ... and the two chat rows, the header strip and the §4.3 entry still land (4 of 5, minus the refused one)", names(toolRowRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.session.header.actions,sidebar.footer.action" && toolRowRefused.warnings.length === 1 && toolRowRefused.warnings[0].includes("tool.call.toolview") && toolRowRefused.warnings[0].includes("other slots are unaffected"));
 check("B3: ... and the top-level definition is unaffected by a slot refusal (the faces degrade independently)", toolRowRefused.definitionCalls === 1);
 const relayRowRefused = applyWith({ refuseRegister: (options) => options.name === "conversation.chat.node" && options.key === "context" });
-check("B3: a refused receiver card costs that row alone — the tool row and the top-level card still land", relayRowRefused.thrown === null && names(relayRowRefused) === "conversation.chat.node:team-link-send,conversation.session.header.actions,tool.call.toolview" && relayRowRefused.warnings.length === 1 && relayRowRefused.warnings[0].includes("conversation.chat.node") && relayRowRefused.definitionCalls === 1);
+check("B3: a refused receiver card costs that row alone — the tool row and the top-level card still land", relayRowRefused.thrown === null && names(relayRowRefused) === "conversation.chat.node:team-link-send,conversation.session.header.actions,sidebar.footer.action,tool.call.toolview" && relayRowRefused.warnings.length === 1 && relayRowRefused.warnings[0].includes("conversation.chat.node") && relayRowRefused.definitionCalls === 1);
 const topRowRefused = applyWith({ refuseRegister: (options) => options.name === "conversation.chat.node" && options.key === "team-link-send" });
-check("B3: a refused top-level row costs that row alone — the two other registrations still land", topRowRefused.thrown === null && names(topRowRefused) === "conversation.chat.node:context,conversation.session.header.actions,tool.call.toolview" && topRowRefused.warnings.length === 1 && topRowRefused.warnings[0].includes("team-link-send"));
+check("B3: a refused top-level row costs that row alone — the two other registrations still land", topRowRefused.thrown === null && names(topRowRefused) === "conversation.chat.node:context,conversation.session.header.actions,sidebar.footer.action,tool.call.toolview" && topRowRefused.warnings.length === 1 && topRowRefused.warnings[0].includes("team-link-send"));
 const injectRefused = applyWith({ refuseInject: (name) => name === "tool.call.toolview" });
-check("B3: a THROWING `slots.inject` is caught too (the tool row is the only casualty)", injectRefused.thrown === null && names(injectRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.session.header.actions" && injectRefused.warnings.length === 1 && injectRefused.warnings[0].includes("slots.inject refused"));
+check("B3: a THROWING `slots.inject` is caught too (the tool row is the only casualty)", injectRefused.thrown === null && names(injectRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.session.header.actions,sidebar.footer.action" && injectRefused.warnings.length === 1 && injectRefused.warnings[0].includes("slots.inject refused"));
 // The header strip is the FOURTH registration and the first to run: unguarded, a
 // refusal there aborted the tool row, both chat rows and the deep-link opener
 // (round-1 🔵 #3 — the asymmetry B3 exists to remove).
 const headerRefused = applyWith({ refuseRegister: (options) => options.name === "conversation.session.header.actions" });
-check("B3: a refused HEADER strip costs that row alone — all three §10.1 registrations still land", headerRefused.thrown === null && names(headerRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,tool.call.toolview" && headerRefused.warnings.length === 1 && headerRefused.warnings[0].includes("conversation.session.header.actions") && headerRefused.warnings[0].includes("other slots are unaffected"));
+check("B3: a refused HEADER strip costs that row alone — all three §10.1 registrations still land", headerRefused.thrown === null && names(headerRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,sidebar.footer.action,tool.call.toolview" && headerRefused.warnings.length === 1 && headerRefused.warnings[0].includes("conversation.session.header.actions") && headerRefused.warnings[0].includes("other slots are unaffected"));
 check("B3: ... and the top-level definition still registers (the strip is not on the definition's path)", headerRefused.definitionCalls === 1);
 
 // --- dictionary parity (the copy both faces render comes from one place) -----
@@ -968,6 +1122,392 @@ check("U14: the zh and en dictionaries declare the same key set (a missing trans
 // entry (the same「一处事实」discipline the retired equality assertion was about).
 const outcomePhraseKeysPresent = OUTCOME_PHRASE_KEYS.every((key) => zhKeys.includes(key) && enKeys.includes(key));
 check("U14: the row's new copy is declared in BOTH dictionaries, and the retired row keys are gone from both (no dead entry left by the rewrite)", outcomePhraseKeysPresent && ["sendResultDelivered", "sendResultRefused", "sendResultNoAgent", "sendResultNoHolder", "sendBusyBadge", "sendBusyBadgeUnknown"].every((key) => zhKeys.includes(key) && enKeys.includes(key)) && ["sendBusyMinutes", "sendBusyUnknown", "outcomeDelivered", "outcomeRefused", "outcomeNoAgent", "outcomeNoHolder"].every((key) => !zhKeys.includes(key) && !enKeys.includes(key)));
+
+// ---------------------------------------------------------------------------
+// §4.3 sidebar「会话工具」(session tools) — the entry, the dialog, the actions.
+// The design doc is the single source of truth for this UI (§4.3.1–§4.3.7);
+// every assertion names the clause it pins.
+// ---------------------------------------------------------------------------
+
+const tools = moduleExports.__testing;
+check("§4.3 可测面: the bundle exposes the frozen client testing surface the pure rules are judged through", tools !== undefined && tools !== null && typeof tools.visibleSessionRows === "function" && typeof tools.emptySessionToolsState === "function");
+// Y7 discipline: this file must also run against a build WITHOUT the §4.3 surface
+// (the red phase), so every call into it is type-guarded first — a crash would
+// hide the assertion count instead of reporting the missing face.
+const t9 = tools === undefined || tools === null ? {} : tools;
+const pure = (name) => (...args) => (typeof t9[name] === "function" ? t9[name](...args) : undefined);
+const visibleSessionRows = pure("visibleSessionRows");
+const filterSessionRows = pure("filterSessionRows");
+const sessionToolsBoundNote = pure("sessionToolsBoundNote");
+const sessionDotState = pure("sessionDotState");
+const relativeTimeText = pure("relativeTimeText");
+const makeSessionToolsDialog = pure("makeSessionToolsDialog");
+const makeSessionToolsEntry = pure("makeSessionToolsEntry");
+const navCalls = [];
+/** A scene: the two snapshots §4.3.2 reads plus the navigation face. */
+function scene(list, workspaceState) {
+	return {
+		sessions: { list: { getSnapshot: () => list, subscribe: () => () => {} } },
+		workspaces: { list: { getSnapshot: () => workspaceState, subscribe: () => () => {} } },
+		uiWorkspace: { openSession(id) { navCalls.push(id); } },
+	};
+}
+/** Every className in a flattened subtree, in document order. */
+function allClasses(tree) {
+	if (tree === null || tree === undefined || typeof tree !== "object") return [];
+	if (Array.isArray(tree)) return tree.flatMap(allClasses);
+	const here = tree.props !== undefined && typeof tree.props.className === "string" ? [tree.props.className] : [];
+	return [...here, ...allClasses(tree.children)];
+}
+/** Open the entry the way a user does (click) and mount the dialog it rendered. */
+function openDialog(entry) {
+	const button = entry.tree.children[0];
+	button.props.onClick();
+	const element = entry.tree.children[1];
+	if (element === null || element === undefined) return null;
+	return { element, instance: mount(element.type, element.props) };
+}
+/** One dialog over one scene, mounted and ready to be driven. */
+function dialogOver(list, workspaceState) {
+	return mount(makeSessionToolsDialog(scene(list, workspaceState), primitivesStub), { t: tZh, onClose() {} });
+}
+const fill = (template, key, value) => String(template).split("{" + key + "}").join(String(value));
+const rowOf = (id, over = {}) => ({ id, displayTitle: "会话 " + id, updatedAt: 2000, running: false, retainedBy: { mainView: 0 }, blank: false, ...over });
+const curOf = (id, over = {}) => rowOf(id, { displayTitle: "当前 " + id, updatedAt: 3000, retainedBy: { mainView: 1 }, ...over });
+const listOf = (ids, byId, phase = "ready") => ({ ids, byId, phase });
+const NO_WORKSPACES = { items: [], archivedSessionIds: [] };
+const popularList = listOf(["session-cur", "session-a", "session-b"], { "session-cur": curOf("session-cur"), "session-a": rowOf("session-a"), "session-b": rowOf("session-b") });
+
+// The whole §4.3 block below needs the surface to exist. The RED phase runs this
+// file against a build without it, so the guard is explicit: the missing faces are
+// reported as failures FIRST (never as a crash), and the detailed assertions then
+// run only where they can actually judge something.
+const sessionToolsSurfacePresent = typeof t9.makeSessionToolsEntry === "function" && typeof t9.makeSessionToolsDialog === "function" && typeof t9.visibleSessionRows === "function" && typeof t9.filterSessionRows === "function" && typeof t9.sessionToolsBoundNote === "function" && typeof t9.sessionDotState === "function" && typeof t9.relativeTimeText === "function" && typeof t9.emptySessionToolsState === "function" && sessionToolsSlot !== undefined;
+check("§4.3 红相守卫: the「会话工具」entry is registered into the official sidebar.footer.action slot", sessionToolsSlot !== undefined);
+check("§4.3 红相守卫: the entry component factory exists (makeSessionToolsEntry)", typeof t9.makeSessionToolsEntry === "function");
+check("§4.3 红相守卫: the dialog component factory exists (makeSessionToolsDialog)", typeof t9.makeSessionToolsDialog === "function");
+check("§4.3 红相守卫: the selection/ordering rule exists (visibleSessionRows)", typeof t9.visibleSessionRows === "function");
+check("§4.3 红相守卫: the search rule exists (filterSessionRows)", typeof t9.filterSessionRows === "function");
+check("§4.3 红相守卫: the three-sentence emptiness rule exists (emptySessionToolsState)", typeof t9.emptySessionToolsState === "function");
+check("§4.3 红相守卫: the bounded-presentation rule exists (sessionToolsBoundNote)", typeof t9.sessionToolsBoundNote === "function");
+check("§4.3 红相守卫: the two-state status dot rule exists (sessionDotState)", typeof t9.sessionDotState === "function");
+check("§4.3 红相守卫: the relative-time wording helper exists (relativeTimeText)", typeof t9.relativeTimeText === "function");
+if (sessionToolsSurfacePresent) {
+	// --- U12: registration, and the refusal to register a fake button -----------
+	check("U12: the「会话工具」entry is registered into the official sidebar.footer.action slot", sessionToolsSlot !== undefined);
+	check("U12: ... exactly once", registrations.filter((entry) => entry.options.name === "sidebar.footer.action").length === 1);
+	check("U12: ... with the design's id and order (0 = below the usage card's -10 and above 【设置】)", sessionToolsSlot.options.id === "team-link-session-tools" && sessionToolsSlot.options.order === 0 && sessionToolsSlot.options.order > -10);
+	check("U12: ... in this plugin's locale namespace (that is where its t comes from)", sessionToolsSlot.options.locale === "dsh-team-link");
+	check("U12: ... and the slot/id/order/limit are the literals the design names (the testing surface IS the registration's own literal)", t9.SESSION_TOOLS_SLOT === "sidebar.footer.action" && t9.SESSION_TOOLS_ID === "team-link-session-tools" && t9.SESSION_TOOLS_ORDER === 0 && t9.SESSION_TOOLS_LIMIT === 50);
+	check("U12: the gap rule names every service §4.3.5 requires — nothing present means all three are reported, everything present means none", JSON.stringify(pure("sessionToolsGaps")(undefined, primitivesStub)) === JSON.stringify(["sessions", "workspaces", "uiWorkspace"]) && JSON.stringify(pure("sessionToolsGaps")(scene(popularList, NO_WORKSPACES), primitivesStub)) === "[]");
+
+	const missingServices = applyWith({
+		get(name) { return name === "sessions" ? sessionsServiceStub : undefined; },
+		inject() { return undefined; },
+	});
+	check("U12: with any of the three services missing the entry is NOT registered at all (a fake button is worse than no button)", missingServices.thrown === null && missingServices.fresh.every((entry) => entry.options.name !== "sidebar.footer.action"));
+	check("U12: ... and exactly ONE console line names what is missing (§4.3.6)", missingServices.warnings.length === 1 && missingServices.warnings[0].includes("sidebar.footer.action") && missingServices.warnings[0].includes("missing workspaces, uiWorkspace") && missingServices.warnings[0].includes("NOT registered"));
+	check("U12: ... while every other face of this plugin still registers (N1: one face lost, never the plugin)", names(missingServices) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.session.header.actions,tool.call.toolview");
+
+	const lateServices = applyWith({
+		get() { return undefined; },
+		inject(_specs, callback) { return callback(scopedContext()); },
+	});
+	check("U12: a shell whose services are not active yet lands the entry when they complete — and still owes only ONE line for the one window", lateServices.warnings.length === 1 && lateServices.fresh.some((entry) => entry.options.name === "sidebar.footer.action"));
+
+	primitivesAvailable = false;
+	const noPrimitives = applyWith();
+	primitivesAvailable = true;
+	check("U12: a shell whose seed module carries no Modal does not register the entry either — no dialog, no entry", noPrimitives.fresh.every((entry) => entry.options.name !== "sidebar.footer.action") && noPrimitives.warnings.length === 1 && noPrimitives.warnings[0].includes("ui-primitives(Modal)"));
+	check("U12: ... and loses nothing else", names(noPrimitives) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.session.header.actions,tool.call.toolview");
+	check("U12: this half's module graph is exactly react plus the seed module — no injected package is required from the bundle", [...new Set(required)].sort().join(",") === ["@deepseek-ai/dsh-client-ui-primitives", "react"].join(","));
+
+	// --- §4.3.1: the entry's two faces (wide row vs 56px rail) ------------------
+	const emptyScope = scene(listOf([], {}, "ready"), NO_WORKSPACES);
+	const entryFactory = makeSessionToolsEntry(emptyScope, primitivesStub);
+	const wideEntry = mount(entryFactory, { wide: true, t: tZh });
+	const wideButton = wideEntry.tree.children[0];
+	check("§4.3.1: the entry is a real button carrying the label as aria-label and title", wideButton.type === "button" && wideButton.props.type === "button" && wideButton.props.className === "dshsl-st-entry" && wideButton.props["aria-label"] === tZh("sessionTools") && wideButton.props.title === tZh("sessionTools"));
+	check("§4.3.1: ... announcing the dialog it opens (aria-haspopup / aria-expanded)", wideButton.props["aria-haspopup"] === "dialog" && wideButton.props["aria-expanded"] === "false");
+	check("§4.3.1: the wide column renders the glyph AND the text label (【设置】's wide face)", wideButton.props["data-wide"] === "true" && wideButton.children.filter((child) => child !== null).length === 2 && wideButton.children[1].props.className === "dshsl-st-label" && treeText(wideButton.children[1]) === tZh("sessionTools"));
+	const railEntry = mount(entryFactory, { wide: false, t: tZh });
+	const railButton = railEntry.tree.children[0];
+	check("§4.3.1: the collapsed 56px rail renders the glyph ALONE — the label moves into aria-label/title", railButton.props["data-wide"] === "false" && railButton.children.filter((child) => child !== null).length === 1 && railButton.props["aria-label"] === tZh("sessionTools") && railButton.props.title === tZh("sessionTools"));
+
+	// --- §4.3.2: the dialog, opened from the entry ------------------------------
+	const opened = openDialog(wideEntry);
+	check("§4.3.1: clicking the entry opens the dialog and flips aria-expanded", opened !== null && wideEntry.tree.children[0].props["aria-expanded"] === "true");
+	const openedTree = flatten(opened.instance.tree);
+	const modal = treeByType(openedTree, "modal");
+	check("§4.3.2: the dialog is the official body-portaled Modal (an anchored panel would be clipped by the 56px rail)", modal !== null && modal.props.title === tZh("sessionTools") && modal.props.closeLabel === tZh("sessionToolsClose") && typeof modal.props.onClose === "function");
+	check("§4.3.2: ... carrying the description sentence, which states the non-goal (read/copy/export only)", modal.props.description === tZh("sessionToolsDescription") && modal.props.description.includes("不改名"));
+	check("§4.3.2: the body follows the design's order — header count, search, list/empty, bounded note, live line — with the footer last", JSON.stringify(allClasses(modal)) === JSON.stringify(["dshsl-st-count", "dshsl-st-search", "dshsl-st-empty", "dshsl-st-live", "dshsl-st-foot", "dshsl-st-range", "dshsl-st-close"]));
+	check("§4.3.2: the header carries the current count", treeText(treeByClass(openedTree, "dshsl-st-count")) === fill(tZh("sessionToolsCount"), "count", 0));
+	check("§4.3.2: the search box is a labelled search input", treeByClass(openedTree, "dshsl-st-search").props.type === "search" && treeByClass(openedTree, "dshsl-st-search").props["aria-label"] === tZh("sessionToolsSearch"));
+
+	// --- U13 (§4.3.6, N7): the three emptinesses are three different sentences ---
+	const loadingTree = flatten(dialogOver(listOf(["session-cur"], { "session-cur": curOf("session-cur") }, "pending"), NO_WORKSPACES).tree);
+	const loadingText = treeText(treeByClass(loadingTree, "dshsl-st-empty"));
+	check("U13: an unread list says「读取中…」and never presents itself as an empty list", loadingText === tZh("sessionToolsLoading") && treeByClass(loadingTree, "dshsl-st-list") === null);
+
+	const noMatchDialog = dialogOver(popularList, NO_WORKSPACES);
+	treeByClass(flatten(noMatchDialog.tree), "dshsl-st-search").props.onChange({ target: { value: "zzz" } });
+	const noMatchTree = flatten(noMatchDialog.tree);
+	const noMatchText = treeText(treeByClass(noMatchTree, "dshsl-st-empty"));
+	check("U13: a search that matches nothing says so WITH the query — and is not shown as an empty list", noMatchText === fill(tZh("sessionToolsNoMatch"), "query", "zzz") && noMatchText.includes("zzz") && treeByClass(noMatchTree, "dshsl-st-list") === null);
+
+	// The third sentence fires when the visible set is EMPTY. It is genuinely empty
+	// when every row is dropped by §4.3.2's rule — here: the whole account archived.
+	const noneText = treeText(treeByClass(flatten(dialogOver(listOf(["session-cur", "session-b"], { "session-cur": curOf("session-cur"), "session-b": rowOf("session-b") }), { items: [], archivedSessionIds: ["session-cur", "session-b"] }).tree), "dshsl-st-empty"));
+	// G 语义变更（批次 4 / owner 裁定 ③ / §4.3.2）: the list is about the OTHER sessions,
+	// so the current one is dropped. The old assertion here pinned the opposite reading
+	// (「当前会话和其他会话一样」⇒ 单独在场时画出那一行）—— it is rewritten, not deleted,
+	// and its replacement states both halves: the only-current list is EMPTY, while a
+	// list with other sessions is not.
+	const onlyCurrentTree = flatten(dialogOver(listOf(["session-cur"], { "session-cur": curOf("session-cur") }), NO_WORKSPACES).tree);
+	check("G: 只剩当前会话 ⇒ 显示「暂无其他会话」并一行都不画（丢弃当前会话，而不是把它列出来）", (() => {
+		const emptyNode = treeByClass(onlyCurrentTree, "dshsl-st-empty");
+		const rows = treeAllByClass(onlyCurrentTree, "dshsl-st-row");
+		const ok = treeText(emptyNode) === tZh("sessionToolsNone") && rows.length === 0 && treeText(treeByClass(onlyCurrentTree, "dshsl-st-count")) === fill(tZh("sessionToolsCount"), "count", 0);
+		return ok || (console.log(`     实测读数 ${JSON.stringify({ empty: treeText(emptyNode), rows: rows.map((row) => row.props["data-session"]) })}`), false);
+	})());
+	const otherSessionsTree = flatten(dialogOver(popularList, NO_WORKSPACES).tree);
+	check("G 对照: 有**其他**会话时列表照常非空、不显示空态句——丢弃的只是当前会话本身", treeByClass(otherSessionsTree, "dshsl-st-empty") === null && treeAllByClass(otherSessionsTree, "dshsl-st-row").length === 2 && treeAllByClass(otherSessionsTree, "dshsl-st-row").every((row) => row.props["data-session"] !== "session-cur"));
+	check("U13: a range with no OTHER session says「暂无其他会话」(the third sentence)", noneText === tZh("sessionToolsNone"));
+	check("U13: the three sentences are three DIFFERENT sentences and none of them leaks a dictionary key (N7)", new Set([loadingText, noMatchText, noneText]).size === 3 && [loadingText, noMatchText, noneText].every((text) => typeof text === "string" && text.length > 0 && text.indexOf("sessionTools") !== 0));
+	check("U13: ... and they are the sentences the design names", loadingText.includes("读取中") && noMatchText.includes("没有匹配") && noneText.includes("暂无其他会话"));
+
+	// --- U13/§4.3.6 (N6): a bounded presentation must SAY it is bounded ----------
+	const manyIds = Array.from({ length: 60 }, (_, i) => "session-" + String(i).padStart(3, "0"));
+	const manyById = {};
+	manyIds.forEach((id, i) => { manyById[id] = rowOf(id, { updatedAt: 1000 + i }); });
+	const manyTree = flatten(dialogOver(listOf(manyIds, manyById), NO_WORKSPACES).tree);
+	check("U13: over the display cap the list says「共 N 个，仅显示前 M 个（搜索可收窄）」with the TRUE total", treeText(treeByClass(manyTree, "dshsl-st-bound")) === fill(fill(tZh("sessionToolsBound"), "total", 60), "shown", 50));
+	check("U13: ... draws exactly the cap's rows, and the header count is the number actually drawn", treeAllByClass(manyTree, "dshsl-st-row").length === 50 && treeText(treeByClass(manyTree, "dshsl-st-count")) === fill(tZh("sessionToolsCount"), "count", 50));
+	const atCapIds = manyIds.slice(0, 50);
+	const atCapTree = flatten(dialogOver(listOf(atCapIds, Object.fromEntries(atCapIds.map((id) => [id, manyById[id]]))), NO_WORKSPACES).tree);
+	check("U13 对照: at exactly the cap there is NO annotation — the note reports a cut, not a size", treeByClass(atCapTree, "dshsl-st-bound") === null && treeAllByClass(atCapTree, "dshsl-st-row").length === 50);
+	check("U13 对照: an ordinary short list carries no annotation either, and the rule agrees", treeByClass(noMatchTree, "dshsl-st-bound") === null && sessionToolsBoundNote({ total: 3, shown: 3 }) === null && sessionToolsBoundNote({ total: 60, shown: 50 }) !== null);
+
+	// --- §4.3.2: the range, its default, and what it filters --------------------
+	// 批次 4 (G): the current session is dropped from EVERY range, so the workspace-range
+	// fixture needs a second IN-workspace session — otherwise the range assertion below
+	// would pass for the wrong reason (an empty list narrows trivially).
+	const ws = { items: [{ workspaceId: "ws-1", path: "/ws/team", title: "工作区甲", sessionIds: ["session-cur", "session-a"] }], archivedSessionIds: [] };
+	const wsList = listOf(["session-cur", "session-a", "session-b"], { "session-cur": curOf("session-cur", { cwd: "/ws/team" }), "session-a": rowOf("session-a", { cwd: "/ws/team" }), "session-b": rowOf("session-b") });
+	const wsDialog = dialogOver(wsList, ws);
+	const wsTree = flatten(wsDialog.tree);
+	const rangeGroup = treeByClass(wsTree, "dshsl-st-range");
+	check("§4.3.2: the range defaults to「当前工作区」, and the footer offers「全部工作区」beside it", rangeGroup.children[0].props["aria-pressed"] === "true" && rangeGroup.children[1].props["aria-pressed"] === "false" && treeText(rangeGroup.children[0]) === tZh("sessionToolsRangeCurrent") && treeText(rangeGroup.children[1]) === tZh("sessionToolsRangeAll"));
+	check("§4.3.2: the current-workspace range really narrows — the in-workspace session shows, the outside one does not, and the current session is not listed either (批次 4)", treeAllByClass(wsTree, "dshsl-st-row").length === 1 && treeAllByClass(wsTree, "dshsl-st-row")[0].props["data-session"] === "session-a" && treeText(treeByClass(wsTree, "dshsl-st-count")) === fill(tZh("sessionToolsCount"), "count", 1));
+	check("§4.3.2: the range control is a labelled group (a11y) and the switch is one click", rangeGroup.props.role === "group" && typeof rangeGroup.props["aria-label"] === "string");
+	rangeGroup.children[1].props.onClick();
+	const allTree = flatten(wsDialog.tree);
+	check("§4.3.2: switching to「全部工作区」lists the outside session and appends its workspace name to the time line", treeAllByClass(allTree, "dshsl-st-row").length === 2 && treeText(treeByClass(allTree, "dshsl-st-time")).includes("工作区甲"));
+	check("§4.3.2: ... and the pressed state follows the switch", treeByClass(allTree, "dshsl-st-range").children[1].props["aria-pressed"] === "true");
+
+	// --- §4.3.2/§4.3.3: the selection rule and the row ---------------------------
+	const ruleList = listOf(
+		["session-cur", "session-a", "session-sub", "session-arch", "session-blank", "session-new"],
+		{
+			"session-cur": curOf("session-cur"),
+			"session-a": rowOf("session-a", { updatedAt: 5000 }),
+			"session-sub": rowOf("session-sub", { origin: "subagent" }),
+			"session-arch": rowOf("session-arch"),
+			"session-blank": rowOf("session-blank", { blank: true }),
+			"session-new": { id: "session-new", displayTitle: "本地新会话", updatedAt: 1, running: false, retainedBy: {}, blank: false },
+		},
+	);
+	const ruleRows = visibleSessionRows(ruleList, { items: [], archivedSessionIds: ["session-arch"] }, "session-cur", "all");
+	check("§4.3.2: subagent rows, archived rows, blank rows and (批次 4) the CURRENT session are dropped; a row that exists only locally is kept", JSON.stringify(ruleRows.map((row) => row.id)) === JSON.stringify(["session-a", "session-new"]));
+	check("§4.3.2: ... ordered by updatedAt descending", ruleRows.map((row) => row.updatedAt).join(",") === "5000,1");
+	check("§4.3.2 (批次 4 对照): 只有把 `currentId` 传进来才丢——同一份 list 用 undefined 当 currentId 时 `session-cur` 仍在（丢的是**当前会话**这条事实，不是这个 id 本身）", JSON.stringify(visibleSessionRows(ruleList, { items: [], archivedSessionIds: ["session-arch"] }, undefined, "all").map((row) => row.id)) === JSON.stringify(["session-a", "session-cur", "session-new"]));
+	check("§4.3.2: the search matches the title and the id, case-insensitively, and a blank query filters nothing", filterSessionRows(ruleRows, "NEW").length === 1 && filterSessionRows(ruleRows, "session-a").length >= 1 && filterSessionRows(ruleRows, "   ").length === ruleRows.length);
+	check("§4.3.2: the current session is the one the main view retains (the official convention, retainedBy.mainView)", pure("currentSessionIdOf")(ruleList) === "session-cur" && pure("currentSessionIdOf")(listOf(["session-a"], { "session-a": rowOf("session-a") })) === undefined);
+
+	const rowTree = flatten(dialogOver(popularList, NO_WORKSPACES).tree);
+	const rowNodes = treeAllByClass(rowTree, "dshsl-st-row");
+	check("§4.3.3: one row per visible session, each addressable by its session id (当前会话不在其中——批次 4)", rowNodes.length === 2 && rowNodes.map((row) => row.props["data-session"]).join(",") === "session-a,session-b");
+	const firstRow = rowNodes[0];
+	const openButton = treeByClass(firstRow, "dshsl-st-open");
+	check("§4.3.3: the row's clickable face is one real button — Enter/Space open the session, no keydown shim to forget", openButton !== null && openButton.type === "button" && openButton.props.type === "button" && typeof openButton.props.onClick === "function");
+	check("§4.3.3: ... and it carries the title (in the accessible name and on the element)", openButton.props["aria-label"] === fill(tZh("sessionToolsOpenLabel"), "title", "会话 session-a") && treeText(treeByClass(firstRow, "dshsl-st-title")) === "会话 session-a" && treeByClass(firstRow, "dshsl-st-title").props.title === "会话 session-a");
+	check("§4.3.3: the relative time comes from the OFFICIAL bucketing helper, worded by this plugin's dictionary", treeText(treeByClass(firstRow, "dshsl-st-time")).length > 0 && relativeTimeText(primitivesStub, Date.now() - 5 * 60000, Date.now(), tZh) === "5分钟" && relativeTimeText(primitivesStub, Date.now(), Date.now(), tZh) === "刚刚" && relativeTimeText(undefined, 0, Date.now(), tZh) === tZh("sessionToolsTimeUnknown"));
+	check("§4.3.3: the status dot is EXACTLY two states — running / idle — across the whole input matrix", (() => {
+		const matrix = [{ running: true }, { running: false }, { running: true, blank: true }, { running: false, retainedBy: { mainView: 1, subagent: 2 } }, {}, { running: true, origin: "subagent" }].map((row) => sessionDotState(row));
+		return new Set(matrix).size === 2 && matrix.every((state) => state === "running" || state === "idle");
+	})());
+	check("§4.3.3: ... and the dot's state is readable as text, not by colour alone", firstRow.props["data-state"] === "idle" && treeText(treeByClass(firstRow, "dshsl-st-sr")) === tZh("sessionToolsIdle"));
+	const sessionRunningRow = treeAllByClass(flatten(dialogOver(listOf(["session-r"], { "session-r": rowOf("session-r", { running: true }) }), NO_WORKSPACES).tree), "dshsl-st-row")[0];
+	check("§4.3.3: ... a running session reads「运行中」while an idle one reads「空闲」", sessionRunningRow.props["data-state"] === "running" && treeText(treeByClass(sessionRunningRow, "dshsl-st-sr")) === tZh("sessionToolsRunning") && treeText(treeByClass(sessionRunningRow, "dshsl-st-sr")) !== tZh("sessionToolsIdle"));
+	const rowActions = treeAllByClass(firstRow, "dshsl-st-act");
+	check("§4.3.3: the row carries exactly two actions — copy and export — each named with the session's own title", rowActions.length === 2 && rowActions[0].props["aria-label"] === fill(tZh("sessionToolsCopyLabel"), "title", "会话 session-a") && rowActions[1].props["aria-label"] === fill(tZh("sessionToolsExportLabel"), "title", "会话 session-a") && treeText(rowActions[0]) === tZh("sessionToolsCopy") && treeText(rowActions[1]) === tZh("sessionToolsExport"));
+	const cssText = String(styleTags[0].textContent);
+	check("§4.3.3: the two actions are hidden until the row is hovered or focused — the reveal is one stylesheet rule", cssText.includes(".dshsl-st-row:hover .dshsl-st-actions,.dshsl-st-row:focus-within .dshsl-st-actions{opacity:1}") && cssText.includes(".dshsl-st-actions{display:flex;align-items:center;gap:4px;flex:none;opacity:0"));
+
+	// --- §4.3.4: the three actions ----------------------------------------------
+	const liveDialog = dialogOver(popularList, NO_WORKSPACES);
+	// 批次 4 (G): the current session is no longer row 0 — the visible rows are now
+	// [session-a, session-b], so the row under test is index 0 (it used to be 1).
+	treeAllByClass(treeAllByClass(flatten(liveDialog.tree), "dshsl-st-row")[0], "dshsl-st-act")[0].props.onClick();
+	await new Promise((resolve) => setImmediate(resolve));
+	const liveTree = flatten(liveDialog.tree);
+	const copiedAction = treeAllByClass(treeAllByClass(liveTree, "dshsl-st-row")[0], "dshsl-st-act")[0];
+	check("§4.3.4: copying writes the SAME deep link the conversation-header button emits", clipboardWrites.length === 1 && clipboardWrites[0] === "dsh://session/session-a");
+	check("§4.3.4: ... the button flashes「已复制 ✓」and its accessible name switches with it", treeText(copiedAction) === tZh("sessionToolsCopied") && copiedAction.props["data-copied"] === "true" && copiedAction.props["aria-label"] === fill(tZh("sessionToolsCopiedLabel"), "title", "会话 session-a"));
+	const liveRegion = treeByClass(liveTree, "dshsl-st-live");
+	check("§4.3.4: ... and the result is announced in a live region that carries the link", liveRegion.props.role === "status" && liveRegion.props["aria-live"] === "polite" && treeText(liveRegion) === fill(tZh("sessionToolsCopiedNote"), "link", "dsh://session/session-a"));
+	check("§4.3.4: ... and only that row's copy button changes (the other rows are untouched)", treeAllByClass(treeAllByClass(liveTree, "dshsl-st-row")[1], "dshsl-st-act")[0].props["data-copied"] === "false" && clipboardWrites.length === 1);
+
+	const exportDialog = dialogOver(popularList, NO_WORKSPACES);
+	const hrefBefore = windowStub.location.href;
+	treeAllByClass(treeAllByClass(flatten(exportDialog.tree), "dshsl-st-row")[0], "dshsl-st-act")[1].props.onClick();
+	check("§4.3.4: exporting NAVIGATES to the host route, with the parameter encoded and the format pinned", windowStub.location.href === "/team-link/export?session=" + encodeURIComponent("session-a") + "&format=md");
+	windowStub.location.href = hrefBefore;
+
+	const populatedEntry = mount(makeSessionToolsEntry(scene(popularList, NO_WORKSPACES), primitivesStub), { wide: true, t: tZh });
+	const populatedDialog = openDialog(populatedEntry);
+	navCalls.length = 0;
+	treeByClass(treeAllByClass(flatten(populatedDialog.instance.tree), "dshsl-st-row")[0], "dshsl-st-open").props.onClick();
+	check("§4.3.3: clicking the row opens THAT session through the public navigation face (uiWorkspace.openSession)", navCalls.length === 1 && navCalls[0] === "session-a");
+	check("§4.3.3: ... and the dialog closes — the navigation itself is the answer, and closing hands focus back", populatedEntry.tree.children[1] === null);
+
+	const hostileScope = {
+		sessions: { list: { getSnapshot() { throw new Error("service died"); } } },
+		workspaces: { list: { getSnapshot() { throw new Error("service died"); } } },
+		uiWorkspace: { openSession() { throw new Error("navigation died"); } },
+	};
+	const hostileDialog = mount(makeSessionToolsDialog(hostileScope, primitivesStub), { t: tZh, onClose() {} });
+	let hostileThrew = false;
+	let hostileTree = null;
+	const realWarnHostile = console.warn;
+	console.warn = () => {};
+	try {
+		hostileTree = flatten(hostileDialog.tree);
+		treeByClass(hostileTree, "dshsl-st-search").props.onChange({ target: { value: "x" } });
+		hostileTree = flatten(hostileDialog.tree);
+	} catch (error) {
+		hostileThrew = true;
+	} finally {
+		console.warn = realWarnHostile;
+	}
+	check("§4.3.6 降级: a service that dies mid-flight degrades to a READING instead of taking the session down", hostileThrew === false && hostileTree !== null && treeByClass(hostileTree, "dshsl-st-empty").props["data-empty"] === "sessionToolsLoading" && treeAllByClass(hostileTree, "dshsl-st-row").length === 0);
+
+	// --- §4.3.7: keyboard, focus return and reduced motion ----------------------
+	const focusEntry = mount(entryFactory, { wide: true, t: tZh });
+	const focusDialog = openDialog(focusEntry);
+	check("§4.3.7: the official Modal owns Escape — its onClose IS the entry's close handler (one close path for Esc, the mask, the button and a successful open)", focusDialog !== null && focusDialog.element.props.onClose === focusEntry.tree.children[1].props.onClose);
+	focusCalls.length = 0;
+	focusDialog.instance.tree.props.onClose();
+	check("§4.3.7: closing returns focus to the entry, and the dialog is gone", focusCalls.length === 1 && focusEntry.tree.children[1] === null && focusEntry.tree.children[0].props["aria-expanded"] === "false");
+	check("§4.3.7: reduced motion is respected — the reveal's transition is dropped under the media query", cssText.includes("@media (prefers-reduced-motion: reduce){.dshsl-st-actions{transition:none}}"));
+
+	// --- dictionary parity for the new copy -------------------------------------
+	const zhDict = localeDicts.get("zh");
+	const enDict = localeDicts.get("en");
+	const sessionToolsKeys = Object.keys(zhDict).filter((key) => key.indexOf("sessionTools") === 0 && key.indexOf("sessionToolsTime") !== 0);
+	check("§4.3: every §4.3 sentence is declared in BOTH dictionaries (a missing translation would render the key name)", sessionToolsKeys.length >= 20 && sessionToolsKeys.every((key) => typeof enDict[key] === "string") && sessionToolsKeys.every((key) => zhDict[key] !== key && enDict[key] !== key));
+	check("§4.3: the time buckets are declared per unit, like the official surface's own words", ["sessionToolsTimeNow", "sessionToolsTimeMinutes", "sessionToolsTimeHours", "sessionToolsTimeDays", "sessionToolsTimeMonths", "sessionToolsTimeYears", "sessionToolsTimeUnknown"].every((key) => typeof zhDict[key] === "string" && typeof enDict[key] === "string"));
+
+}
+
+// ---------------------------------------------------------------------------
+// U14 (§4.4, work face ④): a deep link really switches the main view. The defect
+// was a SILENT no-op — ctx.sessions.open(id), a method the sessions SERVICE does
+// not have. The judgement is the CURRENT SESSION ID, read the way the app itself
+// reads it (retainedBy.mainView), never "some function was called".
+// ---------------------------------------------------------------------------
+
+const deepRowOf = (id) => ({ id, displayTitle: "目标会话 " + id, updatedAt: 2, running: false, retainedBy: { mainView: 0 }, blank: false });
+/** The deep-link judgement reader: the row the main view retains (ui-workspace's
+ * own mainSessionId). */
+const currentSessionId = (list) => Object.values(list.byId).find((row) => (row.retainedBy || {}).mainView > 0)?.id;
+/** A boot context for /s/<id>: the fixture's navigation stub MODELS the real
+ * service — opening a session moves mainView onto it — so "the id moved" is a
+ * fact about the plugin's call, not about the stub's bookkeeping. */
+function deepLinkEnv(targetId, options = {}) {
+	const byId = { "session-here": { id: "session-here", displayTitle: "当前会话", updatedAt: 1, running: false, retainedBy: { mainView: 1 }, blank: false } };
+	if (options.present !== false) byId[targetId] = deepRowOf(targetId);
+	const list = { ids: Object.keys(byId), byId, phase: "ready" };
+	const nav = [];
+	const slotNames = [];
+	const sessionsService = { list: { getSnapshot: () => list } };
+	const workspacesService = { list: { getSnapshot: () => ({ items: [], archivedSessionIds: [] }) } };
+	const uiWorkspace = options.withoutNavigation === true ? undefined : {
+		openSession(id) {
+			if (options.navigationThrows === true) throw new Error("navigation died");
+			nav.push(id);
+			for (const key of Object.keys(byId)) byId[key].retainedBy = { mainView: key === id ? 1 : 0 };
+		},
+	};
+	const scope = { uiConversation: uiConversationStub, sessions: sessionsService, workspaces: workspacesService, uiWorkspace };
+	scope.get = (name) => scope[name];
+	const context = {
+		effect(fn) { const disposer = fn(); return typeof disposer === "function" ? disposer : () => {}; },
+		locale: { register() { return () => {}; }, bind() { return (key) => key; } },
+		slots: { inject(_name, register) { return register(); }, register(options) { slotNames.push(options.name); return () => {}; }, entries() { return []; } },
+		sessions: sessionsService,
+		get(name) { return name === "sessions" ? sessionsService : name === "workspaces" ? workspacesService : name === "uiWorkspace" ? uiWorkspace : undefined; },
+		inject(_specs, callback) { return callback(scope); },
+	};
+	return { context, list, byId, nav, slotNames };
+}
+function applyCapturingWarnings(context) {
+	const lines = [];
+	const realWarn = console.warn;
+	console.warn = (...args) => lines.push(args.map((value) => String(value)).join(" "));
+	let thrown = null;
+	try {
+		moduleExports.apply(context);
+	} catch (error) {
+		thrown = error;
+	} finally {
+		console.warn = realWarn;
+	}
+	return { lines, thrown };
+}
+
+const pathnameBefore = windowStub.location.pathname;
+windowStub.location.pathname = "/s/session-target";
+
+const deepA = deepLinkEnv("session-target");
+moduleExports.apply(deepA.context);
+check("U14: the deep link focuses the linked session at boot through the public navigation face", deepA.nav.join(",") === "session-target");
+check("U14 判据: ... and the CURRENT SESSION ID really changed to the target (retainedBy.mainView is the judgement)", currentSessionId(deepA.list) === "session-target");
+check("U14 对照: ... while the session the app booted on no longer holds the main view (so the assertion is about movement)", deepA.byId["session-here"].retainedBy.mainView === 0);
+check("U14: the deep link is applied once, not once per retry", deepA.nav.length === 1);
+
+const pendingTimers = [];
+const realSetTimeout = windowStub.setTimeout;
+windowStub.setTimeout = (fn, ms) => { pendingTimers.push({ fn, ms }); return 0; };
+windowStub.location.pathname = "/s/session-late";
+const deepB = deepLinkEnv("session-late", { present: false });
+moduleExports.apply(deepB.context);
+check("U14: a deep link to a session the list has not reported yet focuses nothing YET — it waits (the existing retry loop is kept)", deepB.nav.length === 0 && pendingTimers.length === 1 && pendingTimers[0].ms === 200);
+check("U14 对照: ... and the current session is still the one the app booted with", currentSessionId(deepB.list) === "session-here");
+deepB.byId["session-late"] = deepRowOf("session-late");
+deepB.list.ids.push("session-late");
+pendingTimers[0].fn();
+check("U14: ... and the frame is focused the moment it appears in the list", deepB.nav.join(",") === "session-late" && currentSessionId(deepB.list) === "session-late");
+windowStub.setTimeout = realSetTimeout;
+
+windowStub.location.pathname = "/s/session-target";
+const deepC = deepLinkEnv("session-target", { withoutNavigation: true });
+const appliedC = applyCapturingWarnings(deepC.context);
+check("U14 降级: a shell without uiWorkspace loses the FOCUS step only — the deep link opens and nothing throws", appliedC.thrown === null && deepC.nav.length === 0);
+check("U14 降级: ... and §4.3's own rule holds in that same shell (no uiWorkspace ⇒ no「会话工具」entry, everything else applied)", deepC.slotNames.indexOf("sidebar.footer.action") === -1 && deepC.slotNames.length === 4);
+
+windowStub.location.pathname = "/s/session-target";
+const deepD = deepLinkEnv("session-target", { navigationThrows: true });
+const appliedD = applyCapturingWarnings(deepD.context);
+check("U14: a navigation that fails leaves exactly ONE trace line and does not break the open flow", appliedD.thrown === null && appliedD.lines.filter((line) => line.includes("uiWorkspace.openSession")).length === 1 && deepD.nav.length === 0);
+check("U14: ... and the current session is untouched by a failed focus", currentSessionId(deepD.list) === "session-here");
+
+const codeLinesOf = (text) => text.split("\n").map((line) => line.trim()).filter((line) => line !== "" && line.indexOf("//") !== 0 && line.indexOf("*") !== 0);
+check("U14 病灶锁: the silent CALL is gone from the bundle's code (the sessions face has no open() to call)", !codeLinesOf(SOURCE).some((line) => line.indexOf("ctx.sessions.open(") !== -1));
+check("U14: ... and the focus goes through the published navigation action, taken at runtime with ctx.inject", SOURCE.includes('ctx.inject(["uiWorkspace"], focus)') && SOURCE.includes("navigation.openSession(id)"));
+
+windowStub.location.pathname = pathnameBefore;
 
 console.log("");
 if (failures === 0) console.log("ALL PASS");
