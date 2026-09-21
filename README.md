@@ -81,7 +81,7 @@ flowchart TB
         direction TB
         subgraph Host["宿主半边 · lib/index.js"]
             T["9 个工具 + 2 条 / 命令<br/>list / export / send / watch<br/>roster / team_read / team_append / rotate / recover<br/>/team_session · /team_rotate"]
-            R["HTTP 路由<br/>GET /team-link/export"]
+            R["HTTP 路由<br/>GET /team-link/export<br/>经 connection 信任栅栏"]
             W["看门狗巡逻定时器<br/>+ 换届到期清扫"]
             DL["深链解析（上游功能）<br/>dsh://session/&lt;id&gt;"]
             ST["policy store<br/>settings 命名空间 team-link"]
@@ -408,6 +408,8 @@ flowchart TD
 ### `team_link_export`
 
 任意会话全量导出：markdown（人可读，含信封首行）+ JSON（无损事件流）。同一个导出能力也挂在 `GET /team-link/export?session=<id>&format=md|json`（会话头部 ⬇ 按钮消费），路由与工具**共用同一个文件名安全不变式**（`fileSafeSessionId()`）。
+
+**下载路由走平台的信任栅栏**（0.3.9 起）：路由只注册给**同时**拿到 `webServer` 与 `connection`（栅栏服务）的宿主，并且**每个请求**都先问一次 `connection.requestRejection(req)`——Host/Origin 栅栏（跨站/DNS rebinding → 403）与浏览器鉴权（未登录 → 401）都由平台裁决，裁决结果**原样写回**（响应体与官方的 RPC 通道一致：401 `unauthorized`、403 `forbidden`）；被拒时**不读会话**。栅栏取不到（服务缺席、没有 `requestRejection`、或它在挂载之后消失）⇒ **503 + 不吐数据**：宁可没有这条路由，也不要一条无门路由。非 GET 方法一律 405（`allow: GET`）。同源且已登录的浏览器下载**行为不变**。
 
 ---
 
@@ -739,7 +741,7 @@ rotationBackup:                 # prepare 时全量快照（撤销依据，永�
 
 这一节只留**使用者要用的契约**；那次故障的完整调试历程（病灶代码、逐条修法、三个配套细节、红线与回归锁）已移到 [`docs/verification-log.md`](docs/verification-log.md)——README 是说明书，不是实验记录本。
 
-**契约**：本插件对 `settings` / `webServer` / `commands` / `agentPresets` / `workspaceRegistry` / `agentDefaultModel` / `sessionTitle` 等运行期服务**一律走可选获取**（模块级 `inject` 恒为 4 项，见 §八）——服务**缺席或迟到**时，受影响的只是一项能力，**插件本体与其余能力照常工作**；每一次降级都留一行**具名 warn**（点名缺了哪个服务、后果是什么）。**分界**：在决定**「会话能不能跑」**的地方（preset 源、模型选择）改为 **fail-fast**——宁可不建，也不建一个跑不起来的会话；只决定**呈现面**的地方（标题、卡片）则降级不阻断。
+**契约**：本插件对 `settings` / `webServer` / `connection` / `commands` / `agentPresets` / `workspaceRegistry` / `agentDefaultModel` / `sessionTitle` 等运行期服务**一律走可选获取**（模块级 `inject` 恒为 4 项，见 §八）——服务**缺席或迟到**时，受影响的只是一项能力，**插件本体与其余能力照常工作**；每一次降级都留一行**具名 warn**（点名缺了哪个服务、后果是什么）。**分界**：在决定**「会话能不能跑」**的地方（preset 源、模型选择）改为 **fail-fast**——宁可不建，也不建一个跑不起来的会话；只决定**呈现面**的地方（标题、卡片）则降级不阻断。
 ## 八、兼容性与字符串安全
 
 ### DSH 0.1.5 会话格式迁移
@@ -813,6 +815,7 @@ dev_install_package { dir: "<你的目录>/dsh-team-link", profile: "web" }
 | `goals` | 活性行的 goal 状态 | 降级：显示 `goal=?` |
 | `settings` | 策略持久化 | **晚挂**取用，降级为进程内记忆 + 一行 warn |
 | `webServer` | 导出下载路由 | **晚挂**取用，降级为「无路由，工具照常」+ 一行 warn |
+| `connection` | 导出下载路由的**平台信任栅栏**（Host/Origin + 浏览器鉴权；`requestRejection`） | **晚挂**取用，且与 `webServer` **成对齐备**才注册路由：缺任一 ⇒ **不注册路由**（绝不注册一条无门路由）+ 一行 warn（点名缺的是哪一个）；导出工具照常 |
 | `agentPresets` | §10.2.2 创建会话时的 preset 解析与挂载（**每个**新建会话都必须有 persona-prefix 组装源） | 创建时 `ctx.get` 取用；缺席 ⇒ **每个新建会话一行 warn**、会话照建（缺了组成源它可能跑不起来，DEFECT-1） |
 | `workspaceRegistry` | §10.2.2 模板的另一半：建/取工作区 + 把新建会话**挂进**它（侧边栏按工作区分组，没有这份归属就列不出该会话） | 创建时 `ctx.get` 取用；缺席 ⇒ **每个新建会话一行 warn**（点名「未挂进工作区，可能不会出现在侧边栏」）、会话照建照驱动，只是不出现工作区归属（DEFECT-2） |
 

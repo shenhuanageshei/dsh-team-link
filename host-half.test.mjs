@@ -608,6 +608,9 @@ function makeQuery(sessions, eventsBySession = {}, surfaceReadHook) {
 	const query = {
 		/** ids whose surface was read, in call order — the read-window bound. */
 		surfaceReads: [],
+		/** ids whose full event log was read, in call order (§4.1 U1: a refused
+		 * download must leave this list EMPTY). */
+		readSessionCalls: [],
 		/** Mutable persisted-session rows: `listSessions` reads this list, so a case
 		 * can add the row a runtime-created session gets at its first checkpoint. */
 		records: sessions,
@@ -616,6 +619,11 @@ function makeQuery(sessions, eventsBySession = {}, surfaceReadHook) {
 			return ids.map((id) => ({ status: "fulfilled", value: { session: { id }, title: id === "session-target" ? "目标会话" : id === "session-runner" ? "跑着呢" : undefined } }));
 		},
 		async readSession(id) {
+			// 批次 1 (§4.1 / U1): the ids this read was asked for, in call order. The
+			// download route's fence is asserted on «readSession was NEVER called» —
+			// a refused request must not have touched the session store at all, and
+			// that is only readable if the read leaves a trace of its own.
+			query.readSessionCalls.push(id);
 			const events = eventsBySession[id];
 			if (events === undefined) throw new Error(`session not found: ${id}`);
 			return { session: { id, createdAt: 1700000000000, cwd: CWD }, events };
@@ -629,6 +637,78 @@ function makeQuery(sessions, eventsBySession = {}, surfaceReadHook) {
 		},
 	};
 	return query;
+}
+
+/**
+ * 批次 1 (§4.1): the platform's trust fence, as the download route sees it.
+ *
+ * requestRejection(request) is the WHOLE contract the plugin may depend on
+ * (@deepseek-ai/dsh-client-connection/lib/index.js:553 — the Host/Origin fence
+ * first, then browser authentication; returning undefined means "serve it").
+ * The default stub answers undefined: the trusted, logged-in deployment.
+ * `reject` replaces the verdict, which is how the fence fixture below turns the
+ * same route into a cross-site / unauthenticated caller.
+ *
+ * `calls` is the witness that the route really handed the request to the
+ * platform fence instead of inventing a rule of its own.
+ */
+function makeConnection({ reject } = {}) {
+	const calls = [];
+	return {
+		calls,
+		service: {
+			requestRejection(request) {
+				calls.push(request);
+				return typeof reject === "function" ? reject(request) : undefined;
+			},
+		},
+	};
+}
+
+/**
+ * The fence with the platform's own rule (Host/Origin → 403, browser cookie →
+ * 401), modeled from that implementation. The route never re-implements it: it
+ * only forwards the request and writes back what comes out, so this fixture's
+ * rule IS the platform's rule for the cases below.
+ */
+function makeFencedConnection() {
+	return makeConnection({
+		reject(request) {
+			const headers = request?.headers ?? {};
+			const host = typeof headers.host === "string" ? headers.host : "";
+			if (host !== "" && host !== "127.0.0.1:3080") return 403;
+			const origin = typeof headers.origin === "string" ? headers.origin : "";
+			if (origin !== "" && origin !== "http://127.0.0.1:3080") return 403;
+			return headers.cookie === "dsh_session=ok" ? undefined : 401;
+		},
+	});
+}
+
+/**
+ * One request/response pair for driving a registered route handler by hand —
+ * the same seam the existing /team-link/export traversal case uses. A Node
+ * IncomingMessage always carries `method` and a response always has writeHead
+ * / setHeader / end, so this stub carries them too (the route code under test
+ * is exercised through the real handler, never a re-implementation).
+ */
+function makeRouteCall({ method = "GET", url, headers = {} } = {}) {
+	const req = { method, url, headers };
+	const res = {
+		statusCode: undefined,
+		headers: undefined,
+		body: "",
+		writeHead(code, responseHeaders) { this.statusCode = code; this.headers = responseHeaders; return this; },
+		setHeader(name, value) { this.headers = { ...(this.headers ?? {}), [name]: value }; },
+		end(text) { if (text !== undefined) this.body += String(text); return this; },
+	};
+	return { req, res };
+}
+
+/** Drive one route handler to completion and report what it answered. */
+async function callRoute(route, options) {
+	const { req, res } = makeRouteCall(options);
+	await route.handler(req, res);
+	return res;
 }
 
 /** One macrotask of slack: enough for cordis' async fiber work and for the
@@ -659,7 +739,7 @@ const tick = () => new Promise((resolve) => { setTimeout(resolve, 0); });
  * the DEFECT-1 degradation fixture: it is the ONE branch that may skip the preset
  * face, and it has to leave one warn per created session when it does.
  */
-function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0 } = {}) {	const ctx = new Context();
+function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0, connectionStub = undefined, omitConnection = false, connectionWithoutRejection = false, lateConnection = false } = {}) {	const ctx = new Context();
 	// Every plugin log line lands in `log.lines` instead of the console: the
 	// service-attach red line (§5.3) is asserted on the lines themselves.
 	const log = makeLogger();
@@ -761,6 +841,15 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	// whose wording must come from the same single read.
 	const webServerService = webServerWithoutRegister ? {} : { register(route) { routes.push(route); return () => {}; } };
 	if (!lateWebServer) ctx.provide("webServer", webServerService);
+	// 批次 1 (§4.1): the export route's SECOND gate service. It is provided by
+	// default (the shape the real host has — the platform's own routes read it),
+	// so every pre-existing case above keeps exercising the fenced fast path.
+	// `omitConnection` / `lateConnection` are the two degradation fixtures of the
+	// mount-time gate, `connectionWithoutRejection` is its second reason code, and
+	// `connectionStub` lets a case install the platform's own rule (makeFencedConnection).
+	const connection = connectionStub ?? makeConnection();
+	const connectionService = connectionWithoutRejection ? {} : connection.service;
+	if (!omitConnection && !lateConnection) ctx.provide("connection", connectionService);
 	if (settings !== undefined && !lateSettings) ctx.provide("settings", settings.service);
 	// The `goals` service is optional by design (§3.1): absent here means the
 	// degraded path, present means a goal view (or `undefined` for "no goal").
@@ -811,6 +900,12 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 		ctx.provide("webServer", webServerService);
 		await new Promise((resolve) => { setTimeout(resolve, 0); });
 	};
+	/** ... and the same handle for the fence provider (批次 1 §4.1: the route waits
+	 * for BOTH services, so a case can bring them up one at a time). */
+	const provideConnection = async () => {
+		ctx.provide("connection", connectionService);
+		await new Promise((resolve) => { setTimeout(resolve, 0); });
+	};
 	/** 评审 round-2 🟡 #1 handle: mount the settings stub as a REAL cordis plugin
 	 * fiber, so `fiber.dispose()` retires the service through cordis itself (which
 	 * deactivates the plugin's `ctx.inject(["settings"], …)` fiber — the event the
@@ -840,7 +935,7 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	const invoke = (rawInput, agent = senderAgent) => ({ commandId: "cmd-test", agent, rawInput, attachments: [], signal: new AbortController().signal });
 	/** G2 handle: the provider-side peak of concurrent `agents.create` calls. */
 	const maxCreateInFlight = () => createInFlight.max;
-	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideCommands, agentPresets, workspaceRegistry, sessionTitle, agentDefaultModel, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
+	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideConnection, connection, provideCommands, agentPresets, workspaceRegistry, sessionTitle, agentDefaultModel, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
 }
 
 function execFor(agent) {
@@ -1124,7 +1219,9 @@ check("评审 #2: the export tool and the download route share one filename inva
 const routeEnv = setup({ sessions: [{ header: { id: "../../escaped", createdAt: 1000, cwd: CWD }, live: true, persisted: true }], eventsBySession: { "../../escaped": escEvents } });
 const exportRoute = routeEnv.routes.find((route) => route.path === "/team-link/export");
 let routeResult;
-await exportRoute.handler({ url: "/team-link/export?session=../../escaped&format=md" }, { writeHead(code, headers) { routeResult = { code, headers }; }, end() {} });
+// 批次 1 (§4.1 ③): the fixture now states its method — a real IncomingMessage
+// always carries one, and the route has a method whitelist to answer.
+await exportRoute.handler({ method: "GET", url: "/team-link/export?session=../../escaped&format=md" }, { writeHead(code, headers) { routeResult = { code, headers }; }, end() {} });
 check("评审 #2: the download header uses the same invariant (no separator can reach content-disposition)", routeResult.code === 200 && routeResult.headers["content-disposition"] === 'attachment; filename=".._.._escaped.md"');
 
 // ---------------------------------------------------------------------------
@@ -5511,6 +5608,125 @@ check("U19 双门: the receiver's ask option list still carries the pairing gran
 const u19GateEnv = teamSessionEnv({ askScript: ["创建"] });
 await u19GateEnv.run("n=2 team=night-shift roles=worker-a,worker-b task=门");
 check("U19 双门: a whole batch raises exactly ONE dialog — the §10.2.4 confirmation itself; its pairs (not a new bypass) are what keeps the kickoffs off the two gates", u19GateEnv.uq.requests.length === 1 && u19GateEnv.pairs().length === 2 && u19GateEnv.created.every((item) => item.calls.followedup.length === 1));
+
+// ---------------------------------------------------------------------------
+// 批次 1 (§4.1): the download route behind the platform's trust fence
+// ---------------------------------------------------------------------------
+// 变异基线（修复前必红）: the route served a full session export to a request the
+// platform's own fence REFUSES (cross-site Host/Origin), and every method was
+// served like GET. The pre-fix readings are the ones the assertions below
+// measure — they are the reason this batch exists (§6 U1/U2/U6).
+
+const FENCE_EVENTS = [{ type: "user/message", seq: 1, time: 1, data: { id: "f1", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "栅栏夹具正文" }] } }];
+const FENCE_SESSION = { header: { id: "session-fence", createdAt: 1000, cwd: CWD }, live: true, persisted: true };
+const fenceEnv = setup({ sessions: [FENCE_SESSION], eventsBySession: { "session-fence": FENCE_EVENTS }, connectionStub: makeFencedConnection() });
+const fenceRoute = fenceEnv.routes.find((route) => route.path === "/team-link/export");
+
+// U1 (a) — the decision itself, as a pure function on the frozen `__testing`
+// surface (§4.1 ②'s 可测面): no HTTP fixture is needed to read the verdict.
+const exportGateRejection = __testing.exportGateRejection;
+// A SEPARATE instance for the pure-function case: `calls` below is the witness
+// that the ROUTE consulted the fence, and the direct calls here would otherwise
+// be counted as if the handler had made them.
+const fencedService = makeFencedConnection().service;
+check("U1（纯函数）: the `connection + req → 状态码|null` decision is a pure function on the frozen `__testing` surface — cross-site Host 403, unauthenticated 401, authenticated `null`, and a fence that is absent or THROWS is 503 (fail-closed)",
+	typeof exportGateRejection === "function"
+	&& exportGateRejection(fencedService, { headers: { host: "evil.example:3080" } }) === 403
+	&& exportGateRejection(fencedService, { headers: { host: "127.0.0.1:3080" } }) === 401
+	&& exportGateRejection(fencedService, { headers: { host: "127.0.0.1:3080", cookie: "dsh_session=ok" } }) === null
+	&& exportGateRejection(undefined, { headers: {} }) === 503
+	&& exportGateRejection({}, { headers: {} }) === 503
+	&& exportGateRejection({ requestRejection() { throw new Error("fence exploded"); } }, { headers: {} }) === 503
+	&& Object.isFrozen(__testing));
+
+// U1 (b) — the same verdict through the REAL handler, with the platform's own
+// rule (Host/Origin → 403) installed in the connection stub.
+const crossSite = await callRoute(fenceRoute, {
+	method: "GET",
+	url: "/team-link/export?session=session-fence&format=json",
+	headers: { host: "evil.example:3080", origin: "http://evil.example", "sec-fetch-site": "cross-site" },
+});
+check("U1: a cross-site request no longer receives data — 403 with the official body, no session id, no session text, and `sessionQuery.readSession` was never called",
+	crossSite.statusCode === 403 && crossSite.body === "forbidden"
+	&& !crossSite.body.includes("栅栏夹具正文") && !crossSite.body.includes("session-fence")
+	&& fenceEnv.query.readSessionCalls.length === 0);
+check("U1: ... and the refusal came from the PLATFORM fence: the route handed the request to `connection.requestRejection` verbatim (the first call it saw carries the cross-site Host)",
+	fenceEnv.connection.calls.length === 1 && fenceEnv.connection.calls[0]?.headers?.host === "evil.example:3080");
+const unauthenticated = await callRoute(fenceRoute, {
+	method: "GET",
+	url: "/team-link/export?session=session-fence&format=json",
+	headers: { host: "127.0.0.1:3080" },
+});
+check("U1: ... the fence's 401 branch is written back the same way (same-origin but no authentication cookie) and still reads no session at all",
+	unauthenticated.statusCode === 401 && unauthenticated.body === "unauthorized"
+	&& fenceEnv.connection.calls.length === 2 && fenceEnv.query.readSessionCalls.length === 0);
+
+// The second layer (§4.1 ②: 请求期纵深). Mount-time gating alone would leave the
+// window where the fence service is torn down after the route mounted; the
+// handler re-reads it, so that window is fail-closed too.
+const tornEnv = setup({ sessions: [FENCE_SESSION], eventsBySession: { "session-fence": FENCE_EVENTS }, connectionStub: makeFencedConnection() });
+const tornRoute = tornEnv.routes.find((route) => route.path === "/team-link/export");
+const savedRejection = tornEnv.connection.service.requestRejection;
+delete tornEnv.connection.service.requestRejection;
+const torn = await callRoute(tornRoute, { method: "GET", url: "/team-link/export?session=session-fence&format=json", headers: { host: "127.0.0.1:3080", cookie: "dsh_session=ok" } });
+tornEnv.connection.service.requestRejection = savedRejection;
+check("U1 对照（请求期纵深）: with the fence gone AFTER the mount the handler re-checks and ends with 503 instead of serving — no unguarded route exists in any timing (§5 B2)",
+	torn.statusCode === 503 && torn.body === "unavailable" && tornEnv.query.readSessionCalls.length === 0);
+
+// U5 — the trusted, authenticated caller is unaffected (the fence tightens the
+// route, it does not replace it).
+const trusted = await callRoute(fenceRoute, {
+	method: "GET",
+	url: "/team-link/export?session=session-fence&format=md",
+	headers: { host: "127.0.0.1:3080", cookie: "dsh_session=ok" },
+});
+check("U5: a trusted, authenticated request is served exactly as before — 200, the same content-disposition filename invariant, and this time the session really was read",
+	trusted.statusCode === 200 && trusted.headers?.["content-disposition"] === 'attachment; filename="session-fence.md"'
+	&& trusted.body.includes("栅栏夹具正文") && fenceEnv.query.readSessionCalls.join(",") === "session-fence");
+
+// U6 — the method whitelist (§4.1 ③), mirroring the official open-in-app shape:
+// 405 plus `allow`, and the download never runs.
+const postEnv = setup({ sessions: [FENCE_SESSION], eventsBySession: { "session-fence": FENCE_EVENTS }, connectionStub: makeFencedConnection() });
+const postRoute = postEnv.routes.find((route) => route.path === "/team-link/export");
+const posted = await callRoute(postRoute, {
+	method: "POST",
+	url: "/team-link/export?session=session-fence&format=json",
+	headers: { host: "127.0.0.1:3080", cookie: "dsh_session=ok" },
+});
+check("U6: a non-GET method is refused with 405 (and `allow: GET`) instead of being served like a download — and nothing was read",
+	posted.statusCode === 405 && posted.headers?.allow === "GET" && postEnv.query.readSessionCalls.length === 0);
+
+// U2 — mount-time gating: webServer in, connection out ⇒ NO route at all, with
+// exactly one line naming why (§4.1 ①, §5 B1/B2).
+const noConnEnv = setup({ sessions: [], omitConnection: true });
+const noConnWarns = noConnEnv.log.lines.warn.filter((line) => line.includes("webServer service unavailable at activation"));
+check("U2: with a webServer but NO connection the route is NOT registered — there is no unguarded route to find — and exactly one line says which service is missing",
+	noConnEnv.routes.length === 0 && noConnWarns.length === 1 && noConnWarns[0].includes("(no connection service)"));
+check("U2: ... the export tool keeps working regardless (§4.1: 只降级该面子面)",
+	noConnEnv.tool("team_link_export") !== undefined);
+const noRejectionEnv = setup({ sessions: [], connectionWithoutRejection: true });
+const noRejectionWarns = noRejectionEnv.log.lines.warn.filter((line) => line.includes("webServer service unavailable at activation"));
+check("U2 对照: a connection WITHOUT `requestRejection` is the second reason code — still no route, one line naming the missing fence itself",
+	noRejectionEnv.routes.length === 0 && noRejectionWarns.length === 1 && noRejectionWarns[0].includes("(connection without requestRejection())"));
+
+// U3 — neither service ever arrives: the pre-existing degradation red line
+// (no route, one warn) still holds through the new two-service gate.
+const lateBothEnv = setup({ sessions: [], lateWebServer: true, lateConnection: true });
+const lateBothWarns = () => lateBothEnv.log.lines.warn.filter((line) => line.includes("webServer service unavailable at activation"));
+check("U3: with NEITHER service active nothing is mounted and the one line for the window still stands (the pre-existing late-attach red line)",
+	lateBothEnv.routes.length === 0 && lateBothWarns().length === 1);
+await lateBothEnv.provideWebServer();
+check("U4 前置: webServer alone is still not enough — the route waits for the fence instead of mounting unguarded",
+	lateBothEnv.routes.length === 0 && lateBothWarns().length === 1);
+await lateBothEnv.provideConnection();
+check("U4: once BOTH services are up the route mounts (the late-attach pattern now waits for the pair, and the window still left exactly one line)",
+	lateBothEnv.routes.length === 1 && lateBothEnv.routes[0].path === "/team-link/export" && lateBothWarns().length === 1);
+
+// §4.1 红线 B1: the fence rides the OPTIONAL service seam like `webServer` does —
+// putting it in the module-level array would gate the whole plugin on it.
+const stage1Module = await import("./lib/index.js");
+check("§4.1 红线 B1: `connection` is NOT in the module-level inject array — the fence is an optional service, so a host without it loses the route and nothing else",
+	sameJson(stage1Module.inject, ["sessionReferenceResolver", "tools", "sessionQuery", "agents"]));
 
 // B6（③b 差异审计）: `tmpDir` is the export block's output directory and it is
 // re-created at the END of the run, so `rmSync` at import time cleans the PREVIOUS

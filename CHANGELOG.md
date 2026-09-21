@@ -6,6 +6,34 @@
 
 ---
 
+## 0.3.9 — 未发布（加固与恢复）— ① 导出路由信任栅栏 · ② 恢复能力加宽 · ③ 侧栏「会话工具」入口 · ④ 深链聚焦修复
+
+> 设计（唯一事实源）：`docs/hardening-and-recovery-design-2026-09-21.md` §4.1–§4.4（含 §5 红线 B1–B9 与 §6 判据 U1–U14）；逐条**红相/绿相读数**见 `docs/verification-log.md`。四条工作面按 §11 分三批实施，本条目随批次追加。
+> **发布状态**：①② 属宿主半边，需 DSH 重启才在真机生效；③④ 属浏览器半边（客户端 bundle 重建 + 刷新页面）。三条真机复验点（§6 末）尚未执行 —— 与 0.3.8 同口径，**不把未验的东西说成已验**。
+
+### 批次 1 —— §4.1：导出路由接入平台信任栅栏（两层 fail-closed）
+
+**修了什么**：`GET /team-link/export` 此前是一个**没有任何信任检查**的路由——任何能连上本机端口的请求（DNS rebinding / 跨站页面）都能拉走整份会话事件流。本批把它接上平台自己的栅栏 `connection.requestRejection`（Host/Origin → 403、浏览器鉴权 → 401），并**两层都 fail-closed**：
+
+1. **挂载期**：路由只在**同时**拿到 `webServer` 与 `connection`（且后者有 `requestRejection`）时才注册；新增两个 reason code `no-connection` / `no-rejection`，与既有 `not-active` / `no-register` 一样——**不注册路由 + 一行 warn**（点名缺的是哪一个）。晚挂从 `ctx.inject(["webServer"])` 改成 `ctx.inject(["webServer", "connection"])`，两个提供方任意顺序到齐才挂载。
+2. **请求期**：handler 的**第一句**实时复检栅栏；取不到（服务缺席、方法缺失、或**挂载之后被拆**）⇒ `503` + 不吐数据；取到则把它的状态码**原样写回**，响应体与官方 `client-connection` 的 RPC 通道一致（401 `unauthorized` / 403 `forbidden`）。这一层覆盖挂载期判不到的那个窗口。
+3. **方法白名单**：非 `GET` ⇒ `405` + `allow: GET`（对齐官方路由写法），任何会话都不读。
+
+**为什么**：平台契约明确「路由所有者自负其责」（`dsh-host-webserver`：不做 server-wide 认证/来源策略），栅栏由 `dsh-client-connection` 提供给**每个**路由所有者；本插件此前全库 0 处调用它——这是一处**未文档化的安全缺陷**，不是被记录下来的取舍。
+
+**怎么验证（变异验证）**：
+
+- **修复前必红**（本批新增 14 条断言，基线 889 不动）：`node host-half.test.mjs` → `assertion total: 903 (failed: 10)`。10 条 FAIL 恰是本次要修的每一面：U1 纯函数不存在 / 跨站请求真的拿到 200 + 会话正文且 `readSession` 被调用 / 路由从未把请求交给平台栅栏 / 401 分支无人写回 / 挂载后栅栏消失仍照常吐数据 / U6 非 GET 被当 GET 服务 / U2「webServer 在、connection 缺」仍然注册了路由（无门路由真实存在）/ `no-rejection` 分支不存在 / U4 只到 webServer 就挂载。
+- **修复后全绿**：`node host-half.test.mjs` → `assertion total: 903 (failed: 0)`；`node client-half.test.mjs` → `170 (failed: 0)`（未触及浏览器半边）。
+- **红线 B1**：`connection` **没有**进模块级 `inject`（仍恒为四项），仍走 `ctx.get` + `ctx.inject` 的可选服务缝；断言直接读导出数组。
+- 新增可测面：`__testing.exportGateRejection(connection, req)` —— `connection + req → 状态码|null` 的**纯函数**判定（U1 不必依赖 HTTP 夹具；接受 `null` = 放行、`503` = 无栅栏可问）。
+
+**如实标注（设计未规定的一处实现选择）**：`503` 这一支的响应体写的是 `unavailable`，而 401/403 严格照官方（`unauthorized` / `forbidden`）。理由写进了代码注释：403 的含义是「栅栏说了不」，503 的含义是「**没有栅栏来裁决**」——把后者写成 `forbidden` 等于报告一个从未发生过的信任判定。
+
+**同批同步的面**：`README.md`（§二 导出段新增「下载路由走平台信任栅栏」一段、§七 契约的服务清单、依赖服务降级表新增 `connection` 行、架构图的导出路由节点）；本条目。
+
+---
+
 ## 0.3.8 — 2026-09-20（当前版本）— ① 发送方可见性（§10.1）· ② `/team_session` 自动建队（§10.2）· ③ 自动换届交接（§11）
 
 > ① 让**发送方自己**也看到自己发出的跨会话消息卡片（此前只有接收方有卡片，发送方只看到一行藏在可折叠工具树里的灰字）。② 一条命令建 N 个 worker 根会话并登记进 roster。③ 让换届能自动建继任者并交接，另加一个**两动词、attended-only** 的团队恢复工具与活性诊断面。设计与裁决记录：`docs/collab-enhancements-design-2026-09-19.md` §10.1 / §10.2 / §11 / **§12（真机验证结果）**、`docs/consult-minutes/2026-09-19-consult-37-minutes.md`、`2026-09-20-consult-43-minutes.md`。

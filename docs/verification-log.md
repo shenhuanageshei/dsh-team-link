@@ -237,3 +237,50 @@ node client-half.test.mjs   # 浏览器半边
 - **边界**：`CHANGELOG.md` 与 `docs/` 由父代理同步（任务明令不得改）；真机复验（演练 9：`/team_session` 建 1 个 → 首回合不再报 `prompt variable "{{model}}" has no value`）仍需一次用户批准的重启窗口。
 
 ---
+
+## 批次 1（§4.1）导出路由信任栅栏（2026-09-21；当次实测 `903 (failed: 0)` / `170 (failed: 0)`，基线 `889` / `170`）
+
+**本轮新增 14 条断言**（`903 − 889`，宿主半边；客户端半边一字未动）。设计见 `hardening-and-recovery-design-2026-09-21.md` §4.1 / §5 B1–B2 / §6 U1–U6。
+
+### 病灶（修复前必红，实测读数）
+
+断言先落地、`lib/index.js` **一字未改** → `node host-half.test.mjs` = **`903 (failed: 10)`**。十条 FAIL 恰是本次要修的每一面（红相报的是判据本身，不是「不相等」）：
+
+```
+FAIL  U1（纯函数）: … `connection + req → 状态码|null` … 503 (fail-closed)   ← __testing 上根本没有这个判定
+FAIL  U1: a cross-site request no longer receives data — 403 … `readSession` was never called
+FAIL  U1: ... and the refusal came from the PLATFORM fence …                 ← 路由从未调用 requestRejection
+FAIL  U1: ... the fence's 401 branch is written back the same way …
+FAIL  U1 对照（请求期纵深）: with the fence gone AFTER the mount … 503 …
+FAIL  U5: a trusted, authenticated request is served exactly as before …      ← 前两次「拒绝」其实都读走了会话
+FAIL  U6: a non-GET method is refused with 405 …
+FAIL  U2: with a webServer but NO connection the route is NOT registered …    ← 无门路由真实存在
+FAIL  U2 对照: a connection WITHOUT `requestRejection` is the second reason code …
+FAIL  U4 前置: webServer alone is still not enough …
+assertion total: 903 (failed: 10)
+```
+
+其中的**实质**读数（不是措辞差异）：跨站请求（`Host: evil.example:3080` + `Origin: http://evil.example` + `Sec-Fetch-Site: cross-site`）拿到 **200 与整份会话正文**，且 `sessionQuery.readSession` 被调用；非 GET 方法与 GET 同等待遇；「webServer 在、connection 缺」时路由**照样注册**（`routes.length === 1`）——缺陷面不止一处入口。U3 与 U4 的第二半在红相里**本来就是绿的**（它们判的是「既有红线保持不变」与「两服务到齐才挂载」，修复前的树在那两点上并不违反）；这两条的作用是钉住不变量，不是复述实现。
+
+### 修复（绿相）
+
+`lib/index.js` 三处（§4.1 ① 挂载期 / ② 请求期 / ③ 方法白名单）→ **`903 (failed: 0)`**；`node client-half.test.mjs` = `170 (failed: 0)`（未触碰）。
+
+- **挂载期**：`mount(target)` 在 `webServer` 之后读 `connection`，新增 `no-connection` / `no-rejection` 两个 reason code；任一不满足 ⇒ **不注册路由**，`describeMountFailure` 渲染出**点名缺哪一个**的那一行；晚挂改为 `ctx.inject(["webServer", "connection"], …)`（两个提供方任意顺序到齐才回调）。
+- **请求期**：handler 首句 `exportGateRejection(target.get?.("connection"), req)`——**实时**取（不是挂载时快照），无栅栏或栅栏抛错 ⇒ `503`，有裁决 ⇒ 原样写回状态码，响应体照官方 `client-connection` 的 RPC 形状（401 `unauthorized` / 403 `forbidden`）。
+- **方法白名单**：`req.method !== "GET"` ⇒ `405` + `allow: GET`（对齐官方 `dsh-host-open-in-app` 的写法），任何会话都不读。
+- **可测面**：`__testing.exportGateRejection`（纯函数），U1 因此不必依赖 HTTP 夹具。
+
+### 同改清单（都由同一条事实驱动，逐条留证）
+
+1. **测试骨架新增读数 `query.readSessionCalls`**——「被拒时 `readSession` 从未被调用」只有让读本身留痕才可读（此前桩里没有任何痕迹）。
+2. **`setup()` 新增 `connection` 服务桩**（默认提供，形状与 `webServer` 同款）+ 四个开关：`connectionStub`（装平台自己的规则，`makeFencedConnection`）、`omitConnection`、`connectionWithoutRejection`、`lateConnection`，并新增 `provideConnection()` 句柄与 `makeRouteCall` / `callRoute` 两个「按真 handler 驱动」的助手。**默认提供**是刻意的：既有 889 条断言全部继续在「栅栏在、照常放行」的形状下跑，本轮不因新服务改动它们的语义。
+3. **既有 `/team-link/export` traversal 夹具的 req 补上 `method: "GET"`**——真实 `IncomingMessage` 恒有 `method`，而路由现在有方法白名单；不补则那条既有断言会被 405 误伤（夹具此前省略了一个真实请求必有的字段，不是放宽断言）。
+4. **README**：§二 导出段新增「下载路由走平台信任栅栏」一段、§七 契约的服务清单加 `connection`、依赖服务降级表新增 `connection` 行、架构图导出路由节点标注栅栏；`CHANGELOG.md` 新增 0.3.9（未发布）批次 1 条目。
+
+### 如实标注（设计未逐字规定的地方）
+
+- **`503` 的响应体写 `unavailable`**：401/403 严格照官方（`unauthorized` / `forbidden`），而「没有栅栏来裁决」这一支官方没有对应形状。写成 `forbidden` 会把「请求从未被裁决」报告成一次信任判定，故另给一词（代码注释与 CHANGELOG 同批写明）。
+- **激活 warn 行的前缀仍是 `webServer service unavailable at activation`**，缺的到底是哪个服务由 `describeMountFailure` 的括号点名（`no connection service` / `connection without requestRejection()`）。这与 §4.1 ①「沿用既有的**一次窗口一行 warn** 模式，`describeMountFailure` 扩两个新 reason 的措辞」逐字一致——设计要扩的是措辞，不是换标语。
+- **真机复验点 1（§6 末的三条 curl 组合重放）未执行**：本轮只做单元面（本机 3080 页面的新宿主半边仍需一次重启窗口）。与 0.3.8 同口径，不把未验的说成已验。
+
