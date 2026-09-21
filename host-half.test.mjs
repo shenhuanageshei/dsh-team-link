@@ -5164,7 +5164,7 @@ check("U33 不逐角色展开: 8 个角色只列前 3 个 + 「…等 8 个」�
 // §10.2.8.4 (b) 的**前半句**：「只给 **id 形状 ＋ 计数**，全量清单进完成回报」。2026-09-22 的只读审计
 // 指出：修法表第 0 行换槽位时把旧实现里那行 `- 会话 id：team-link-<team>-<role>-<uuid8>`
 // （`teamSessionIdPrefix()`，见 `git show ee7c48a^:lib/index.js`）**整条删掉**了，于是「id 形状」在框里一处不剩。
-// 这条把它钉回来，同时钉住**后半句**：形状是**常量**（全批共用一个梗），逐个会话的 id 清单不进框（那是完成回报的活）。
+// 这条把它钉回来，同时钉住**后半句**：形状是**常量**（全批共用同一个 id 根），逐个会话的 id 清单不进框（那是完成回报的活）。
 check("U33 id 形状在场（§10.2.8.4 (b)「只给 id 形状 ＋ 计数」）: 正文里给出 id 的形状 team-link-<team>-<role>-<uuid8> 与本次**总数**，而**不逐个会话展开 id**（全量清单留给完成回报）"
 	+ (typeof u33Long?.detail === "string" && u33Long.detail.includes("team-link-<team>-<role>-<uuid8>") && u33Long.detail.includes("共 8 个") && !/team-link-night-shift-w\d/u.test(u33Long.detail) ? "" : "（实测：" + show({ hasShape: typeof u33Long?.detail === "string" && u33Long.detail.includes("team-link-<team>-<role>-<uuid8>"), counts: typeof u33Long?.detail === "string" && u33Long.detail.includes("共 8 个"), idListed: typeof u33Long?.detail === "string" && /team-link-night-shift-w\d/u.test(u33Long.detail) }) + "）"),
 	typeof u33Long?.detail === "string" && u33Long.detail.includes("team-link-<team>-<role>-<uuid8>") && u33Long.detail.includes("共 8 个") && !/team-link-night-shift-w\d/u.test(u33Long.detail));
@@ -5329,7 +5329,8 @@ check("U18 preset= 显式给出: 走的是**同一条**代码（resolve(\"coder\
 // the missing composition costs (the setup callback really runs — the stub awaits
 // it, as the factory does — so this is the composed path's own line).
 const noPresetServiceEnv = teamSessionEnv({ askScript: ["创建"], omitAgentPresets: true });
-// ⚠ 2026-09-22（§10.2.8.2 默认值第 4 条落码后改夹具，**判据文本一字未改**）：这几具夹具原本是**无正文无 task=**
+// ⚠ 2026-09-22（§10.2.8.2 默认值第 4 条落码后改夹具，**判据文本一字未改**）：**五具**夹具原本是**无正文无 task=**
+// 它们分别是 DEFECT-1 服务缺席降级（本具）· DEFECT-2 服务缺席降级 · DEFECT-4 服务缺席降级 · DEFECT-4 rename 抛错 · U17 保留（后四处各带一行 INLINE 指针）——
 // 的行，而新默认是「只建会话、不投启动任务」——「照建**照驱动**」这条claim 于是失去触发条件。给它们补上 `task=`
 // 是**保住原有覆盖**（缺服务时那两件事仍然都要发生），不是把断言改软；新默认自己有专门的断言（U30 默认值第 4 条）。
 const noPresetServiceOut = await noPresetServiceEnv.run("n=2 team=defect1 roles=worker-a,worker-b task=验降级仍驱动");
@@ -5363,7 +5364,7 @@ check("DEFECT-2 ② meta.cwd 来自 workspace.path（模板 :103）: registry �
 // 服务缺席是**唯一**允许跳过 workspace 面的分支（§10.3：不许为了它把模块级 inject
 // 撑大 ⇒ 走 `ctx.get`）。降级但绝不静默：会话照建照驱动，每个会话一行 warn。
 const noWsServiceEnv = teamSessionEnv({ askScript: ["创建"], omitWorkspaceRegistry: true });
-const noWsServiceOut = await noWsServiceEnv.run("n=2 team=defect2 roles=worker-a,worker-b task=验降级仍驱动");
+const noWsServiceOut = await noWsServiceEnv.run("n=2 team=defect2 roles=worker-a,worker-b task=验降级仍驱动"); // task= 是 2026-09-22 加的：无正文无 task= 的行不再驱动（见本行上方 ⚠ 说明）
 check("DEFECT-2 降级（唯一允许跳过的分支）: workspaceRegistry 缺席 ⇒ 零 attach、零工作区创建、meta.cwd 回落到调用方 cwd，而会话照建、照驱动（不因服务缺失让整条创建失败）", noWsServiceEnv.creates.length === 2 && noWsServiceEnv.workspaceRegistry.attached.length === 0 && noWsServiceEnv.workspaceRegistry.creates.length === 0 && noWsServiceEnv.creates.every((options) => options.meta.cwd === TEAM_WS) && noWsServiceEnv.created.every((item) => item.calls.followedup.length === 1) && noWsServiceOut.kind === "success");
 check("DEFECT-2 降级不静默: 恰一行 warn/会话，且点名「未挂进工作区，可能不会出现在侧边栏」——正是用户当时找不到会话的那个现象", workspaceServiceWarns(noWsServiceEnv).length === 2 && workspaceServiceWarns(noWsServiceEnv).every((line) => line.includes("未挂进工作区，可能不会出现在侧边栏")));
 // 回滚（模板 :135-147）：失败的创建不留下半个已挂载的会话 —— attach 抛错 ⇒
@@ -5492,12 +5493,12 @@ check(`缺口2 超长团队名下 role 段活下来: 同队两个 role 的标题
 // warn、不阻断创建**。这与 preset / 模型选择那两处的 fail-fast 口径**故意不同**：那两处
 // 决定的是会话**能不能跑**（缺了首回合就死），标题只决定它在侧边栏里长什么样。
 const noTitleEnv = teamSessionEnv({ askScript: ["创建"], omitSessionTitle: true });
-const noTitleOut = await noTitleEnv.run("n=2 team=defect4 roles=worker-a,worker-b task=验降级仍驱动");
+const noTitleOut = await noTitleEnv.run("n=2 team=defect4 roles=worker-a,worker-b task=验降级仍驱动"); // task= 是 2026-09-22 加的：无正文无 task= 的行不再驱动（见上文 ⚠ 说明）
 check("DEFECT-4 ② 服务缺席降级不阻断创建: sessionTitle 缺席 ⇒ 零 rename，而两个会话照建、照驱动、照登记（团队里 worker-a/worker-b 两个角色都在，外加创建路径认领的 coordinator），批次仍报成功（其余面一字不变）", noTitleEnv.creates.length === 2 && noTitleEnv.sessionTitle.renames.length === 0 && noTitleEnv.created.every((item) => item.calls.followedup.length === 1) && noTitleEnv.store().length === 1 && at(noTitleEnv.store(), 0, { roles: [] }).roles.map((entry) => entry.role).sort().join(",") === "coordinator,worker-a,worker-b" && noTitleOut.kind === "success");
 check("DEFECT-4 ② 降级不静默: 一个会话一行 warn，点名「未设标题」的后果（宿主默认标题很可能是工作区名、同一批 worker 在侧边栏里会无法区分）与出路（可在壳里改），并把**打算用的**那个标题如实写出来", sessionTitleServiceWarns(noTitleEnv).length === 2 && sessionTitleServiceWarns(noTitleEnv).every((line) => line.includes("未设标题") && line.includes("工作区名") && line.includes("无法区分") && line.includes("手动")) && sessionTitleServiceWarns(noTitleEnv).some((line) => line.includes("defect4 · worker-a")) && sessionTitleServiceWarns(noTitleEnv).some((line) => line.includes("defect4 · worker-b")));
 // 第二档降级：服务在、但 rename 抛错（标题为空 / 会话不在册 / 服务已 dispose）。
 const refuseRenameEnv = teamSessionEnv({ askScript: ["创建"], sessionTitleOptions: { refuseRename: true } });
-const refuseRenameOut = await refuseRenameEnv.run("n=1 team=defect4 roles=worker-a task=验降级仍驱动");
+const refuseRenameOut = await refuseRenameEnv.run("n=1 team=defect4 roles=worker-a task=验降级仍驱动"); // task= 是 2026-09-22 加的：无正文无 task= 的行不再驱动（见上文 ⚠ 说明）
 check("DEFECT-4 ② rename 抛错 ⇒ 同样只降级: 恰一行 warn/会话（点名 rename failed 与后果），会话照建照驱动、批次仍报成功（异常不许从呈现面漏出去炸掉建队）", refuseRenameEnv.creates.length === 1 && refuseRenameEnv.sessionTitle.renames.length === 0 && refuseRenameEnv.created.every((item) => item.calls.followedup.length === 1) && sessionTitleRenameWarns(refuseRenameEnv).length === 1 && sessionTitleRenameWarns(refuseRenameEnv)[0].includes("工作区名") && refuseRenameOut.kind === "success");
 // 口径说明（任务第 5 条）：确认框与回执都要说明**设了什么标题**、用户想改随时可改。
 const titleTextEnv = teamSessionEnv({ askScript: ["创建"] });
@@ -5610,7 +5611,7 @@ check("U17 幂等: a mixed batch creates only the missing role, skips the seated
 
 // --- 部分失败: 失败即停 · 已建者保留 · 如实报告 -------------------------------
 const failEnv = teamSessionEnv({ askScript: ["创建"], failCreateAt: 1 });
-const failOut = await failEnv.run("n=3 team=night-shift roles=worker-a,worker-b,worker-c task=做接口");
+const failOut = await failEnv.run("n=3 team=night-shift roles=worker-a,worker-b,worker-c task=做接口"); // task= 是 2026-09-22 加的：无正文无 task= 的行不再驱动（见上文 ⚠ 说明）
 const failFirstId = at(failEnv.creates, 0, {}).sessionId;
 check("U17 失败即停: the k-th create failing stops the loop — the third session is never attempted", failEnv.creates.length === 2 && failOut.kind === "error" && failOut.text.includes("未尝试") && failOut.text.includes("失败即停"));
 check("U17 保留: the sessions already created are KEPT (nothing is rolled back) and the first one is still driven", failEnv.created.length === 1 && failEnv.created[0].calls.followedup.length === 1 && failEnv.agentFor(failFirstId) !== undefined && failOut.text.includes(`worker-a → ${failFirstId}：已创建 + 已投递启动任务`));
