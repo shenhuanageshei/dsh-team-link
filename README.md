@@ -417,11 +417,11 @@ flowchart TD
 
 ### 侧栏「会话工具」入口（0.3.9 起）
 
-侧栏底部（消耗卡片之下、【设置】之上）多一个入口，点开是**任意会话**的列表：**复制链接 / 导出会话 / 打开会话**——不必先进入那个会话。入口注册进官方槽位 `sidebar.footer.action`（**不改任何官方文件**）。
+侧栏底部（**同一 flex 行内**、位于消耗卡片**右侧** —— `order: 0` 升序 ⇒ 排在 `order: -10` 的消耗卡之后、【设置】之前）多一个入口，点开是**任意会话**的列表：**复制链接 / 导出会话 / 打开会话**——不必先进入那个会话。入口注册进官方槽位 `sidebar.footer.action`（**不改任何官方文件**）。
 
 | 面 | 行为 |
 |---|---|
-| 位置与形态 | `id: team-link-session-tools`、`order: 0`（升序 ⇒ 落在消耗卡片 `order: -10` 之下、【设置】之上）；宽态=图标 + 文字「会话工具」，收起态（56px 轨道）**只渲染图标**，文字转 `aria-label`/`title` |
+| 位置与形态 | `id: team-link-session-tools`、`order: 0` —— **同一 flex 行内、位于消耗卡片 `order: -10` 的右侧**（`order: 0` 升序 ⇒ 排在它之后、【设置】之前）。**为什么不是「下方」**：官方 `.footerActions` 是 `display:flex`（方向默认 row），且官方 sidebar 全档 `flex-wrap` 出现 **0** 次 ⇒ **不换行**，而插件**无法从子元素侧改变父级换行**（改父级 = 改官方文件，违反设计档 §1.3 的红线 N5）；2026-09-21 真机读数（owner 截图）与之一致：入口渲染在消耗卡**右侧**。宽态=图标 + 文字「会话工具」，收起态（56px 轨道）**只渲染图标**，文字转 `aria-label`/`title` |
 | 弹窗 | 官方 **`Modal`**（居中、挂 body——收起态轨道只有 56px，锚定面板会被裁切）：标题 + 当前计数 → 搜索框 → 会话列表（可滚动）→ 有界呈现标注 → 底部（范围切换 + 关闭） |
 | 数据源 | `ctx.sessions.list` / `ctx.workspaces.list`：丢弃 `origin === 'subagent'`、丢弃已归档、丢弃 blank 行、**丢弃当前会话**（本面板的用途是「**其他**会话」——当前会话的复制/导出已在会话头部按钮上；丢弃它之后官方那条「blank 行只在它是当前会话时保留」自然退化为「blank 行一律丢」），按 `updatedAt` 倒序；当前会话 = `retainedBy.mainView > 0` 的那一行（官方同款约定，只用于**定位当前工作区**与**把它从列表里剔除**）；**默认范围 = 当前工作区**，底部可切「全部工作区」 |
 | 列表行 | 状态点（**恰两态**：运行中 / 空闲，唯一数据源 `SessionSummary.running`）+ 标题（超长省略）+ 相对时间（切「全部工作区」时追加工作区名）；「复制链接」「导出会话」**默认隐藏，鼠标悬停该行或该行获得键盘焦点才浮现**；点行本身 = 打开该会话 |
@@ -831,7 +831,7 @@ dev_install_package { dir: "<你的目录>/dsh-team-link", profile: "web" }
 
 ### 依赖声明：宿主包一律走 peerDependencies
 
-`@deepseek-ai/dsh-session-reference`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/dsh-client-locale`、`@deepseek-ai/dsh-client-ui-conversation`、`@deepseek-ai/cordis` 都由 shell 提供，因此声明为 **peerDependencies**；只有与 shell 无身份耦合的纯库 `schemastery` 留在 `dependencies`。写成 `dependencies` 会在全新安装时拉进**第二份**同一个包（版本还可能落后于 shell）。
+`@deepseek-ai/dsh-session-reference`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/dsh-client-locale`、`@deepseek-ai/dsh-client-ui-conversation`、`@deepseek-ai/dsh-client-ui-workspace`、`@deepseek-ai/dsh-api-session-controller`、`@deepseek-ai/dsh-api-workspace-controller`、`@deepseek-ai/cordis` 都由 shell 提供，因此声明为 **peerDependencies**（**八项**）——纪律一句话：**凡进 `dsh.client.inject` 的宿主包，一律同时进 `peerDependencies`**（`dsh.client.inject` 的五项逐个都在上面这份名单里；shell 的 seed 模块 `dsh-client-ui-primitives` 两边都不进，理由见本节末）。只有与 shell 无身份耦合的纯库 `schemastery` 留在 `dependencies`。写成 `dependencies` 会在全新安装时拉进**第二份**同一个包（版本还可能落后于 shell）。
 
 版本区间写成 `^0.1.0-rc.6 || ^0.1.5-rc.1` 而不是单个 `^0.1.0-rc.6`：npm 的 semver 规定「预发布版本只有在区间里存在**同一 major.minor.patch** 的预发布比较符时才算满足」，所以 `^0.1.0-rc.6`（乃至 `*`）都匹配不到 `0.1.5-rc.1`——区间写窄了会在 0.1.5 上误报 unmet peer，甚至触发自动安装第二份。
 
@@ -852,7 +852,7 @@ dev_install_package { dir: "<你的目录>/dsh-team-link", profile: "web" }
 
 DSH 默认装配均有。
 
-**浏览器半边的模块声明（`dsh.client.inject`）**：除既有的 `@deepseek-ai/dsh-client-locale` 与 `@deepseek-ai/dsh-client-ui-conversation`，0.3.9 起另声明三项——`@deepseek-ai/dsh-client-ui-workspace`（会话导航 `uiWorkspace.openSession`）、`@deepseek-ai/dsh-api-session-controller`（`ctx.sessions.list`）、`@deepseek-ai/dsh-api-workspace-controller`（`ctx.workspaces.list`）。三者都随已发布的 web 组合恒在；**服务本身是否可用仍逐项运行时判定**：`ctx.inject(["sessions", "workspaces", "uiWorkspace"], …)` 齐备才注册侧栏入口，缺任一项 ⇒ 入口不注册 + 一行 warn（见 §二）。
+**浏览器半边的模块声明（`dsh.client.inject`）**：除既有的 `@deepseek-ai/dsh-client-locale` 与 `@deepseek-ai/dsh-client-ui-conversation`，0.3.9 起另声明三项——`@deepseek-ai/dsh-client-ui-workspace`（会话导航 `uiWorkspace.openSession`）、`@deepseek-ai/dsh-api-session-controller`（`ctx.sessions.list`）、`@deepseek-ai/dsh-api-workspace-controller`（`ctx.workspaces.list`）。三者都随已发布的 web 组合恒在，且都是**宿主包** ⇒ 与既有两个客户端模块同一条纪律：**同时**写进 `dsh.client.inject`（模块图）与 `peerDependencies`（沿用同款版本区间），防止全新安装时拉进第二份；**服务本身是否可用仍逐项运行时判定**：`ctx.inject(["sessions", "workspaces", "uiWorkspace"], …)` 齐备才注册侧栏入口，缺任一项 ⇒ 入口不注册 + 一行 warn（见 §二）。
 
 纯 React 原子模块 `@deepseek-ai/dsh-client-ui-primitives`（弹窗用的官方 `Modal`、相对时间分桶、剪贴板写入）**不写进** `dsh.client.inject`：它是 shell 的 **seed 模块**（与 react 同级由 shell 注入），官方插件如 `dsh-better-sidebar` 引用它时同样不声明。
 

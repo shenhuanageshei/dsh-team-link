@@ -59,8 +59,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-api-session-controller": "^0.1.0-rc.6 || ^0.1.5-rc.1",
+    "@deepseek-ai/dsh-api-workspace-controller": "^0.1.0-rc.6 || ^0.1.5-rc.1",
     "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6 || ^0.1.5-rc.1",
     "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.6 || ^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-workspace": "^0.1.0-rc.6 || ^0.1.5-rc.1",
     "@deepseek-ai/dsh-session-reference": "^0.1.0-rc.6 || ^0.1.5-rc.1",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6 || ^0.1.5-rc.1"
   }
