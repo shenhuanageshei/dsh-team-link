@@ -5132,6 +5132,19 @@ const codePointsOf = (text) => [...String(text ?? "")].length;
 const newlinesOf = (text) => (String(text ?? "").match(/\n/gu) ?? []).length;
 const LONG_CWD = "/very/long/path/" + "d".repeat(110);
 const U33_LONG_TEAM = "t".repeat(39);
+/** §10.2.8.4 (b) 的**标注两档**（具名常量，由 `__testing` 导出）：N=1 时全档 **21** 码点、
+ * 最小档 **11** 码点，各另加 1 换行。夹具断言读的就是**实现那两个常量**，不另抄一份文案 ——
+ * 旧实现上这两个导出是 `undefined`，所以一律经 `at()` 取用（Y7 纪律：红相不许把套件打成崩溃，
+ * 否则 `assertion total` 都不打印，那轮红相就谎报了自己的规模）。 */
+const u33CropTiers = Array.isArray(__testing.TEAM_SESSION_DIALOG_CROP_NOTE_TIERS) ? __testing.TEAM_SESSION_DIALOG_CROP_NOTE_TIERS : [];
+const u33FullNote = (dropped) => (typeof at(u33CropTiers, 0) === "function" ? u33CropTiers[0](dropped) : `（已省略 ${dropped} 段自述；必备披露一字未少。）`);
+const u33MinimalNote = (dropped) => (typeof at(u33CropTiers, 1) === "function" ? u33CropTiers[1](dropped) : `（已省略 ${dropped} 段自述）`);
+/** 交付串里那句标注永远是**被追加的最后一行** ⇒ 按**行**剥离就能把「必备 body」与「标注」分开量，
+ * 不必逐字匹配某一档的措辞。同一个助手对**新旧两棵树都成立**，因此 U33 (i) 的红相落在
+ * 「交付 ≤ 600」这条判据上，而不是落在夹具守卫（body 落在哪条带里）上。 */
+const u33CropNoteLine = /\n（已[^\n]*）$/u;
+const u33RequiredBodyOf = (detail) => String(detail ?? "").replace(u33CropNoteLine, "");
+const u33HasCropNote = (detail) => typeof detail === "string" && u33RequiredBodyOf(detail) !== detail;
 
 // --- U33 换槽位（§10.2.8.4 修法表第 0 行，首要、结构性）-----------------------
 // 壳把 question 渲进**无高度钳制、且在滚动容器之外**的 <header><h2>，而 detail 在
@@ -5179,10 +5192,16 @@ check("U33 长 cwd 裁剪标注: cwd 字段被截就留下省略号（裁剪是*
 const u33TeamEnv = teamSessionEnv({ askScript: ["取消"] });
 await u33TeamEnv.run("n=2 team=" + U33_LONG_TEAM + " roles=worker-a,worker-b");
 const u33Team = askedQuestion(u33TeamEnv);
-check("U33 长团队名裁剪标注: 39 字的团队名被截且留下省略号，段落裁剪的标注（「已裁剪至 600 码点 / 12 行上限」）同时在场，两个预算不破", u33Team?.detail.includes("ttttttttttttttttttt…") && !u33Team.detail.includes("t".repeat(25)) && u33Team.detail.includes("已裁剪至 600 码点 / 12 行上限") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 && codePointsOf(u33Team.question) <= 120 && newlinesOf(u33Team.question) === 0);
+// 2026-09-22 会诊 #68 批（U33 口径定档）：标注自己**参与**预算，所以旧文案「已裁剪至 600 码点 /
+// 12 行上限」在交付串恰好超线时**自证矛盾**，两档新文案都不再写它 —— 本条的**强度只增不减**：
+// 标注在场（**逐字**等于全档常量的产物）＋ **两个预算仍然都断言** ＋ 新增「不含那句自证矛盾的话」。
+check("U33 长团队名裁剪标注: 39 字的团队名被截且留下省略号，段落裁剪的标注（全档「（已省略 1 段自述；必备披露一字未少。）」—— 不再是那句「已裁剪至 600 码点 / 12 行上限」）同时在场，两个预算不破"
+	+ (typeof u33Team?.detail === "string" && u33Team.detail.includes(u33FullNote(1)) && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Team?.detail), nl: newlinesOf(u33Team?.detail), note: typeof u33Team?.detail === "string" && u33Team.detail.includes(u33FullNote(1)), contradictory: typeof u33Team?.detail === "string" && u33Team.detail.includes("已裁剪至") }) + "）"),
+	typeof u33Team?.detail === "string" && u33Team.detail.includes("ttttttttttttttttttt…") && !u33Team.detail.includes("t".repeat(25)) && u33Team.detail.includes(u33FullNote(1)) && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 && codePointsOf(u33Team.question) <= 120 && newlinesOf(u33Team.question) === 0);
 // §10.2.8.4 (b) 的逐字段封顶必须覆盖**用户可任意长的取值**：`model=` / `provider=` 由命令行给出，
 // 解析器只定形状（`TEAM_SESSION_MODEL_RE`）不定长度 ⇒ 修前它们**原样内插**进模型行，单这一句
-// 就能顶破 600 码点（而 per-field caps 存在的理由正是「必备披露装得下**每一个**输入」）。
+// 就能顶破 600 码点（而 per-field caps 存在的理由正是「**常规与已验证的极端**装得下」—— 不是
+// 「任意输入都装得下」：最极端组合下必备块本身就超 600，见 U33 (iii) 与设计档 §10.2.8.4 残余行）。
 // 这条用 300 字的 `model=` 直接量它：封顶后模型行带省略号，两个预算仍不破。
 const u33ModelEnv = teamSessionEnv({ askScript: ["取消"] });
 await u33ModelEnv.run("n=2 team=night-shift roles=worker-a,worker-b task=做接口 model=" + "m".repeat(300));
@@ -5203,9 +5222,9 @@ check("U33 长 preset= 封顶（自有上限 24，与 provider 同级）: 60 字
 const u33BothEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
 await u33BothEnv.run("n=8 team=" + U33_LONG_TEAM + " roles=w1,w2,w3,w4,w5,w6,w7,w8 task=" + "y".repeat(500));
 const u33Both = askedQuestion(u33BothEnv);
-check("U33 两者都长（团队名 + cwd + 8 会话 + 长正文）: 两个预算仍然不破，且裁剪有标注"
-	+ (codePointsOf(u33Both?.detail) <= 600 && newlinesOf(u33Both?.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Both?.detail), nl: newlinesOf(u33Both?.detail) }) + "）"),
-	codePointsOf(u33Both?.detail) <= 600 && newlinesOf(u33Both.detail) <= 12 && newlinesOf(u33Both.question) === 0 && codePointsOf(u33Both.question) <= 120 && u33Both.detail.includes("已裁剪至 600 码点 / 12 行上限"));
+check("U33 两者都长（团队名 + cwd + 8 会话 + 长正文）: 两个预算仍然不破，且裁剪有标注（新文案全档在场、不再有那句自证矛盾的「已裁剪至 …」）"
+	+ (codePointsOf(u33Both?.detail) <= 600 && newlinesOf(u33Both?.detail) <= 12 && typeof u33Both?.detail === "string" && u33Both.detail.includes(u33FullNote(1)) ? "" : "（实测：" + show({ cp: codePointsOf(u33Both?.detail), nl: newlinesOf(u33Both?.detail), note: typeof u33Both?.detail === "string" && u33Both.detail.includes(u33FullNote(1)) }) + "）"),
+	typeof u33Both?.detail === "string" && codePointsOf(u33Both.detail) <= 600 && newlinesOf(u33Both.detail) <= 12 && newlinesOf(u33Both.question) === 0 && codePointsOf(u33Both.question) <= 120 && u33Both.detail.includes(u33FullNote(1)) && !u33Both.detail.includes("已裁剪至"));
 
 // 压缩只压自述段：**必备披露**（数量 / 模型 / cwd / 成本 / 配对授权）与 §10.2.8.7 的角色指引
 // 在预算最紧的那个用例里仍一字不少 —— 这条是 U33 与 §10.2.4 / §10.2.8.7 之间的锁。
@@ -5223,6 +5242,76 @@ const u33Required = [
 check("U33 压缩后必备披露一字不少: 预算最紧的用例（长团队名 + 长 cwd + 8 会话 + 长正文）里，数量 / 模型 / cwd / 成本 / 配对授权与角色指引全部在场"
 	+ (u33Required.every((token) => typeof u33Both?.detail === "string" && u33Both.detail.includes(token)) ? "" : "（缺：" + show(u33Required.filter((token) => !u33Both?.detail.includes(token))) + "）"),
 	u33Required.every((token) => typeof u33Both?.detail === "string" && u33Both.detail.includes(token)));
+
+// --- U33 标注计价：交付的是 `detail`（**含标注行**）（§10.2.8.4 (b)，2026-09-22 会诊 #68 裁定）----
+// 病灶（**结构式**，不靠某个输入的读数立论）：被弃路径的终态 `text = candidate(kept, dropped)` 在
+// **装完 body 之后**才贴上标注，**不再过 `dialogFits`** ⇒ 交付 = body ＋ 标注（旧文案 41 码点 ＋
+// 1 换行）⇒ **凡 body > 558 即溢出**，而框里那句还写着「已裁剪至 600 码点 / 12 行上限」——
+// **输出物自述与事实相反**。
+// 口径（U33 定档 = **交付 `detail`**）：交付 ≤ **max(600, 必备 body ＋ 12)**，其中 12 = 最小档
+// 标注 11 码点 ＋ 1 换行 —— 即「**标注永不是首个破约者**」：body ≤ 588 ⇒ 交付 ≤ 600；
+// body ∈ (588, 600] ⇒ 最多超 ≤ 12 码点且**必带标注**；body > 600 属**机制一**（必备块自超，
+// 设计档 §10.2.8.4 残余行）。下面三分支各一具，实测读数（本树）：
+//   (i) body 582 ⇒ 交付 594（最小档）· (ii) body 592 ⇒ 604（＝ body ＋ 12）· (iii) body 693 ⇒ 705。
+// 夹具的 「必备 body」按**行**剥离标注量出来（标注永远是被追加的最后一行，见上面的助手）。
+check("U33 标注档位（具名常量）: 两档都在、长度按**实际 `dropped` 位数**算 —— N=1 时全档 21 码点 / 最小档 11 码点，N=10 时各 +1，且**两档自己都不含**「已裁剪至 … 码点 / … 行上限」这句在超额交付上自证矛盾的话"
+	+ (u33CropTiers.length === 2 && codePointsOf(u33FullNote(1)) === 21 && codePointsOf(u33MinimalNote(1)) === 11 && codePointsOf(u33FullNote(10)) === 22 && codePointsOf(u33MinimalNote(10)) === 12 && !u33CropTiers.some((tier) => typeof tier === "function" && tier(1).includes("已裁剪至")) ? "" : "（实测：" + show({ tiers: u33CropTiers.length, full1: codePointsOf(u33FullNote(1)), minimal1: codePointsOf(u33MinimalNote(1)), full10: codePointsOf(u33FullNote(10)), minimal10: codePointsOf(u33MinimalNote(10)) }) + "）"),
+	u33CropTiers.length === 2 && codePointsOf(u33FullNote(1)) === 21 && codePointsOf(u33MinimalNote(1)) === 11 && codePointsOf(u33FullNote(10)) === 22 && codePointsOf(u33MinimalNote(10)) === 12 && !u33CropTiers.some((tier) => typeof tier === "function" && tier(1).includes("已裁剪至")));
+
+// (i) **装得下的最坏夹具**：必备 body ∈ (558, 588]（body ≤ 588 ⇒ body ＋ 12 ≤ 600）。**改动前必红**：
+// 旧实现给 body ＋ 41 ＋ 1 = 624 > 600。夹具守卫**同时**断言 body 落在带内 —— 否则夹具会悄悄
+// 退化成「body 很小、当然装得下」而继续假绿。这一具的 body 582 让**全档装不下**（582 ＋ 22 = 604），
+// 所以它同时是「取能装进 `dialogFits` 的**最宽**档」这条选择策略的判据（交付的是最小档）。
+const u33BandLine = "n=8 team=" + U33_LONG_TEAM + " roles=a,b,c,d,e,f,g,h task=" + "z".repeat(200) + " preset=" + "p".repeat(15) + " model=" + "m".repeat(30);
+const u33BandEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
+await u33BandEnv.run(u33BandLine);
+const u33Band = askedQuestion(u33BandEnv);
+const u33BandBody = codePointsOf(u33RequiredBodyOf(u33Band?.detail));
+check("U33 (i) 装得下的最坏夹具: 必备 body ∈ (558, 588] 时**交付 `detail`（含标注行）≤ 600 且 ≤ 12 换行**，标注在场且取的是**能装进预算的最宽档**（全档 604 装不下 ⇒ 最小档）—— 标注自己**参与**预算，不是贴在装完 body 之后"
+	+ (typeof u33Band?.detail === "string" && codePointsOf(u33Band.detail) <= 600 && newlinesOf(u33Band.detail) <= 12 && u33HasCropNote(u33Band.detail) && u33Band.detail.includes(u33MinimalNote(1)) ? "" : "（实测：" + show({ bodyCp: u33BandBody, cp: codePointsOf(u33Band?.detail), nl: newlinesOf(u33Band?.detail), note: u33HasCropNote(u33Band?.detail), minimalTier: typeof u33Band?.detail === "string" && u33Band.detail.includes(u33MinimalNote(1)) }) + "）"),
+	typeof u33Band?.detail === "string" && u33BandBody > 558 && u33BandBody <= 588 && codePointsOf(u33Band.detail) <= 600 && newlinesOf(u33Band.detail) <= 12 && u33HasCropNote(u33Band.detail) && u33Band.detail.includes(u33MinimalNote(1)) && !u33Band.detail.includes("已裁剪至"));
+
+// (ii) **带内夹具**：必备 body ∈ (588, 600] —— 父侧实测的那一具（39 字团队名 ＋ 8 会话 roles=a..h ＋
+// 200 字 task= ＋ 15 字 preset= ＋ 300 字 model= ＋ 长 cwd ＋ 12 字协调者 id ⇒ **body 592**）。
+// 这一档**必然**超线（600 − 588 = 12 的余量装不下 21 码点的全档）⇒ 只许超 ≤ 12 码点，且**必须**
+// 带标注，且**不得**出现「已裁剪至 600 码点」这类自证矛盾的句子。
+const u33EdgeLine = "n=8 team=" + U33_LONG_TEAM + " roles=a,b,c,d,e,f,g,h task=" + "z".repeat(200) + " preset=" + "p".repeat(15) + " model=" + "m".repeat(300);
+const u33EdgeEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
+await u33EdgeEnv.run(u33EdgeLine);
+const u33Edge = askedQuestion(u33EdgeEnv);
+const u33EdgeBody = codePointsOf(u33RequiredBodyOf(u33Edge?.detail));
+check("U33 (ii) 带内夹具（body ∈ (588, 600]）: 交付 ≤ **必备 body ＋ 12**（最小档 11 ＋ 1 换行）且**标注在场**、且**不含**「已裁剪至 600 码点」这类自证矛盾的句子"
+	+ (typeof u33Edge?.detail === "string" && u33EdgeBody > 588 && u33EdgeBody <= 600 && codePointsOf(u33Edge.detail) <= u33EdgeBody + 12 ? "" : "（实测：" + show({ bodyCp: u33EdgeBody, cp: codePointsOf(u33Edge?.detail), nl: newlinesOf(u33Edge?.detail), note: u33HasCropNote(u33Edge?.detail), contradictory: typeof u33Edge?.detail === "string" && u33Edge.detail.includes("已裁剪至") }) + "）"),
+	typeof u33Edge?.detail === "string" && u33EdgeBody > 588 && u33EdgeBody <= 600 && codePointsOf(u33Edge.detail) <= u33EdgeBody + 12 && newlinesOf(u33Edge.detail) <= 12 && u33HasCropNote(u33Edge.detail) && u33Edge.detail.includes(u33MinimalNote(1)) && !u33Edge.detail.includes("已裁剪至"));
+
+// (iii) **机制一夹具**：必备 body > 600（父侧实测最坏 ⇒ **body 693**）：39 字团队名 ＋ 8 个 8 码点
+// 角色名（其中 3 个**已登记**，触发「（已登记，跳过）」后缀）＋ 3000 字正文 ＋ 300 字 model= ＋
+// 60 字 preset= ＋ 长 cwd ＋ **取满 28 码点**的协调者 id。必备块**永不裁剪** ⇒ 这一档必然超线，
+// 但**标注仍须在场**、且交付 ≤ body ＋ 12（标注那一半**不许**成为第二个破约者）—— 这是设计档
+// §10.2.8.4 残余行「第一机制」的如实标注，不是本批要「修好」的东西。
+const U33_MECH1_ROLES = ["aaaaaaaa", "bbbbbbbb", "cccccccc", "dddddddd", "eeeeeeee", "ffffffff", "gggggggg", "hhhhhhhh"];
+const U33_MECH1_COORD = "session-" + "c".repeat(20);
+const U33_MECH1_SEATED = U33_MECH1_ROLES.slice(0, 3);
+/** 取满 28 码点协调者 id 的调用会话：writerGate 只比 id（不比活性），所以这个替身会把
+ * `coordinatorId` 与 `cwd` 两处都读成夹具要的值。 */
+const u33Mech1Agent = { id: U33_MECH1_COORD, status: "idle", session: { header: { id: U33_MECH1_COORD, cwd: LONG_CWD } }, inject() {}, steer() {}, followup() {} };
+const u33Mech1Env = teamSessionEnv({
+	askScript: ["取消"],
+	selfCwd: LONG_CWD,
+	teams: [teamRow({ name: U33_LONG_TEAM, current: U33_MECH1_COORD, roles: [
+		{ role: "coordinator", current: U33_MECH1_COORD, pending: null, history: [{ session: U33_MECH1_COORD, from: 1_700_000_000_000, until: null }] },
+		...U33_MECH1_SEATED.map((role) => ({ role, current: null, pending: null, history: [] })),
+	] })],
+});
+await u33Mech1Env.run("n=8 team=" + U33_LONG_TEAM + " roles=" + U33_MECH1_ROLES.join(",") + " task=" + "x".repeat(3000) + " preset=" + "p".repeat(60) + " model=" + "m".repeat(300), u33Mech1Agent);
+const u33Mech1 = askedQuestion(u33Mech1Env);
+const u33Mech1Body = codePointsOf(u33RequiredBodyOf(u33Mech1?.detail));
+check("U33 (iii) 机制一夹具（必备 body > 600）: 必备块永不裁剪 ⇒ 这一档**必然**超线，但**标注仍须在场**、且交付 ≤ **必备 body ＋ 12**（「标注永不是首个破约者」在机制一里同样成立；超额只能由不可裁的必备 body 引起）"
+	+ (typeof u33Mech1?.detail === "string" && u33Mech1Body > 600 && codePointsOf(u33Mech1.detail) <= u33Mech1Body + 12 ? "" : "（实测：" + show({ bodyCp: u33Mech1Body, cp: codePointsOf(u33Mech1?.detail), nl: newlinesOf(u33Mech1?.detail), note: u33HasCropNote(u33Mech1?.detail) }) + "）"),
+	typeof u33Mech1?.detail === "string" && u33Mech1Body > 600 && codePointsOf(u33Mech1.detail) <= u33Mech1Body + 12 && newlinesOf(u33Mech1.detail) <= 12 && u33HasCropNote(u33Mech1.detail) && u33Mech1.detail.includes(u33MinimalNote(1)) && !u33Mech1.detail.includes("已裁剪至"));
+check("U33 (iii) 机制一的成因可读: 该夹具的 8 个角色里 3 个**已登记**（「（已登记，跳过）」后缀）且必登记的必备块一字不少 —— 超额的成因是**必备块自超**，不是标注；这一条把「跳过」后缀与必备披露连带钉住"
+	+ (typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("（已登记，跳过）") && u33Mech1.detail.includes("3 个角色已登记，跳过") && u33Mech1.detail.includes("将创建 5 个 worker 根会话") && u33Mech1.detail.includes("共 8 个") ? "" : "（实测：" + show({ skipped: typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("3 个角色已登记，跳过"), creating: typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("将创建 5 个 worker 根会话") }) + "）"),
+	typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("（已登记，跳过）") && u33Mech1.detail.includes("3 个角色已登记，跳过") && u33Mech1.detail.includes("将创建 5 个 worker 根会话") && u33Mech1.detail.includes("共 8 个"));
 
 // --- U30 输入文法与正文送达（§10.2.8.2 方案 A「参数可省」）--------------------
 // R1：参数区只在行首；R2：进入正文后任何「字母＋等号」一律当正文（§10.2.8.1 的病灶正是
