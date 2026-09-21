@@ -284,3 +284,50 @@ assertion total: 903 (failed: 10)
 - **激活 warn 行的前缀仍是 `webServer service unavailable at activation`**，缺的到底是哪个服务由 `describeMountFailure` 的括号点名（`no connection service` / `connection without requestRejection()`）。这与 §4.1 ①「沿用既有的**一次窗口一行 warn** 模式，`describeMountFailure` 扩两个新 reason 的措辞」逐字一致——设计要扩的是措辞，不是换标语。
 - **真机复验点 1（§6 末的三条 curl 组合重放）未执行**：本轮只做单元面（本机 3080 页面的新宿主半边仍需一次重启窗口）。与 0.3.8 同口径，不把未验的说成已验。
 
+---
+
+## 批次 2（§4.2）恢复能力加宽两格（2026-09-21；当次实测 `920 (failed: 0)` / `170 (failed: 0)`，基线 `903` / `170`）
+
+**本轮新增 17 条断言**（`920 − 903`，宿主半边；客户端半边一字未动），并**改写 6 条被语义变更推翻的既有断言**（逐条留证，见下）。设计见 `hardening-and-recovery-design-2026-09-21.md` §4.2 / §5 B3–B6 / §6 U7–U11。
+
+### 病灶（修复前必红，实测读数）
+
+本轮的红相取法是**隔离夹具**：把**本批的新测试文件 + 新 README** 与**批次 1 的 `lib/index.js`**（`git show b48b34e:lib/index.js`）放进 `.test-tmp/s2-red/`（已 gitignore），在**同一目录**里跑——这样红相隔离的正是这一批的实现改动，而不是一个手写的工作树快照。
+
+```
+node .test-tmp/s2-red/host-half.test.mjs   →   assertion total: 920 (failed: 21)
+```
+
+21 条 FAIL 全部落在本批断言上：
+
+| 组 | 条数 | 红相读到的 |
+|---|---|---|
+| U7 (a) | 2 | 插件自建的死 worker 被**角色门**拒（`本工具只为 coordinator 角色恢复（请求的是 worker-a）`），`resumeCalls === 0` |
+| U8 (B3) | 1 | **连所有权门的文案都读不到**——角色门先拒，所以「人类自建 ⇒ 深链指引」这条既有行为在红相里根本走不到（这本身就是「角色门挡在适用域之前」的实证） |
+| U9 (c) | 10 | 对话框里没有合成候选；没有创建；没有交接文档；没有三处留痕（连 `role("b").recoveries` 都是空） |
+| U10 | 1 | 无 `agents.create` 时既没有闸门也没有「零弹框」（连对话框都照常弹） |
+| U11 / 收敛性 | 2 | 取消语义里没有合成候选这回事；`reapCandidateRoles` 的返回形状里没有合成项 |
+| 既有断言的语义变更 | 5 | U26 窄域 / Y1 对照 / Y1 双向锁（README+描述）/ Y2 宣传面 / U27 候选由插件算 / U27 全队皆死 —— 设计 §9 **A7** 点名的「既有断言可能把『非 coordinator 一律拒』钉死」**实测成立** |
+
+**改写而不是删除**：这 6 条旧锁每一条都改成咬**新语义**（`revive` 不再被角色门拒；候选集含常驻合成候选；全队皆死时对话框照常弹出且唯一候选就是合成候选；README 与工具描述都说「两个动词都受理任意角色」且旧窄域措辞一处不剩），并在注释里写明「旧断言在这里被推翻、为什么」。语义变更本身**不是**缺陷，所以锁要跟着事实走，而不是把事实按锁改写。
+
+**红相是干净的（一次自查）**：首版红跑**崩在** `__testing.selfBuiltHandoffBody(...)` 那一行（旧实现没有这个可测面）⇒ 连 `assertion total` 都不打印，红相说不清自己有多大。按本仓 **Y7 纪律**给两个新可测面加了类型护栏（`typeof f === "function"` 先判再调）后，红跑跑到底并打印 `920 (failed: 21)`——这正是 Y7 存在的理由。
+
+### 修复（绿相）
+
+`node host-half.test.mjs` → **`920 (failed: 0)`**；`node client-half.test.mjs` → `170 (failed: 0)`。
+
+- **(a)**：删除 `reviveIncumbent` 的角色门分支（所有权门 `pluginSessionIdMatches || hasHandle`、`resume` 可用性检查、确认框、两次写前复检**一字未动**）。
+- **(c)**：`reapCandidateRoles` 返回「活成员 ∪ 合成候选（`synthetic: true`，label = 插件常量 `SELF_SUCCESSOR_LABEL`）」；答案按 **label** 回读（`candidateLabel`），所以「模型不得指定继任者 id」这条**更强**了——合成候选连 id 都还没有；新增 `appointSelfBuiltSuccessor`（能力闸门 → pending 意图 → `createRootAgent`（与 `/team_session`、`successor:"auto"` **同一处**创建落点）→ 交接文档（`selfBuiltHandoffBody` + `handoffBodyReport`，先于 `prepare`，§11.9.6 abort-before-prepare）→ `prepare` 逐字（带 `recovery` 附加块）→ 清除 pending 意图 → 三处留痕）；删除「候选集为空」的不可达分支。
+
+### 同改清单（都由同一条事实驱动，逐条留证）
+
+1. **宣传面同批**（§10 清单逐条）：工具 description 的两个动词段与角色面段、`action` / `role` 参数文案、`recoveryDiagnosticLines` 的恢复入口行；README 的工具表、§11.9.4 恢复叙述（角色面 + 「选自建继任者时发生什么」新段）、八条硬约束 ③；父设计 `docs/collab-enhancements-design-2026-09-19.md` §11.9.4 / §11.9.5 各一处增补。**工具 description 里刻意不提「旧文案已作废」**——那会把被禁的旧措辞带进模型可见面（`Y1` 双向锁当场抓到过这一点，是「描述面里不该留变更史」的实证）。
+2. **测试骨架新增 `omitAgentsCreate`**（`setup` + `rotateEnv` 转发）：U10 的「无 `agents.create`」这一档在桩里必须真的没有那个方法，否则测的是「有这样的方法」而不是「没有」。
+3. **`reviveEnv` 的两次既有调用会被 10 分钟限速窗口挡住**：角色体判据改在**新环境**里读（`reviveRoleFaceEnv`），而「不再被角色门拒」这条负向判据仍在原环境上读——两处各读各的面，避免一条断言同时依赖两件事。
+
+### 如实标注（设计未逐字规定、由实现定夺的两处）
+
+- **自建继任者的 cwd**：团队 `workspace` 优先、发起会话 cwd 回落；都拿不到绝对路径 ⇒ fail-closed（零创建）。§4.2 (c) 没写 cwd 从哪来。
+- **交接文档写在 `prepare` 之前**：按 §11.9.6 的 abort-before-prepare 与 `successor:"auto"` 同序（§4.2 (c) 的编号是元素清单、不是时序），并把这一点写进了代码注释与 CHANGELOG，免得下一个读者以为是先后写错。
+- **真机演练（§6 复验点 2：用 threat-intel 真实 roster 形做一次演练）未执行**：本轮用的是同形夹具（coordinator 活、b/c 人类 id dead）。与 0.3.8 同口径，不把未验的说成已验。

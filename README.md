@@ -169,7 +169,7 @@ sequenceDiagram
 | `team_link_team_read` | 一次读齐 roster + decisions 末 20 条 + discipline 全文 + 两个 baseHash |
 | `team_link_team_append` | 写黑板：`decisions` 只追加 / `discipline` 整文件替换（乐观锁） |
 | `team_link_rotate` | 两阶段换届（prepare / claim），一次性令牌 + 域限定迁移；`successor:"auto"` = 插件自建继任者 + 写交接文档 + followup 投递（§11.2） |
-| `team_link_recover` | 角色恢复（**恰两个封闭动词**）：`revive`（复活当前现任那个会话本身，仅插件自建会话，身份/信任零改动）／`reappoint`（人改任 = 人类对话授权的 prepare，候选由插件从本队活成员算出）。attended-only：无确认服务即 fail-closed，刻意没有无人值守变体（§11.9.4） |
+| `team_link_recover` | 角色恢复（**恰两个封闭动词**）：`revive`（复活当前现任那个会话本身，仅插件自建会话、**任意角色**，身份/信任零改动）／`reappoint`（人改任 = 人类对话授权的 prepare，候选 = 本队活成员 ∪ 常驻的「自建继任者（新建会话）」，由插件算出）。attended-only：无确认服务即 fail-closed，刻意没有无人值守变体（§11.9.4 / §4.2） |
 
 > `team_link_export` 走 `sessionQuery` 读会话；`team_link_send` 走 `agents` 投递。两者都不需要目标会话正在被 UI 打开——但**目标必须有活动代理**（见第一节的 A4 诚实声明）。
 
@@ -666,15 +666,17 @@ sequenceDiagram
 | 级 | 动词 | 机制 | 何时用 |
 | --- | --- | --- | --- |
 | L1 | `revive` | `ctx.agents.resume` **复活同一个会话**（身份不变、roster 不动、信任零改动） | 死亡绝大多数是重载/重启假象 |
-| L2 | `reappoint` | **人类对话授权的 prepare**：候选由插件从**本队活成员**算出 → 人类勾选 → 铸令牌绑定 `(team, role, successor)` → 逐字走既有 prepare（`rotationBackup` 快照 + `rotation-freeze` 广播）→ 继任者凭令牌 `claim`（**claim 一步不改，不新增令牌类型**） | 现任不会/不应再回来 |
+| L2 | `reappoint` | **人类对话授权的 prepare**：候选 = 插件从**本队活成员**算出的成员 **∪ 常驻的「自建继任者（新建会话）」** → 人类勾选 → 铸令牌绑定 `(team, role, successor)` → 逐字走既有 prepare（`rotationBackup` 快照 + `rotation-freeze` 广播）→ 继任者凭令牌 `claim`（**claim 一步不改，不新增令牌类型**） | 现任不会/不应再回来 |
 
 **L1 的适用域**（`revive` 只对**插件自建**会话开放）：`resume` 的 `ownerCtx` 是**插件根 ctx**，复活后该代理的运行时所有权归插件、插件卸载即拆；对**人类自建**会话做 revive 会把它的生命周期从 UI 转给插件，**比现状更差**——所以人类自建的会话只输出深链指引（「请在侧边栏打开」）。插件自建的判定是**两半**：本进程仍持有它的 `AgentHandle`（`teamSession.hasHandle`），或它的 id 合 §10.2.2 的文法 `team-link-<team>-<role>-<uuid8>`——后半是**跨重载**的那半，而重载恰恰是 L1 最要紧的时刻（重载后 handle 表按构造就是空的）。`resume` 不可用（无 factory / 无 `sessionPersistence`）或抛错 → **fail-closed 报告**，零改动。
 
-**八条硬约束（§11.9.5，每条都落成会红的断言）**：① 动词封闭（只 `revive`/`reappoint`），不接受任意 roster 字段写入、**不改 `policy.writer`**；② **attended-only**——必须有人在对话框里点一下，**刻意不设 provisional / 无人值守变体**，无确认服务即 fail-closed（与 claim 的不对称是刻意的：pair 迁移可被清扫自动回退，**incumbency 不可**）；③ **候选由插件从活成员计算**，模型只传 `team`（+可选 `role`），**不得指定继任者 id**（对话框选项就是候选，答案按 label 回读）；④ `revive` 只绑**当前** `current`（不存在「复活任意历史会话」的动词）；⑤ `writerGate` 原样不动；⑥ **绝不把 `policy.writer` 降级为 `any` 当作「修复」**；⑦ 限速（与换届同一 10 分钟窗口）+ **三处留痕**（role 行的 `recoveries` 备注 `recovery(<verb>, vacant-due-to-death, requester=…)` / `roster.md` 镜像 / `decisions.md` 追加——黑板无门，死锁下也能落账）；⑧ 进入即先跑既有过期清扫。**另有一条不编号的发起域**（§11.9.5，见下「发起域」段）：发起者只能是本队现任成员或该角色最近一任前任——它**不**属于这八条，也不改任何一条。
+**八条硬约束（§11.9.5，每条都落成会红的断言）**：① 动词封闭（只 `revive`/`reappoint`），不接受任意 roster 字段写入、**不改 `policy.writer`**；② **attended-only**——必须有人在对话框里点一下，**刻意不设 provisional / 无人值守变体**，无确认服务即 fail-closed（与 claim 的不对称是刻意的：pair 迁移可被清扫自动回退，**incumbency 不可**）；③ **候选由插件计算**（活成员 ∪ 常驻合成候选「自建继任者（新建会话）」），模型只传 `team`（+可选 `role`），**不得指定继任者 id**（对话框选项就是候选，答案按 label 回读——合成候选连 id 都还没有，它由插件在人类勾选之后才铸）；④ `revive` 只绑**当前** `current`（不存在「复活任意历史会话」的动词）；⑤ `writerGate` 原样不动；⑥ **绝不把 `policy.writer` 降级为 `any` 当作「修复」**；⑦ 限速（与换届同一 10 分钟窗口）+ **三处留痕**（role 行的 `recoveries` 备注 `recovery(<verb>, vacant-due-to-death, requester=…)` / `roster.md` 镜像 / `decisions.md` 追加——黑板无门，死锁下也能落账）；⑧ 进入即先跑既有过期清扫。**另有一条不编号的发起域**（§11.9.5，见下「发起域」段）：发起者只能是本队现任成员或该角色最近一任前任——它**不**属于这八条，也不改任何一条。
 
 **写时复检（TOCTOU）**：对话框横跨任意长的人工等待，所以条件由**宿主观测**、不由调用方主张——本轮跑两次 `agents.get(current) === undefined`（对话框弹出时、落笔前各一次），现任已复活则中止「现任已复活，无需恢复」；候选在确认期间死亡同样中止（否则原地再造一个死结）。
 
-**角色窄域（两个动词的域不同）**：**`revive` 只受理 `coordinator`**——§11.9.1 的硬死锁只有一格（`writer=coordinator` 且死的是 `coordinator`），别的格子有既有的活路（`retire` + `set-role`，丢信任拓扑但不死锁）；**`reappoint` 受理任意角色**——授权从不源自 coordinator 身份（唯一来源是对话框里人类那一下点击），而「死的是 worker、活协调者又被写策略卡住」时，`reappoint` 正是那条人改任路径。不带 `role` 时只输出诊断（每角色一行：现任 + 活性 + 在飞令牌），**零副作用**。
+**角色面（两个动词都受理任意角色，差别在动词语义上）**：**`revive` 受理任意角色**（0.3.9 批次 2 §4.2 (a) 放开了原来的 coordinator 窄域）——重载拆掉的是**所有**插件自建会话，不只 coordinator 的；而 §11.9.1 只论证过「死的 coordinator 必须可救」，从未论证「死的 worker 不许救活」，那条窄域是**范围最小化选择、不是安全属性**。放开它不移动红线一寸：`revive` 是**身份不变**的操作——不写 roster、不铸令牌、不动 `pairs`/`trustedSenders`/`rememberTargets`、也不碰 `policy`。**所有权门原样不动**（只对插件自建会话开放）。**`reappoint`** 也受理任意角色——授权从不源自 coordinator 身份（唯一来源是对话框里人类那一下点击）。两者的差别在动词上：`revive` = 同一个会话复活（零写），`reappoint` = 换人（令牌 + 快照 + 冻结，走完整 M4）。不带 `role` 时只输出诊断（每角色一行：现任 + 活性 + 在飞令牌），**零副作用**。
+
+**选「自建继任者」时发生什么（§4.2 (c)，与 `successor:"auto"` 逐条同源）**：候选列表**常驻**一项「自建继任者（新建会话）」——它**始终存在**，不是「只在没有活候选时才出现」（事故当场的场候选长度是 **1 不是 0**，条件式触发根本不会激活）。选中后的链路一步不新造：能力闸门（宿主无 `agents.create` ⇒ **fail-closed 报告，本次零创建/零令牌/零 freeze**）→ 按 §10.2.2 铸 id（`team-link-<team>-<role>-<uuid8>`，与 `/team_session`、`successor:"auto"` 同源）→ 交接文档由**插件从 roster 事实**生成五硬节（`mission` / `in-flight` / `commitments` / `unknowns` / `task-and-goal`；读不到的项——前任的进行中工作与 goal、未提交的改动——**如实标未知**，不编造）→ `prepare` 逐字跑 → 审计行 `verb=reappoint`。**代价如实声明**：继任者是**空上下文的新会话**，历史不迁移；信任靠它本人 `claim` 时逐项勾选迁移。收敛性红利：此后每次恢复的终态都是插件自建 id，而插件自建 id 正是 `revive` 的适用域。
 
 **发起域（§11.9.5 的「发起 ≠ 授权 ≠ 复权」）**：发起者只能是**该团队现任成员**或**该角色最近一任前任**（发起权不依赖信任、只依赖身份资格；旧任上下文最完整，「回聘旧任」本就是最自然的恢复）。域外的活会话被**拒绝**，拒绝文案点名现任成员集合、该角色的前任与调用会话，并指出**设置 UI（R2 级，用户在那里是超级写者）仍是永远可用的出口**——挡住的只是会话路径，不是人。**代价如实声明**：不属于本队的活会话（人类随手开的、没登记进 roster 的会话）**不能发起恢复**，这是有意的收窄；带 `role` 的诊断读态不受此限（它零写入）。
 

@@ -739,7 +739,7 @@ const tick = () => new Promise((resolve) => { setTimeout(resolve, 0); });
  * the DEFECT-1 degradation fixture: it is the ONE branch that may skip the preset
  * face, and it has to leave one warn per created session when it does.
  */
-function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0, connectionStub = undefined, omitConnection = false, connectionWithoutRejection = false, lateConnection = false } = {}) {	const ctx = new Context();
+function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0, connectionStub = undefined, omitConnection = false, connectionWithoutRejection = false, lateConnection = false, omitAgentsCreate = false } = {}) {	const ctx = new Context();
 	// Every plugin log line lands in `log.lines` instead of the console: the
 	// service-attach red line (§5.3) is asserted on the lines themselves.
 	const log = makeLogger();
@@ -813,8 +813,11 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 		 * membership and the coarse `origin` class. */
 		roots() { return [senderAgent, targetAgent, runnerAgent, ...extraAgentObjects.filter((agent) => agent.session?.header?.origin !== "subagent")].filter((agent) => !hidden.has(agent.id)); },
 		/** §10.2.2 create face: records the options (the lineage assertions read
-		 * them) and publishes a live root agent under the requested session id. */
-		create: agentFactory.create,
+		 * them) and publishes a live root agent under the requested session id.
+		 * `omitAgentsCreate` (批次 2 §4.2 (c) / U10) models a host whose registry has
+		 * no programming-create face at all: the synthetic successor cannot be built,
+		 * and the tool must say so instead of opening a box that cannot be honoured. */
+		...(omitAgentsCreate ? {} : { create: agentFactory.create }),
 	};
 	if (!omitResume) agents.resume = agentFactory.resume;
 	// The persisted-session list the resume face loads from: the declared sessions
@@ -2797,7 +2800,7 @@ const rotRoles = () => [
  * and the trust state a rotation operates on. `receiveMode: accept` keeps notice
  * delivery out of the receiver dialog; the notice cases set their mode explicitly.
  */
-function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitResume = false, extraAgents = undefined } = {}) {
+function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitResume = false, extraAgents = undefined, omitAgentsCreate = false } = {}) {
 	const env = setup({
 		sessions: [],
 		useSettings: true,
@@ -2834,6 +2837,8 @@ function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trus
 		// no session persistence" failure mode, and the stub's own record/hidden
 		// bookkeeping is what the revive cases read.
 		omitResume,
+		// 批次 2 §4.2 (c): the synthetic successor's capability gate (U10).
+		omitAgentsCreate,
 		extraAgents: extraAgents ?? [
 			{ id: "session-worker-a", status: "idle" },
 			{ id: "session-worker-b", status: "idle" },
@@ -4204,8 +4209,27 @@ const reviveVacantEnv = rotateEnv({ askScript: ["执行恢复"], teams: reviveTe
 const reviveVacant = await reviveVacantEnv.tool("team_link_recover").execute({ action: "revive", team: "night-shift", role: "coordinator" }, execFor(reviveVacantEnv.agentFor("session-target")));
 check("U26 刻意空缺 ≠ 死亡空缺: current=null 时 revive 说清「没有 id 可复活」并把用户指向 reappoint / 设置 UI——两种空缺拿到不同的第一动作", reviveVacant.includes("刻意空缺") && reviveVacant.includes("没有 id 可复活") && reviveVacant.includes("reappoint") && reviveVacant.includes("设置 UI") && reviveVacantEnv.resumeCalls.length === 0);
 
+// 批次 2 §4.2 (a) 的语义变更（旧断言在这里被推翻，本轮改写而不是删掉）：
+// 这条曾经钉「本工具只为 coordinator 恢复」。§11.9.1 只论证过「死的 coordinator
+// 必须可救」，从未论证「死的 worker 不许救活」——而重载拆掉的是**所有**插件自建
+// 会话。现在同一个调用不再被角色门拒绝，它走到的是**下一步**（该角色现任是活人 ⇒
+// 恢复的前提不成立），所以这条锁改成咬「拒绝理由不再是角色」这件事。
 const reviveScopeOut = await reviveTool.execute({ action: "revive", team: "night-shift", role: "worker-a" }, execFor(reviveEnv.agentFor("session-worker-a")));
-check("U26 窄域: 本工具只为 coordinator 恢复，别的角色明确拒绝并说清为什么（硬死锁只有一格，别的格子有既有的活路：retire + set-role）", reviveScopeOut.includes("本工具只为 coordinator 角色恢复") && reviveScopeOut.includes("硬死锁只有一格") && reviveScopeOut.includes("retire + set-role"));
+// 实质判据要在**没有限速干扰**的新环境里读：`reviveEnv` 上刚刚成功恢复过一次，同一个
+// 角色的第二次调用会先撞上 10 分钟窗口（那是另一条断言的面）。
+const reviveRoleFaceEnv = rotateEnv({
+	askScript: ["执行恢复"],
+	teams: reviveTeam([
+		{ role: "coordinator", current: "session-target", pending: null, history: [] },
+		{ role: "worker-a", current: "session-worker-a", pending: null, history: [{ session: "session-worker-a", from: 1_700_000_000_000, until: null }] },
+	]),
+	extraAgents: [{ id: "session-worker-a", status: "idle" }],
+});
+const reviveRoleFace = await reviveRoleFaceEnv.tool("team_link_recover").execute({ action: "revive", team: "night-shift", role: "worker-a" }, execFor(reviveRoleFaceEnv.agentFor("session-target")));
+check("U26 角色面（批次 2 §4.2 (a) 改写）: 非 coordinator 角色不再被角色门拒绝——同一个调用现在走到实质判据（该角色现任有活代理 ⇒ 无需恢复），文案里不再有「本工具只为 coordinator 角色恢复」", (() => {
+	const ok = !reviveScopeOut.includes("本工具只为 coordinator 角色恢复") && reviveScopeOut.includes("有活动代理") && reviveRoleFace.includes("有活动代理") && !reviveRoleFace.includes("只为 coordinator") && reviveRoleFaceEnv.resumeCalls.length === 0;
+	return ok || (console.log(`     实测读数 {scope:${JSON.stringify(reviveScopeOut.slice(0, 120))}, roleFace:${JSON.stringify(reviveRoleFace.slice(0, 160))}, resumes:${reviveEnv.resumeCalls.length}/${reviveRoleFaceEnv.resumeCalls.length}}`), false);
+})());
 
 // --- Y3 的**对称件**（§11.9.9 点名的那条「半空锁」）：`revive` 侧的身份复检也必须是
 // 一条**行为锁**，而不是被活性那条的文案顺带覆盖住的空锁 -------------------------
@@ -4309,7 +4333,7 @@ declareDormantSession(reviveExEnv, REVIVE_PLUGIN_ID);
 const reviveEx = await reviveExEnv.tool("team_link_recover").execute({ action: "revive", team: "night-shift", role: "coordinator" }, execFor(reviveExEnv.agentFor("session-previous-holder")));
 check("Y2 发起域（另一半）: 该角色的**最近一任前任**可以发起——发起权不依赖信任、只依赖身份资格（这条同时是反例：没有它，「只有成员能发起」这个更严的误读也会全绿）", reviveEx.includes("已恢复（revive）") && reviveExEnv.resumeCalls.length === 1 && at(reviveExEnv.resumeCalls, 0, {}).resumeSessionId === REVIVE_PLUGIN_ID && (reviveExEnv.role().recoveries ?? []).length === 1 && at(reviveExEnv.role().recoveries, 0, {}).by === "session-previous-holder");
 
-check("Y2 宣传面=实现面: 工具描述写的是「revive 只受理 coordinator、reappoint 受理任意角色」这两句不同的话，且发起域在描述里有落点（描述不得再说「本工具只受理 coordinator」）", reviveTool.description.includes("`revive` 只受理 coordinator") && reviveTool.description.includes("`reappoint` 受理任意角色") && !reviveTool.description.includes("本工具只为 coordinator 角色恢复（请求的是") && reviveTool.parameters.properties.role.description.includes("revive 只受理 coordinator，reappoint 受理任意角色") && __testing.RECOVERY_ACTIONS.has("reappoint"));
+check("Y2 宣传面=实现面（批次 2 改写）: 工具描述写的是「两个动词都受理任意角色、差别在动词语义上」这句实现面的话，发起域在描述里有落点，且旧窄域措辞一处不剩", reviveTool.description.includes("两个动词都受理任意角色") && reviveTool.description.includes("发起域") && !reviveTool.description.includes("本工具只为 coordinator 角色恢复（请求的是") && !reviveTool.description.includes("`revive` 只受理 coordinator") && reviveTool.parameters.properties.role.description.includes("两个动词都受理任意角色") && __testing.RECOVERY_ACTIONS.has("reappoint"));
 
 const reviveDiagEnv = rotateEnv({ askScript: [], teams: reviveTeam([
 	{ role: "coordinator", current: REVIVE_PLUGIN_ID, pending: null, history: [] },
@@ -4370,14 +4394,15 @@ reapEnv.setHiddenAgent(REAP_DEAD, true);
 const reapTool = reapEnv.tool("team_link_recover");
 const reapOut = await reapTool.execute({ action: "reappoint", team: "night-shift", role: "coordinator" }, execFor(reapEnv.agentFor("session-worker-a")));
 
-check("U27 候选由插件算: 对话框的选项就是本队**活成员**（排除死现任那个角色自己），调用方没有任何参数能指定继任者 id；且是**单选**——`multiSelect` 曾经为 true 而调用方只取 `picked[0]`，人类勾的第二位会被静默丢弃（差异审计 B3：盒子不许承诺代码不会做的选择）", (() => {
+check("U27 候选由插件算（批次 2 改写：候选集 = 活成员 ∪ 常驻合成候选）: 选项 = 本队**活成员**（排除死现任那个角色自己）+ 恒定在末尾的「自建继任者（新建会话）」，调用方没有任何参数能指定继任者 id；且是**单选**——`multiSelect` 曾经为 true 而调用方只取 `picked[0]`，人类勾的第二位会被静默丢弃（差异审计 B3：盒子不许承诺代码不会做的选择）", (() => {
 	const ask = reapEnv.uq.requests[0];
 	return ask !== undefined
 		&& ask.questions.length === 1
 		&& ask.questions[0].id === "recovery-confirm"
 		&& ask.questions[0].multiSelect === undefined
-		&& ask.questions[0].options.map((option) => option.label).join(",") === "session-target,session-worker-a,session-worker-b"
-		&& ask.questions[0].question.includes("由插件从**本队活成员**算出")
+		&& ask.questions[0].options.map((option) => option.label).join(",") === `session-target,session-worker-a,session-worker-b,${__testing.SELF_SUCCESSOR_LABEL}`
+		&& ask.questions[0].question.includes("本队活成员 ∪ 插件自建继任者（常驻）")
+		&& ask.questions[0].question.includes(__testing.SELF_SUCCESSOR_LABEL)
 		&& !Object.keys(reapTool.parameters.properties).some((key) => /successor|target|session/iu.test(key));
 })());
 check("U27 人类在环: 确认框写清爆炸半径（谁在任、谁是发起者、接下来铸令牌+快照+广播冻结、信任迁移不在本次）与边界声明", (() => {
@@ -4533,7 +4558,12 @@ const reapAllDeadEnv = rotateEnv({
 // admits the call.
 for (const id of [REAP_DEAD, "session-worker-a", "session-worker-b", "session-target"]) reapAllDeadEnv.setHiddenAgent(id, true);
 const reapAllDead = await reapAllDeadEnv.tool("team_link_recover").execute({ action: "reappoint", team: "night-shift", role: "coordinator" }, execFor(reapAllDeadEnv.agentFor("session-transient")));
-check("U27 全队皆死（重载团灭）: 候选集为空 → 明确说「没有活着的其他角色成员」并给出 revive / 侧边栏 / 设置 UI 三条路，本次调用自身零写入（B2 的口径：入口清扫可能在本次之前真写过）、连确认框都不弹", reapAllDead.includes("没有活着的其他角色成员") && reapAllDead.includes("team_link_recover action=revive") && reapAllDead.includes("侧边栏") && reapAllDead.includes("设置 UI") && reapAllDead.includes("本次恢复调用自身零写入") && reapAllDeadEnv.uq.requests.length === 0 && reapAllDeadEnv.role().pending === null);
+// 批次 2 §4.2 (c) 的语义变更（旧断言在这里被推翻）：这条曾经钉「候选集为空 ⇒ 一条
+// 死路 + 三条人工指引」。事故当场的候选长度是 **1 不是 0**（唯一活人是协调者自己），
+// 而设计要点恰是「候选用尽时必须有出口」——合成候选**常驻**，所以这条 box 现在真的
+// 弹出来了，唯一的候选就是「自建继任者」；脚本给的是已经不存在的旧 label ⇒ 按「没有
+// 勾选任何候选人」拒绝，本次调用自身零写入（B2 的口径）。
+check("U27 全队皆死（重载团灭，批次 2 改写）: 全队没有活成员时不再是一条死路——对话框照常弹出，且**唯一**候选就是常驻的「自建继任者」；脚本给的旧 label 匹配不上 ⇒ 拒绝为未勾选，零令牌、零 freeze、零写入", reapAllDead.includes("没有勾选任何候选人") && reapAllDeadEnv.uq.requests.length === 1 && reapAllDeadEnv.uq.requests[0].questions[0].options.map((option) => option.label).join(",") === __testing.SELF_SUCCESSOR_LABEL && reapAllDeadEnv.role().pending === null && reapAllDeadEnv.team().rotationBackup === null && (reapAllDeadEnv.role().recoveries ?? []).length === 0);
 
 // §11.9.1's F7: `writer=any` has no deadlock, so recovery points at the EXISTING
 // path instead of becoming a second, looser roster editor.
@@ -4574,7 +4604,11 @@ const reapWorkerOut = await reapWorkerEnv.tool("team_link_recover").execute({ ac
 // prove is the one that landed on `session-coordinator-live`'s sink.
 check("Y1 reappoint 无角色窄域（行为锁）: 死的是 **worker** 时 reappoint 照常完成——真铸出绑定 (team, worker-a, successor) 的三元组令牌、真落 rotationBackup、真广播 freeze（有人给它加回 coordinator 守卫，这条当场红）", reapWorkerOut.includes("已按 §11.9.4 L2 铸好换届包") && reapWorkerEnv.role("worker-a").pending !== null && reapWorkerEnv.role("worker-a").pending.role === "worker-a" && reapWorkerEnv.role("worker-a").pending.session === "session-worker-b" && reapWorkerEnv.team().rotationBackup !== null && reapWorkerOut.includes("换届包已就绪") && reapWorkerEnv.calls("session-coordinator-live").followedup.some((message) => message.content[0].text.includes("[rotation-freeze]")) && reapWorkerEnv.ns.data.teams[0].policy.writer === "coordinator");
 const reapWorkerScope = await reapWorkerEnv.tool("team_link_recover").execute({ action: "revive", team: "night-shift", role: "worker-a" }, execFor(reapWorkerEnv.agentFor("session-worker-b")));
-check("Y1 对照: 同一个非 coordinator 角色走 `revive` 仍被窄域拒绝（域的差别在**动词**上，不在工具上——把窄域整个删掉，这条红）", reapWorkerScope.includes("本工具只为 coordinator 角色恢复（请求的是 worker-a）") && reapWorkerScope.includes("硬死锁只有一格"));
+// 批次 2 §4.2 (a) 把这条对照**反转**了：旧锁咬的是「同角色走 revive 仍被窄域拒」
+// （删除窄域即红），现在窄域本身被设计与 owner 裁定删除，于是锁换成新语义——同一个
+// 非 coordinator 角色走 `revive` 不再被**角色**拒绝（它被实质判据拒：worker-a 的现任
+// session-worker-b 还活着），而 `reappoint` 的域一字未动。
+check("Y1 对照（批次 2 改写）: 同一个非 coordinator 角色走 `revive` 不再被角色门拒绝——它落到实质判据上（这条环境里先是 10 分钟限速窗口：它也是实质判据，不是角色门），零 resume、零新增留痕", !reapWorkerScope.includes("本工具只为 coordinator 角色恢复") && !reapWorkerScope.includes("只为 coordinator") && reapWorkerScope.includes("恢复") && reapWorkerEnv.resumeCalls.length === 0 && (reapWorkerEnv.role("worker-a").recoveries ?? []).length === 1 && at(reapWorkerEnv.role("worker-a").recoveries, 0, {}).verb === "reappoint");
 // The README half of the same lock lives in the §11.2/§11.9 文档面 block below —
 // `handoffReadme` is not initialized yet at this point, and the TDZ error that used
 // to sit here is exactly the kind of unclean red the Y7 sweep exists to prevent.
@@ -4657,7 +4691,11 @@ check("§11.9 文档面=实现面: README 的两个动词 / 两个派生词 / �
 // Y1 的双向锁（宣传面 = 实现面）: README **与**工具描述都必须说「两个动词的域不同」——
 // 旧文案那句「本工具只受理 coordinator」正是被审计抓到的分叉（reappoint 其实受理任意
 // 角色）。这条同时钉住「不再漂回去」：任何一侧重新写成整个工具只服务 coordinator，即红。
-check("Y1 文档面=实现面（双向锁）: README 与工具描述都说「`revive` 仅 coordinator / `reappoint` 受理任意角色」，且两侧都不再有「本工具只受理 coordinator」那种把整个工具说成窄域的措辞", handoffReadme.includes("`revive` 只受理 `coordinator`") && handoffReadme.includes("`reappoint` 受理任意角色") && !handoffReadme.includes("本工具只受理 `coordinator`") && reviveTool.description.includes("`revive` 只受理 coordinator") && reviveTool.description.includes("`reappoint` 受理任意角色") && !reviveTool.description.includes("窄域：只恢复 coordinator 角色"));
+// 批次 2 §4.2 (a) 把这条锁的**内容**换了（锁本身还在，方向还在）：旧版要求两侧都说
+// 「revive 仅 coordinator」——那是窄域时代的实现面。现在实现面是「两个动词都受理任意
+// 角色，差别在动词语义上」，所以这条双向锁改成咬这句话，并且继续咬「旧窄域措辞一处
+// 不剩」（任何一侧漂回窄域叙述，这里立刻红）。
+check("Y1 文档面=实现面（双向锁，批次 2 改写）: README 与工具描述都说「两个动词都受理任意角色、差别在动词语义上」，且两侧都不再出现「`revive` 只受理 `coordinator`」或「本工具只受理 coordinator」那种窄域措辞", handoffReadme.includes("两个动词都受理任意角色") && !handoffReadme.includes("`revive` 只受理 `coordinator`") && !handoffReadme.includes("本工具只受理 `coordinator`") && reviveTool.description.includes("两个动词都受理任意角色") && !reviveTool.description.includes("`revive` 只受理 coordinator") && !reviveTool.description.includes("窄域：只恢复 coordinator 角色"));
 // Y2 的文档面: 发起域也必须同时出现在 README 与工具描述里——「谁可以发起」这条设计条款
 // 若只在设计文档里存在，就是下一轮审计的同一个洞。
 check("Y2 文档面=实现面: 发起域（现任成员 ∪ 该角色最近一任前任，域外拒绝且指向设置 UI）同时写在 README 与工具描述里", handoffReadme.includes("现任成员") && handoffReadme.includes("最近一任前任") && handoffReadme.includes("设置 UI") && reviveTool.description.includes("发起域") && reviveTool.description.includes("现任成员"));
@@ -5608,6 +5646,129 @@ check("U19 双门: the receiver's ask option list still carries the pairing gran
 const u19GateEnv = teamSessionEnv({ askScript: ["创建"] });
 await u19GateEnv.run("n=2 team=night-shift roles=worker-a,worker-b task=门");
 check("U19 双门: a whole batch raises exactly ONE dialog — the §10.2.4 confirmation itself; its pairs (not a new bypass) are what keeps the kickoffs off the two gates", u19GateEnv.uq.requests.length === 1 && u19GateEnv.pairs().length === 2 && u19GateEnv.created.every((item) => item.calls.followedup.length === 1));
+
+// ---------------------------------------------------------------------------
+// 批次 2 (§4.2): 恢复能力加宽两格 —— (a) revive 放开角色门 · (c) reappoint 常驻「自建继任者」
+// ---------------------------------------------------------------------------
+// 变异基线（修复前必红）:
+//  (a) `reviveIncumbent` 的角色门把「身份不变的复活」限制在 coordinator 一格上 ⇒ 插件
+//      自建的死 worker 被拒（红相在下面 U7 与两处既有断言的改写记录里）；
+//  (c) `reapCandidateRoles` 只返回活成员 ⇒ 全队只剩协调者一个活人时，唯一的候选是
+//      「把 worker 角色改任给协调者」，而候选真的为空时连对话框都不弹（红相见 U9/U10）。
+
+const REVIVE_WORKER_ID = "team-link-night-shift-worker-a-0f0f0f0f";
+// --- U7 (§4.2 (a)): 插件自建的**非 coordinator** 角色可以 revive -----------------
+const reviveWorkerEnv = rotateEnv({
+	askScript: ["执行恢复"],
+	teams: reviveTeam([
+		{ role: "coordinator", current: "session-target", pending: null, history: [] },
+		{ role: "worker-a", current: REVIVE_WORKER_ID, pending: null, history: [{ session: REVIVE_WORKER_ID, from: 1_700_000_000_000, until: null }] },
+	]),
+	pairs: [{ a: "session-target", b: REVIVE_WORKER_ID, createdAt: 1 }],
+	trustedSenders: [REVIVE_WORKER_ID],
+	rememberTargets: [REVIVE_WORKER_ID],
+	extraAgents: [{ id: REVIVE_WORKER_ID, status: "idle" }],
+});
+reviveWorkerEnv.setHiddenAgent(REVIVE_WORKER_ID, true);
+declareDormantSession(reviveWorkerEnv, REVIVE_WORKER_ID);
+const reviveWorkerTrustBefore = pairSummary(reviveWorkerEnv);
+const reviveWorkerOut = await reviveWorkerEnv.tool("team_link_recover").execute({ action: "revive", team: "night-shift", role: "worker-a" }, execFor(reviveWorkerEnv.agentFor("session-target")));
+check("U7 (a): 插件自建的**非 coordinator** 角色（worker-a）现在可以 revive —— 角色门删除后它走到 resume，身份不变（同一个会话 id）", reviveWorkerOut.includes("已恢复（revive）") && reviveWorkerEnv.resumeCalls.length === 1 && at(reviveWorkerEnv.resumeCalls, 0, {}).resumeSessionId === REVIVE_WORKER_ID && reviveWorkerEnv.role("worker-a").current === REVIVE_WORKER_ID);
+check("U7 (a): ... 复活出来的代理真的进了注册表（writerGate 按 id 比对直接放行），roster 的 current 一字未动", reviveWorkerEnv.agentFor(REVIVE_WORKER_ID) !== undefined && at(reviveWorkerEnv.role("worker-a").recoveries, 0, {}).verb === "revive" && at(reviveWorkerEnv.role("worker-a").recoveries, 0, {}).by === "session-target" && at(reviveWorkerEnv.role("worker-a").recoveries, 0, {}).from === REVIVE_WORKER_ID && at(reviveWorkerEnv.role("worker-a").recoveries, 0, {}).to === REVIVE_WORKER_ID);
+check("U7 (a): ... 且信任零改动——pairs / trustedSenders / rememberTargets 一个字节都没碰（revive 是身份不变的操作，放开角色面不移动红线一寸）", pairSummary(reviveWorkerEnv) === reviveWorkerTrustBefore && (reviveWorkerEnv.ns.data.trustedSenders ?? []).join(",") === REVIVE_WORKER_ID && (reviveWorkerEnv.ns.data.rememberTargets ?? []).join(",") === REVIVE_WORKER_ID && reviveWorkerEnv.ns.data.teams[0].policy.writer === "coordinator");
+
+// --- U8 (§5 B3): 所有权门原样不动——人类自建 id 的 worker 仍被拒 ---------------
+const reviveHumanWorkerEnv = rotateEnv({
+	askScript: ["执行恢复"],
+	teams: reviveTeam([
+		{ role: "coordinator", current: "session-target", pending: null, history: [] },
+		{ role: "worker-a", current: "session-worker-a", pending: null, history: [{ session: "session-worker-a", from: 1_700_000_000_000, until: null }] },
+	]),
+	extraAgents: [{ id: "session-worker-a", status: "idle" }],
+});
+reviveHumanWorkerEnv.setHiddenAgent("session-worker-a", true);
+const reviveHumanWorkerOut = await reviveHumanWorkerEnv.tool("team_link_recover").execute({ action: "revive", team: "night-shift", role: "worker-a" }, execFor(reviveHumanWorkerEnv.agentFor("session-target")));
+check("U8 (B3): 人类自建 id 的 **worker** 仍被所有权门拒绝（角色门删除**没有**连带删掉适用域），文案给出侧边栏那条零成本正解，且零 resume、零写入", reviveHumanWorkerOut.includes("不是本插件创建的会话") && reviveHumanWorkerOut.includes("侧边栏") && reviveHumanWorkerOut.includes("reappoint") && reviveHumanWorkerEnv.resumeCalls.length === 0 && (reviveHumanWorkerEnv.role("worker-a").recoveries ?? []).length === 0);
+
+// --- U9 (§4.2 (c)): threat-intel 形夹具——coordinator 活、b/c 是人类 id 的死会话 --
+// 事故现场的形状就是这条：唯一的活人是协调者自己，两个 worker 车道都是人类自建 id。
+// 旧实现的候选集只排除被恢复的角色本身 ⇒ 唯一可选路径是「把 b 改任给协调者」。
+const TI_ROOT = path.join(TEAM_TMP, "threat-intel-ws");
+const TI_DEAD_B = "session-c02a7edb-dead";
+const TI_DEAD_C = "session-4c0d96ca-dead";
+const threatEnv = rotateEnv({
+	askScript: [[__testing.SELF_SUCCESSOR_LABEL]],
+	teams: [{
+		name: "threat-intel",
+		createdAt: 1_700_000_000_000,
+		workspace: TI_ROOT,
+		policy: { writer: "coordinator" },
+		rotationBackup: null,
+		roles: [seededRole("coordinator", "session-ti-coord"), seededRole("b", TI_DEAD_B), seededRole("c", TI_DEAD_C)],
+	}],
+	extraAgents: [{ id: "session-ti-coord", status: "idle" }, { id: TI_DEAD_B, status: "idle" }, { id: TI_DEAD_C, status: "idle" }],
+});
+threatEnv.setHiddenAgent(TI_DEAD_B, true);
+threatEnv.setHiddenAgent(TI_DEAD_C, true);
+const tiOut = await threatEnv.tool("team_link_recover").execute({ action: "reappoint", team: "threat-intel", role: "b" }, execFor(threatEnv.agentFor("session-ti-coord")));
+const tiDialog = threatEnv.uq.requests[0];
+const tiMinted = at(threatEnv.creates, 0, {}).sessionId;
+check("U9 (c): 事故形状下对话框照常弹出，且选项里**含**常驻的「自建继任者」——候选集 = 活成员（这里是协调者自己）∪ 合成候选，不再是「只有一个已就座的人可选」", tiDialog !== undefined && tiDialog.questions[0].options.map((option) => option.label).join(",") === `session-ti-coord,${__testing.SELF_SUCCESSOR_LABEL}` && tiOut.includes("已按 §11.9.4 L2 铸好换届包"));
+check("U9 (c): 选中合成候选后 `agents.create` 真被调用，且铸出来的 id 是 §10.2.2 模板形 team-link-<team>-<role>-<uuid8>（与被恢复的角色同名段）", threatEnv.creates.length === 1 && typeof tiMinted === "string" && /^team-link-threat-intel-b-[0-9a-f]{8}$/u.test(tiMinted) && tiMinted !== TI_DEAD_B);
+check("U9 (c): prepare.successor 就是这个新铸的 id，令牌绑定三元组 (threat-intel, b, <minted>)、TTL 30 分钟——prepare 逐字跑，令牌类型未新增", threatEnv.role("b").pending !== null && threatEnv.role("b").pending.session === tiMinted && threatEnv.role("b").pending.team === "threat-intel" && threatEnv.role("b").pending.role === "b" && threatEnv.role("b").pending.expiresAt - threatEnv.role("b").pending.createdAt === 30 * 60000 && threatEnv.team().rotationBackup !== null);
+check("U9 (c): 新建的会话是**根会话**——meta 里没有 origin / parentSession / delegationDepth / parentAgent 任何血统字段", threatEnv.creates[0]?.meta?.origin === undefined && threatEnv.creates[0]?.meta?.parentSession === undefined && threatEnv.creates[0]?.meta?.parentAgent === undefined);
+check("U9 (c): 三处留痕齐全——① 版本史 recoveries(verb=reappoint, to=<minted>)；② roster.md 镜像；③ decisions.md 追加（带队名/角色/继任者）", at(threatEnv.role("b").recoveries, 0, {}).verb === "reappoint" && at(threatEnv.role("b").recoveries, 0, {}).from === TI_DEAD_B && at(threatEnv.role("b").recoveries, 0, {}).to === tiMinted && at(threatEnv.role("b").recoveries, 0, {}).by === "session-ti-coord" && String(at(threatEnv.role("b").recoveries, 0, {}).note).includes("recovery(reappoint, vacant-due-to-death,"));
+// The trails and the hand-over document are read from DISK (the mirror and the
+// ledger are the durable half of §11.9.5⑦; the document is what the successor
+// actually receives).
+const tiMirror = await readOrMissing(path.join(TI_ROOT, "team", "threat-intel", "roster.md"));
+const tiDecisions = await readOrMissing(path.join(TI_ROOT, "team", "threat-intel", "decisions.md"));
+const tiDocument = await __testing.latestHandoffDocument(threatEnv.team(), "b");
+const tiDocumentText = tiDocument.path === null ? "" : await readOrMissing(tiDocument.path);
+check("U9 (c) 留痕②③: roster.md 镜像写明恢复记录与继任者 id（且不含活性词——落盘文件不烙读数）；decisions.md 追加了 recovery reappoint 行", tiMirror.includes("恢复记录（team_link_recover，共 1 条）") && tiMirror.includes(tiMinted) && !tiMirror.includes("seated-dead") && tiDecisions.includes("recovery reappoint team=threat-intel role=b") && tiDecisions.includes(`to=${tiMinted}`));
+check("U9 (c) 交接文档: 插件真写了一份 handoff-b-*.md（§11.9.6 头部 + 事实段 + 正文），头部 successor 就是新铸的 id，previous 是死前任，且掩码令牌与 prepare 返回的是同一枚", tiDocument.path !== null && tiDocumentText.includes(`successor: ${tiMinted}`) && tiDocumentText.includes(`previous: ${TI_DEAD_B}`) && tiDocumentText.includes("事实段") && tiDocumentText.includes(`tokenMask: ${__testing.maskToken(threatEnv.role("b").pending.token)}`));
+
+// 交接正文本身（§4.2 (c) ④）: 判据读的是**真函数**（__testing 导出），不是把正文抄
+// 一份进测试——抄一份就锁不住漂移。
+// Y7 纪律（本仓库的脏红教训）：一个还没实现的可测面被直接调用，会让整跑在那一行崩掉、
+// 连 `assertion total` 都不打印——那样红相就说不清自己有多大。所以先取，再判类型。
+const buildSelfBody = __testing.selfBuiltHandoffBody;
+const selfBody = typeof buildSelfBody !== "function" ? "" : buildSelfBody({
+	teamName: "threat-intel",
+	roleName: "b",
+	incumbent: TI_DEAD_B,
+	caller: "session-ti-coord",
+	cwd: TI_ROOT,
+	goal: { readable: false, reason: `该角色的前任会话 ${TI_DEAD_B} 没有活动代理——goals 按 agent 取读数，所以取不到` },
+	trust: { pairs: 2, trustedSenders: 1, rememberTargets: 0 },
+});
+const selfReport = __testing.handoffBodyReport(selfBody);
+check("U9 (c) 交接正文: 插件从 roster 事实生成的正文**五硬节全在场且非空**（与 HANDOFF_HARD_SECTIONS 逐字同名），读不到的项如实标未知、没有编造", selfReport.missingHard.length === 0 && selfReport.emptyHard.length === 0 && __testing.HANDOFF_HARD_SECTIONS.every((name) => selfBody.split("\n").includes(`## ${name}`)) && selfBody.includes("前任已死，进行中工作不可读") && selfBody.includes("**未知**") && selfBody.includes("不可读，本节不做推测") && selfBody.includes(TI_DEAD_B));
+check("U9 (c) 交接正文: commitments 节只报**存在性与数量**（不复制任何密钥素材），并写明信任不在本次迁移、靠 claim 逐项勾选", selfBody.includes("pairs：2 条") && selfBody.includes("trustedSenders：1 条") && selfBody.includes("rememberTargets：0 条") && selfBody.includes("不在本次迁移") && selfBody.includes("team_link_rotate action=claim"));
+check("U9 (c) 对话框代价声明: 选「自建继任者」的代价写在框里（空上下文的新会话、历史不迁移、信任靠 claim 逐项勾选），候选集口径改为「活成员 ∪ 自建继任者（常驻）」", (() => {
+	const question = String(tiDialog?.questions?.[0]?.question ?? "");
+	const option = String(tiDialog?.questions?.[0]?.options?.at(-1)?.description ?? "");
+	const reading = `{questionHasCost:${question.includes("空上下文的新会话")}, hasNoMigrate:${question.includes("历史/对话**不迁移**")}, hasUnion:${question.includes("活成员 ∪ 插件自建继任者（常驻）")}, optionHasCost:${option.includes("空上下文的新会话")}, optionIsSynthetic:${option.includes(__testing.SELF_SUCCESSOR_LABEL)}}`;
+	const ok = question.includes("空上下文的新会话") && question.includes("历史/对话**不迁移**") && question.includes("活成员 ∪ 插件自建继任者（常驻）") && option.includes("空上下文的新会话") && option.includes(__testing.SELF_SUCCESSOR_LABEL);
+	return ok || (console.log(`     实测读数 ${reading}`), false);
+})());
+
+// --- U10 (§4.2 (c) 1): 无 agents.create 的宿主 → fail-closed 且**零弹框** -------
+const noCreateEnv = rotateEnv({ askScript: [[__testing.SELF_SUCCESSOR_LABEL]], omitAgentsCreate: true, teams: reapTeam(reapRoles()), extraAgents: reapAgents() });
+noCreateEnv.setHiddenAgent(REAP_DEAD, true);
+const noCreateOut = await noCreateEnv.tool("team_link_recover").execute({ action: "reappoint", team: "night-shift", role: "coordinator" }, execFor(noCreateEnv.agentFor("session-worker-a")));
+check("U10 (c): 宿主没有 agents.create ⇒ 能力闸门在**对话框之前** fail-closed——零弹框、零创建、零令牌、零 freeze、零写入，并给出三条既有路径", noCreateOut.includes("没有可用的 agents.create") && noCreateOut.includes("team_link_rotate action=prepare") && noCreateOut.includes("设置 UI") && noCreateOut.includes("本次恢复调用自身零写入") && noCreateEnv.uq.requests.length === 0 && noCreateEnv.creates.length === 0 && noCreateEnv.role().pending === null && noCreateEnv.team().rotationBackup === null && (noCreateEnv.role().recoveries ?? []).length === 0);
+
+// --- U11 (§4.2 (c) 回归): 合成候选常驻**不**削弱取消语义 -----------------------
+check("U11 (c 回归): 候选集里多了常驻的合成候选之后，「什么都不勾选 = 什么都不做」一字未变——对话框里确实有合成候选，而本次调用零令牌、零 freeze、零写入", reapCancel.includes("未改任（reappoint）") && reapCancelEnv.uq.requests[0].questions[0].options.map((option) => option.label).includes(__testing.SELF_SUCCESSOR_LABEL) && reapCancelEnv.role().pending === null && reapCancelEnv.team().rotationBackup === null && (reapCancelEnv.role().recoveries ?? []).length === 0);
+
+// --- §4.2 收敛性红利: 合成继任者的 id 就是 revive 的适用域 ---------------------
+check("§4.2 收敛性: 候选集的合成项由插件常驻产出（label 是插件常量、单选项恰一条 LIVE + 一条合成），而 `reapCandidateRoles` 的活成员部分仍按活性过滤", (() => {
+	if (typeof __testing.reapCandidateRoles !== "function" || typeof __testing.candidateLabel !== "function") return false;
+	const rows = __testing.reapCandidateRoles(threatEnv.team(), "b", (id) => id === "session-ti-coord");
+	return rows.length === 2 && rows[0].session === "session-ti-coord" && rows[0].synthetic === false && rows[1].synthetic === true && rows[1].label === __testing.SELF_SUCCESSOR_LABEL && __testing.candidateLabel(rows[0]) === "session-ti-coord" && __testing.candidateLabel(rows[1]) === __testing.SELF_SUCCESSOR_LABEL;
+})());
+
 
 // ---------------------------------------------------------------------------
 // 批次 1 (§4.1): the download route behind the platform's trust fence
