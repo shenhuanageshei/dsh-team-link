@@ -5038,7 +5038,7 @@ const plannedId = (env, team, role) => env.creates.find((options) => new RegExp(
 // --- U16a (§10.2.1): the command face is registered through the OPTIONAL seam --
 const cmdEnv = teamSessionEnv();
 check("U16: /team_session is registered through the optional commands service (name + human-facing descriptor)", cmdEnv.commands.command("team_session") !== undefined && cmdEnv.commands.command("team_session").description.includes("自动建队") && typeof cmdEnv.commands.command("team_session").handler === "function");
-check("U16: the definition declares a hint (CommandInputDescriptor has no other grammar field) and no attachment channel", cmdEnv.commands.command("team_session").input.hint.includes("n=") && cmdEnv.commands.command("team_session").input.hint.includes("roles=") && cmdEnv.commands.command("team_session").input.hint.includes("task=") && cmdEnv.commands.command("team_session").input.attachments === false);
+check("U16: the definition declares a hint (CommandInputDescriptor has no other grammar field) and no attachment channel — 且 hint 说的是**修订后的**文法：参数仍在（n= / roles= / task=），位置角色名那一段（[role…]）已随 §10.2.8.2 废除，hint 里不得再有「位置参数写角色名」", cmdEnv.commands.command("team_session").input.hint.includes("n=") && cmdEnv.commands.command("team_session").input.hint.includes("roles=") && cmdEnv.commands.command("team_session").input.hint.includes("task=") && cmdEnv.commands.command("team_session").input.hint.includes("正文") && !cmdEnv.commands.command("team_session").input.hint.includes("位置参数") && !cmdEnv.commands.command("team_session").input.hint.includes("位置角色") && !cmdEnv.commands.command("team_session").input.hint.includes("[role…]") && cmdEnv.commands.command("team_session").input.attachments === false);
 check("U16: registration leaves one info line (the optional seam attached on the fast path)", cmdEnv.log.lines.info.some((line) => line.includes("/team_session registered through the optional commands service")));
 check("U16 红线: the module-level inject array is still the four original entries — commands did NOT grow it", JSON.stringify((await import("./lib/index.js")).inject) === JSON.stringify(["sessionReferenceResolver", "tools", "sessionQuery", "agents"]));
 
@@ -5058,16 +5058,17 @@ const { readTeamSessionCommand, teamSessionPlan, teamSessionDialogText, teamSess
 const parsedFull = readTeamSessionCommand("n=2 team=night-shift roles=worker-a,worker-b task=做接口 model=deepseek/deepseek-v4 preset=coder");
 check("U16 解析: the full form parses into its parts (n / team / roles / task / model split into provider+model / preset)", parsedFull.error === undefined && parsedFull.value.n === 2 && parsedFull.value.team === "night-shift" && parsedFull.value.roles.join(",") === "worker-a,worker-b" && parsedFull.value.task === "做接口" && parsedFull.value.provider === "deepseek" && parsedFull.value.model === "deepseek-v4" && parsedFull.value.preset === "coder");
 const parsedBare = readTeamSessionCommand("night-shift worker-a worker-b");
-check("U16 解析: positional role names are collected into `bare` AND folded into `roles`, in the order written", parsedBare.error === undefined && parsedBare.value.bare.join(",") === "night-shift,worker-a,worker-b" && parsedBare.value.roles.join(",") === "night-shift,worker-a,worker-b" && readTeamSessionCommand("team=t task=统一任务").value.task === "统一任务");
-// The gaps this batch closes, at the parser level. Both were RED before:
-// positional names reached `bare` and stopped there (the plan never read it), and
-// `task=` was split on whitespace with only a whole-token quote pair stripped.
-check("U16 解析: the positional bucket is not a dead end — `team=t worker-a worker-b` puts both roles in the request the plan reads", (() => { const parsed = readTeamSessionCommand("team=t worker-a worker-b"); return parsed.roles === undefined && parsed.value.roles.join(",") === "worker-a,worker-b"; })());
+check("U16 解析: **裸 token 归正文**（R1(a) 的静默结束）—— `night-shift worker-a worker-b` 三个 token 全部进 task，roles 仍然是 undefined（角色只能由 roles= 声明，位置角色名已废除 §10.2.8.2）；废除后的 `bare` 桶恒空，是「不可能再落进去」的可检不变量，不是被遗忘的字段", parsedBare.error === undefined && parsedBare.value.roles === undefined && parsedBare.value.team === undefined && parsedBare.value.n === undefined && parsedBare.value.task === "night-shift worker-a worker-b" && parsedBare.value.bare.length === 0 && readTeamSessionCommand("team=t task=统一任务").value.task === "统一任务");
+// §10.2.8.2 的两条读法（原先的注释还在讲废除前的语义，必须同批改掉，否则文档与实现
+// 互相矛盾）：① **裸 token 是正文的起点**，不再是角色名（旧读法把一具正文里的 284 个裸 token
+// 变成 284 个角色，再以「会话个数 284 超过硬顶 8」失败 —— §10.2.8.1 的第二个雷）；② `task=`
+// 的取值是**到行尾**（或到下一个已知 key=）的多 token 文本，不再按空格切成一个 token。
+check("U16 解析: 参数区只在**行首**且谓词闭合 —— `team=t worker-a worker-b` 里 team 是参数、其后**全部**是正文（正文 = 启动任务，与 task= 同一个槽），roles 仍是 undefined", (() => { const parsed = readTeamSessionCommand("team=t worker-a worker-b"); return parsed.error === undefined && parsed.roles === undefined && parsed.value.team === "t" && parsed.value.task === "worker-a worker-b" && parsed.value.bare.length === 0; })());
 check("U16 解析: `task=` runs to the END OF THE LINE, so an unquoted multi-word task is not truncated (pre-fix: task=「fix」 and the words `the`/`bug` landed in the ignored bare bucket)", (() => { const parsed = readTeamSessionCommand("team=t roles=a task=fix the bug"); return parsed.error === undefined && parsed.value.task === "fix the bug" && parsed.value.bare.length === 0; })());
 check("U16 解析: a quoted task value is unwrapped — `task=\"fix the bug\"` carries no quote characters (pre-fix: the value kept both quotes)", (() => { const parsed = readTeamSessionCommand("team=t roles=a task=\"fix the bug\""); return parsed.error === undefined && parsed.value.task === "fix the bug" && !parsed.value.task.includes("\""); })());
 check("U16 解析: the unwrapping covers every key — `team=\"t\" roles=\"a,b\"` reads like the unquoted form (pre-fix: both values kept their quotes, and roles split to `\"a`/`b\"`)", (() => { const parsed = readTeamSessionCommand("team=\"t\" roles=\"a,b\""); return parsed.error === undefined && parsed.value.team === "t" && parsed.value.roles.join(",") === "a,b"; })());
 check("U16 解析: a half-quoted value is REFUSED, never guessed at (task= both sides of the closing quote)", readTeamSessionCommand("team=t roles=a task=\"a\"b").error.includes("引号不成对"));
-check("U16 解析: team= stays REQUIRED — a line of positional role names alone is refused by the plan with the missing team named, not silently seated under the first name", (() => { const parsed = readTeamSessionCommand("worker-a worker-b"); const planned = teamSessionPlan(parsed.value, []); return parsed.error === undefined && parsed.value.roles.join(",") === "worker-a,worker-b" && planned.error.includes("需要 team（团队名）"); })());
+check("U16 解析: 只有正文时 team= 在**计划阶段**仍然缺失（缺省值是调用会话工作区目录名，由 handler 解析——解析器是纯函数、没有会话）⇒ 以「需要 team（团队名）」拒绝，而不是把正文的第一个词悄悄当成团队名", (() => { const parsed = readTeamSessionCommand("worker-a worker-b"); const planned = teamSessionPlan(parsed.value, []); return parsed.error === undefined && parsed.value.roles === undefined && parsed.value.task === "worker-a worker-b" && planned.error.includes("需要 team（团队名）"); })());
 check("U16 解析: `key=` with nothing after it is refused per key (the value may not be empty)", readTeamSessionCommand("team=t task=").error.includes("task= 后面缺少取值") && readTeamSessionCommand("team=t roles= task=x").error.includes("roles= 后面缺少取值"));
 const parsedAliases = readTeamSessionCommand("count=2 team=t role=a,b");
 check("U16 解析: count=/role= are accepted aliases of n=/roles= (a human types either)", parsedAliases.error === undefined && parsedAliases.value.n === 2 && parsedAliases.value.roles.join(",") === "a,b");
@@ -5098,8 +5099,8 @@ const cancelledEnv = teamSessionEnv({ askScript: ["取消"] });
 const cancelledOut = await cancelledEnv.run("n=2 team=night-shift roles=worker-a,worker-b task=做接口");
 const cancelledQuestion = cancelledEnv.uq.requests[0].questions[0];
 check("U16 确认框: cancel creates NOTHING and writes NO pairs (零创建零 pairs)", cancelledEnv.creates.length === 0 && cancelledEnv.pairs().length === 0 && cancelledEnv.store().length === 0 && cancelledOut.text.includes("零创建、零 pairs"));
-check("U16 确认框: the body carries the counts, the model/preset, the cwd and the conservative cost口径", cancelledQuestion.question.includes("将创建 2 个 worker 根会话") && cancelledQuestion.question.includes("工作目录（cwd）：") && cancelledQuestion.question.includes("成本口径（保守）") && cancelledQuestion.question.includes("2 个会话 × 至少一个完整回合"));
-check("U16 确认框: ... and the pairing grant is written out BEFORE it exists (信任授予不得默默发生)", cancelledQuestion.question.includes("建立 pairs 配对——双向免确认通道") && cancelledQuestion.question.includes("预置配对") && cancelledQuestion.question.includes("绕过发送方审批与接收方 ask 两道门"));
+check("U16 确认框: the body carries the counts, the model/preset, the cwd and the conservative cost口径", cancelledQuestion.detail.includes("将创建 2 个 worker 根会话") && cancelledQuestion.detail.includes("工作目录（cwd）：") && cancelledQuestion.detail.includes("成本口径（保守）") && cancelledQuestion.detail.includes("2 个会话 × 至少一个完整回合"));
+check("U16 确认框: ... and the pairing grant is written out BEFORE it exists (信任授予不得默默发生)", cancelledQuestion.detail.includes("建立 pairs 配对——双向免确认通道") && cancelledQuestion.detail.includes("预置配对") && cancelledQuestion.detail.includes("绕过发送方审批与接收方 ask 两道门"));
 check("U16 确认框: the options are exactly 创建 / 取消, and the question id matches what the handler reads back", cancelledQuestion.options.map((option) => option.label).join(",") === "创建,取消" && cancelledQuestion.id === "team-session-batch");
 // No confirmation service at all is fail-closed, like the M4 claim dialog.
 const noUqCmdEnv = teamSessionEnv({ omitUserQuestions: true });
@@ -5118,6 +5119,118 @@ check("U16 pairs: an existing channel is not duplicated (the same predicate the 
 check("U16 pairs: with no worker there is nothing to grant", withTeamSessionPairs({ pairs: [] }, "session-self", [], 42).added === 0);
 
 // ---------------------------------------------------------------------------
+// §10.2.8 三条真机缺陷的验收增量（U30 / U31 / U32 / U33 / U34）
+// ---------------------------------------------------------------------------
+// ① 输入文法（§10.2.8.2 方案 A）→ U30/U31；② 结果可见性（§10.2.8.3 通道 1）→ U32（客户端半，
+// 见 client-half.test.mjs）；③ 确认框边界（§10.2.8.4）→ U33；/team_rotate 回归 → U34
+// （既有测试面在上文 §11.2 那条，本文件不另抄一份，只在此处点名它是 U34 的守卫）。
+
+/** 这一次运行真正交给壳的那个问题（ask 收到的那一条）。 */
+const askedQuestion = (env) => env.uq.requests[0]?.questions?.[0];
+/** 码点，不是 UTF-16 单元 —— U33 的两个预算都按码点定义。 */
+const codePointsOf = (text) => [...String(text ?? "")].length;
+const newlinesOf = (text) => (String(text ?? "").match(/\n/gu) ?? []).length;
+const LONG_CWD = "/very/long/path/" + "d".repeat(110);
+const U33_LONG_TEAM = "t".repeat(39);
+
+// --- U33 换槽位（§10.2.8.4 修法表第 0 行，首要、结构性）-----------------------
+// 壳把 question 渲进**无高度钳制、且在滚动容器之外**的 <header><h2>，而 detail 在
+// Mbwy4a_body{overflow-y:auto} **之内**、底栏 flex-shrink:0 也在滚动区外 ⇒ 正文放 question
+// 就把底部的「创建 / 取消」挤出卡片（真机 8 次够不着，§10.2.8.0）。所以这两条读的是**槽位**：
+// question 必须是一行话，披露正文必须整段在 detail。
+const u33Line = "n=2 team=night-shift roles=worker-a,worker-b task=做接口";
+const u33Env = teamSessionEnv({ askScript: ["取消"] });
+await u33Env.run(u33Line);
+const u33Question = askedQuestion(u33Env);
+const u33Plan = teamSessionPlan(readTeamSessionCommand(u33Line).value, []).value;
+check("U33 换槽位: 确认框的 question 是**一行话** —— 无换行、码点 ≤ 120（壳把它渲进无高度钳制的 header，长文会把底部动作推出视野）"
+	+ (typeof u33Question?.question === "string" && newlinesOf(u33Question.question) === 0 && codePointsOf(u33Question.question) <= 120 ? "" : "（实测：" + show({ cp: codePointsOf(u33Question?.question), nl: newlinesOf(u33Question?.question), text: u33Question?.question }) + "）"),
+	typeof u33Question?.question === "string" && u33Question.question.includes("确认创建 2 个 worker 会话") && newlinesOf(u33Question.question) === 0 && codePointsOf(u33Question.question) <= 120);
+const u33DetailIsBody = typeof teamSessionDialogText === "function" && u33Question?.detail === teamSessionDialogText(u33Plan, TEAM_WS, "session-self");
+check("U33 换槽位: 披露正文**整段**进了 detail（逐字等于 teamSessionDialogText 的产物，≤600 码点且 ≤12 换行 —— 两个预算都是断言）"
+	+ (u33DetailIsBody && codePointsOf(u33Question.detail) <= 600 && newlinesOf(u33Question.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Question?.detail), nl: newlinesOf(u33Question?.detail) }) + "）"),
+	u33DetailIsBody && codePointsOf(u33Question.detail) <= 600 && newlinesOf(u33Question.detail) <= 12 && u33Question.detail.startsWith("将创建 2 个 worker 根会话并登记进团队 night-shift。"));
+check("U33 换槽位: options 一字未动（换槽位只搬正文，不碰「创建 / 取消」这对授权面）", u33Question.options.map((option) => option.label).join(",") === "创建,取消" && u33Question.id === "team-session-batch" && u33Question.header === "批量建队确认");
+
+// --- U33 有界呈现（§10.2.8.4 (a) / (b)）-------------------------------------
+// 长正文：截断**必须标注**（本仓既有规矩：U13/U14 的 targetsTruncated），并写明完整正文仍会
+// 原样投递 —— 否则「任务被截了」是被读出来的，而不是被写出来的。
+const u33LongTask = "x".repeat(3000);
+const u33LongEnv = teamSessionEnv({ askScript: ["取消"] });
+await u33LongEnv.run("n=8 team=night-shift roles=w1,w2,w3,w4,w5,w6,w7,w8 task=" + u33LongTask);
+const u33Long = askedQuestion(u33LongEnv);
+check("U33 截断标注: 正文被截时写明「共 N 字 / 仅显示前 M 字 / 完整正文会原样投递」（三个数都读得出来），且两个预算不破", u33Long?.detail.includes("共 " + u33LongTask.length + " 字") && u33Long.detail.includes("此处仅显示前 " + __testing.TEAM_SESSION_DIALOG_TASK_CHARS + " 字") && u33Long.detail.includes("完整正文会原样作为启动任务投递") && codePointsOf(u33Long.detail) <= 600 && newlinesOf(u33Long.detail) <= 12 && newlinesOf(u33Long.question) === 0 && codePointsOf(u33Long.question) <= 120);
+check("U33 不逐角色展开: 8 个角色只列前 3 个 + 「…等 8 个」，而**总数 8** 仍在正文里（有界呈现，沿用 U13/U14 约定）", u33Long?.detail.includes("共 8 个") && u33Long.detail.includes("仅列前 3 个") && u33Long.detail.includes("…等 8 个") && !u33Long.detail.includes("w5；") && (u33Long.detail.match(/w[1-4]；/gu) ?? []).length === 3);
+
+// 长 cwd / 长团队名：可变字段仍可能顶破，所以「按段落裁剪并标注」是必需品，不是防御性代码。
+const u33CwdEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
+await u33CwdEnv.run("n=2 team=night-shift roles=worker-a,worker-b");
+const u33Cwd = askedQuestion(u33CwdEnv);
+check("U33 长 cwd 裁剪标注: cwd 字段被截就留下省略号（裁剪是**标注过的**，不是静默丢字），且两个预算仍不破"
+	+ (codePointsOf(u33Cwd?.detail) <= 600 && newlinesOf(u33Cwd?.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Cwd?.detail), nl: newlinesOf(u33Cwd?.detail) }) + "）"),
+	u33Cwd?.detail.includes("（cwd）：") && u33Cwd.detail.includes("…") && !u33Cwd.detail.includes("d".repeat(40)) && codePointsOf(u33Cwd.detail) <= 600 && newlinesOf(u33Cwd.detail) <= 12 && newlinesOf(u33Cwd.question) === 0 && codePointsOf(u33Cwd.question) <= 120);
+const u33TeamEnv = teamSessionEnv({ askScript: ["取消"] });
+await u33TeamEnv.run("n=2 team=" + U33_LONG_TEAM + " roles=worker-a,worker-b");
+const u33Team = askedQuestion(u33TeamEnv);
+check("U33 长团队名裁剪标注: 39 字的团队名被截且留下省略号，段落裁剪的标注（「已裁剪至 600 码点 / 12 行上限」）同时在场，两个预算不破", u33Team?.detail.includes("ttttttttttttttttttt…") && !u33Team.detail.includes("t".repeat(25)) && u33Team.detail.includes("已裁剪至 600 码点 / 12 行上限") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 && codePointsOf(u33Team.question) <= 120 && newlinesOf(u33Team.question) === 0);
+const u33BothEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
+await u33BothEnv.run("n=8 team=" + U33_LONG_TEAM + " roles=w1,w2,w3,w4,w5,w6,w7,w8 task=" + "y".repeat(500));
+const u33Both = askedQuestion(u33BothEnv);
+check("U33 两者都长（团队名 + cwd + 8 会话 + 长正文）: 两个预算仍然不破，且裁剪有标注"
+	+ (codePointsOf(u33Both?.detail) <= 600 && newlinesOf(u33Both?.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Both?.detail), nl: newlinesOf(u33Both?.detail) }) + "）"),
+	codePointsOf(u33Both?.detail) <= 600 && newlinesOf(u33Both.detail) <= 12 && newlinesOf(u33Both.question) === 0 && codePointsOf(u33Both.question) <= 120 && u33Both.detail.includes("已裁剪至 600 码点 / 12 行上限"));
+
+// 压缩只压自述段：**必备披露**（数量 / 模型 / cwd / 成本 / 配对授权）与 §10.2.8.7 的角色指引
+// 在预算最紧的那个用例里仍一字不少 —— 这条是 U33 与 §10.2.4 / §10.2.8.7 之间的锁。
+const u33Required = [
+	"将创建 8 个 worker 根会话",
+	"- 模型/预设：",
+	"- 工作目录（cwd）：",
+	"- 启动任务：",
+	"成本口径（保守）",
+	"信任授予：与主会话 session-self 建立 pairs 配对——双向免确认通道",
+	"绕过发送方审批与接收方 ask 两道门",
+	"确认则：创建 → followup 投递启动任务 → 登记 roster 与 pairs；取消则零创建、零 pairs。",
+	__testing.TEAM_SESSION_ROLE_GUIDANCE,
+];
+check("U33 压缩后必备披露一字不少: 预算最紧的用例（长团队名 + 长 cwd + 8 会话 + 长正文）里，数量 / 模型 / cwd / 成本 / 配对授权与角色指引全部在场"
+	+ (u33Required.every((token) => typeof u33Both?.detail === "string" && u33Both.detail.includes(token)) ? "" : "（缺：" + show(u33Required.filter((token) => !u33Both?.detail.includes(token))) + "）"),
+	u33Required.every((token) => typeof u33Both?.detail === "string" && u33Both.detail.includes(token)));
+
+// --- U30 输入文法与正文送达（§10.2.8.2 方案 A「参数可省」）--------------------
+// R1：参数区只在行首；R2：进入正文后任何「字母＋等号」一律当正文（§10.2.8.1 的病灶正是
+// 「同窗 N=3）。」被读成 n=3）。）；R3：失败点名并给出路。默认值：team = 调用会话工作区
+// 目录名、n = 1、roles 省略 ⇒ 一个 worker-1。
+const U30_BODY = "帮我做 X：同窗 N=3）。pid=384448 与 word= 逐字保留；收尾 a b c。";
+const u30Parsed = readTeamSessionCommand(U30_BODY);
+check("U30 文法: /team_session 后面直接写正文即成立 —— roles 为空、正文整段进 task（这就是方案 A 的核心语义：正文 = 启动任务，与 task= 同一个槽）", u30Parsed.error === undefined && u30Parsed.value.roles === undefined && u30Parsed.value.n === undefined && u30Parsed.value.team === undefined && u30Parsed.value.task === U30_BODY && u30Parsed.value.bare.length === 0);
+const u30Env = teamSessionEnv({ askScript: ["创建"] });
+const u30Out = await u30Env.run(U30_BODY);
+check("U30 默认值: 裸正文那条行建出**恰 1 个** worker-1，team 取调用会话工作区目录名（basename(cwd)）、n 省略即 1", u30Out.kind === "success" && u30Env.creates.length === 1 && u30Env.creates[0].sessionId.startsWith("team-link-" + path.basename(TEAM_WS) + "-worker-1-") && u30Env.store().length === 1 && u30Env.store()[0].name === path.basename(TEAM_WS) && u30Env.store()[0].roles.map((entry) => entry.role).sort().join(",") === "coordinator,worker-1");
+check("U30 默认值: 目录名不合 [a-z0-9-]+ 时回退 default —— 用户没有**敲**这个值，所以不为一个目录名拒绝整条命令（而它是 team 缺省值的唯一可能失败处）", typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(path.join(TEAM_TMP, "工作 区")) === "default" && __testing.teamSessionDefaultTeam(TEAM_WS) === path.basename(TEAM_WS) && __testing.teamSessionDefaultTeam("relative/dir") === "dir");
+check("U30b 正文逐字保留（§10.2.8.1 的病灶本身）: 正文里的 N=3）。/ pid=384448 / word= 一个都不许被当参数 —— 旧实现在**整条输入**上做 token 扫描，把「同窗 N=3）。」读成 n=3）。并在参数校验阶段就拒掉整条命令", u30Parsed.error === undefined && u30Parsed.value.task.includes("N=3）。") && u30Parsed.value.task.includes("pid=384448") && u30Parsed.value.task.includes("word=") && u30Parsed.value.n === undefined && u30Parsed.value.team === undefined && u30Parsed.value.model === undefined);
+check("U30b 正文送达逐字一致: worker 收到的 kickoff 文本里，正文与人类敲的**逐字一致**（零改写、零截断、零转义）", u30Env.created.length === 1 && u30Env.created[0].calls.followedup.length === 1 && u30Env.created[0].calls.followedup[0].content[0].text.includes("- 任务：" + U30_BODY));
+check("U30b 正文送达逐字一致: 确认框交出去的正文是**同一段**（截断只发生在预览上，且标注了完整正文仍会原样投递）", typeof askedQuestion(u30Env)?.detail === "string" && askedQuestion(u30Env).detail.includes("- 启动任务：共 " + [...U30_BODY].length + " 字，此处仅显示前 " + __testing.TEAM_SESSION_DIALOG_TASK_CHARS + " 字") && askedQuestion(u30Env).detail.includes("完整正文会原样作为启动任务投递") && askedQuestion(u30Env).question.includes("确认创建 1 个 worker 会话"));
+// R1 的两类结束条件，各写正/负相断言。
+check("U30 R1(a) 静默结束（负相 ⇒ 归正文）: 裸 token 不含 = ⇒ 参数区在此结束、它自己就是正文的起点 —— 不报错、不当角色名（a b c 与 team=t n=2 a b c 两条都读）", (() => { const parsed = readTeamSessionCommand("a b c"); return parsed.error === undefined && parsed.value.task === "a b c" && parsed.value.roles === undefined; })() && (() => { const parsed = readTeamSessionCommand("team=t n=2 a b c"); return parsed.error === undefined && parsed.value.team === "t" && parsed.value.n === 2 && parsed.value.task === "a b c" && parsed.value.roles === undefined; })());
+check("U30 R1(b) 报错（正相）: token 形状合法而取值本地不合法（n=abc）⇒ **整条命令拒绝**，不是静默「归正文」（否则同一行会在两种读法下得到不同的建队结果）", (() => { const parsed = readTeamSessionCommand("n=abc 帮我做 X"); return parsed.error !== undefined && parsed.value === undefined && readTeamSessionCommand("team=t n=abc").error !== undefined; })());
+check("U30 既有 key 语义不变: 同一完整参数集下 team= / n= / roles= 的结果与今天一致（各 key 自身的解析规则一字未改 —— 变的只有「裸 token 归正文」这一条）", (() => { const parsed = readTeamSessionCommand("n=2 team=night-shift roles=worker-a,worker-b task=做接口"); const plan = teamSessionPlan(parsed.value, []).value; return parsed.error === undefined && plan.team === "night-shift" && plan.creating.join(",") === "worker-a,worker-b" && plan.task === "做接口" && plan.sessions.length === 2 && parsed.value.bare.length === 0; })());
+
+// --- U31 错误可解释性（R3：失败必须点名）--------------------------------------
+check("U31 offender 回显: 任何参数错误都**原样回显**冒犯的那个 token（n=abc / bogus=1 / roles= 逐字回来，不被折断、不被改写）", readTeamSessionCommand("n=abc 帮我做 X").error.includes("n=abc") && readTeamSessionCommand("team=t bogus=1").error.includes("bogus=1") && readTeamSessionCommand("team=t roles=").error.includes("roles="));
+check("U31 出路提示: 报错文本给出「想写正文就直接写…也可以用 task=」—— 方案 A 想让用户走的那条路，必须在失败处被指出来", readTeamSessionCommand("n=abc 帮我做 X").error.includes("想写正文就直接写") && readTeamSessionCommand("n=abc 帮我做 X").error.includes("task=") && readTeamSessionCommand("team=t bogus=1").error.includes("想写正文就直接写"));
+check("U31 废除的指引不复活: 「位置参数写角色名」这类文案在**任何**参数报错里都不再出现，而新文法（位置角色名已废除、角色只能由 roles= 声明）在未知参数的提示里被宣告", (() => { const errors = ["n=abc 帮我做 X", "team=t bogus=1", "team=t roles="].map((line) => readTeamSessionCommand(line).error ?? ""); return errors.every((text) => !text.includes("位置参数写角色名") && !text.includes("把正文当成角色名") && !text.includes("疑似把正文当角色名")) && readTeamSessionCommand("team=t bogus=1").error.includes("位置角色名已废除") && readTeamSessionCommand("team=t bogus=1").error.includes("roles="); })());
+check("U31 废除的指引不复活（源码级反锁）: 「位置参数请写在 task= 之前」与旧的未知参数提示文本都不再出现在 lib/index.js 里（报错文案只可能从那里回来）", !HANDOFF_SOURCE.includes("位置参数请写在 task= 之前") && !HANDOFF_SOURCE.includes("（可用：n / team / roles / preset / model / task；位置参数写角色名"));
+
+// --- U34 /team_rotate 回归（§10.2.8.6）---------------------------------------
+// 依据是源码级实测：两条命令**各有自己的解析器**（readTeamRotateCommand 只被自己的 handler
+// 调用，readTeamSessionCommand 同理），只共用 commands seam ⇒ §10.2.8.2 的文法换血**不会**
+// 波及 /team_rotate 的位置参数（角色名）。它的既有测试面在上文 §11.2 那一组（本轮一字未改），
+// 这里只把判据点名，并补一条「同一段文本在两条命令下读法不同」的行为证据。
+check("U34 /team_rotate 回归: 位置参数（角色名）的语法与结果不变 —— coordinator / coordinator team=night-shift 照旧解析，缺角色名、多角色名、未知 key 照旧被拒（拒绝文案仍只列它真正支持的语法）", __testing.readTeamRotateCommand("coordinator team=night-shift").value?.role === "coordinator" && __testing.readTeamRotateCommand("coordinator team=night-shift").value?.team === "night-shift" && __testing.readTeamRotateCommand("coordinator").error === undefined && __testing.readTeamRotateCommand("").error.includes("/team_rotate <role>") && __testing.readTeamRotateCommand("a b").error.includes("只接受一个角色名") && __testing.readTeamRotateCommand("coordinator bogus=1").error.includes("未知参数"));
+check("U34 /team_rotate 回归: 自由正文在 /team_rotate 下**仍然**按位置角色名读（多 token ⇒「只接受一个角色名」，单 token ⇒ 就是一个角色名），与 /team_session 下「它就是正文」的读法不同 —— 这就是「两个解析器互不调用、只共用 commands seam」的行为证据。★ 本判据是回归守卫：**改前改后都应为绿**（红相＝把 /team_rotate 的解析器也换成新文法，见本轮变异验证）", __testing.readTeamRotateCommand("帮我做 X").error.includes("只接受一个角色名") && __testing.readTeamRotateCommand("collaborator").error === undefined && __testing.readTeamRotateCommand("collaborator").value?.role === "collaborator" && __testing.readTeamRotateCommand("coordinator team=night-shift").value?.team === "night-shift" && __testing.readTeamRotateCommand('coordinator team="x"').error.includes("不要带引号"));
+
+// ---------------------------------------------------------------------------
 // U16 端到端（确认 → 创建 → 配对）与 U18（血统 / 生命周期）与 U17（幂等 / 失败）
 // ---------------------------------------------------------------------------
 
@@ -5129,24 +5242,29 @@ check("U16 端到端: confirmation creates exactly the planned sessions and driv
 check("U16 端到端: the pairs declared in the dialog are the pairs actually written (two-way with the coordinator, in the schema's canonical ratified shape)", okEnv.pairs().length === 2 && okEnv.pairs().every((pair) => pair.a === "session-self" && okIds.includes(pair.b)) && okEnv.pairs().every((pair) => pair.provisional === false && pair.expiresAt === 0));
 check("U16 端到端: roster carries one row per created role seated on that worker's session id, plus the creation-path coordinator claim", okEnv.store()[0].roles.map((entry) => `${entry.role}=${entry.current}`).sort().join(",") === [...okIds.map((id) => `${id.split("-").slice(4, -1).join("-")}=${id}`), "coordinator=session-self"].sort().join(",") && okEnv.store()[0].roles.every((entry) => entry.history.length === 1 && entry.history[0].until === null));
 check("U16 端到端: the summary reports the created ids, the roster write and the pairs, and claims no rollback", okOut.kind === "success" && okIds.every((id) => okOut.text.includes(id)) && okOut.text.includes("已登记 2 个角色") && okOut.text.includes("建立/确认 2 条双向免确认通道") && okOut.text.includes("一律保留、不回滚"));
-check("U16 端到端: a run with a CLI-entered model= reaches both agentOptions and the dialog's model line", okEnv.creates.every((options) => options.agentOptions?.provider === "deepseek" && options.agentOptions?.model === "deepseek-v4") && okEnv.creates.every((options) => options.meta.agentPreset === "coder") && okEnv.uq.requests[0].questions[0].question.includes("model=deepseek-v4"));
+check("U16 端到端: a run with a CLI-entered model= reaches both agentOptions and the dialog's model line", okEnv.creates.every((options) => options.agentOptions?.provider === "deepseek" && options.agentOptions?.model === "deepseek-v4") && okEnv.creates.every((options) => options.meta.agentPreset === "coder") && okEnv.uq.requests[0].questions[0].detail.includes("model=deepseek-v4"));
 
 // --- U16 端到端（文法面）: a REAL command, through the handler ----------------
-// The gaps of this batch are end-to-end or they are nothing: the parser's
-// positional bucket was never read by the plan, so a plan-level assertion is the
-// only honest one. Each case below enters the real command face and asserts on
-// what the run actually created.
+// §10.2.8.2 之后，这一组的**输入行自己**就换了语义：裸 token 是正文的起点，不再是角色名。
+// 原来那条 `team=night-shift worker-a worker-b task=fix the bug` 在新文法下读成「team 一个参数
+// + 正文 `worker-a worker-b task=fix the bug`」⇒ 只建 1 个 worker-1，而正文里的 `task=` **不再
+// 被解析**（R2：进入正文后任何「字母＋等号」一律当正文逐字保留）—— 这正是 U30 的判据本身。
+// 「两个角色各得一个会话」的那条断言没有消失：它搬到了用 `roles=` 声明的那条行上（下一组）。
 const grammarEnv = teamSessionEnv({ askScript: ["创建"] });
-const grammarOut = await grammarEnv.run("team=night-shift worker-a worker-b task=fix the bug");
-check("U16 端到端文法: positional role names alone create exactly those sessions (pre-fix: the plan refused with 「需要角色列表」 and nothing was created)", grammarEnv.creates.length === 2 && grammarEnv.creates.map((options) => options.sessionId).every((id) => /^team-link-night-shift-worker-[ab]-[0-9a-f]{8}$/u.test(id)) && grammarEnv.store()[0].roles.map((entry) => entry.role).sort().join(",") === "coordinator,worker-a,worker-b" && grammarOut.kind === "success");
-check("U16 端到端文法: the unquoted multi-word task reaches the kickoff message whole (pre-fix: the worker was driven with 「fix」)", grammarEnv.created.length === 2 && grammarEnv.created.every((item) => item.calls.followedup.length === 1 && item.calls.followedup[0].content[0].text.includes("fix the bug")));
+const grammarBody = "worker-a worker-b task=fix the bug";
+const grammarOut = await grammarEnv.run("team=night-shift " + grammarBody);
+check("U16 端到端文法: 裸 token 归正文 —— `team=night-shift worker-a worker-b task=fix the bug` 只建 **1 个** worker-1（角色只能由 roles= 声明），roster 里只有 coordinator 与它", grammarEnv.creates.length === 1 && /^team-link-night-shift-worker-1-[0-9a-f]{8}$/u.test(grammarEnv.creates[0].sessionId) && grammarEnv.store()[0].roles.map((entry) => entry.role).sort().join(",") === "coordinator,worker-1" && grammarOut.kind === "success");
+check("U16 端到端文法: 正文里的 `task=` **不被解析**（R2）—— 它连同前面的裸 token 一起逐字进了启动任务，而不是被切成参数", grammarEnv.created.length === 1 && grammarEnv.created[0].calls.followedup.length === 1 && grammarEnv.created[0].calls.followedup[0].content[0].text.includes("任务：" + grammarBody));
 const quotedRunEnv = teamSessionEnv({ askScript: ["创建"] });
 await quotedRunEnv.run("team=night-shift roles=worker-a task=\"fix the bug\"");
 check("U16 端到端文法: a quoted task value reaches the kickoff message with no quote characters left in it", quotedRunEnv.created.length === 1 && quotedRunEnv.created[0].calls.followedup[0].content[0].text.includes("fix the bug") && !quotedRunEnv.created[0].calls.followedup[0].content[0].text.includes("\"fix the bug\""));
-check("U16 端到端文法: the confirmation dialog body carries the same whole task text (the human sees what the workers will be told)", quotedRunEnv.uq.requests[0].questions[0].question.includes("fix the bug"));
+check("U16 端到端文法: the confirmation dialog body carries the same whole task text (the human sees what the workers will be told)", quotedRunEnv.uq.requests[0].questions[0].detail.includes("fix the bug"));
 // The role→id lookup is by ROLE, not by position (a positional helper that is
 // named after the role keeps passing on a reordered batch and hides the swap).
-check("U16 端到端文法: each role resolves to its own session id (the lookup reads the id's role segment, not the create order)", plannedId(grammarEnv, "night-shift", "worker-a") === grammarEnv.creates[0].sessionId && plannedId(grammarEnv, "night-shift", "worker-b") === grammarEnv.creates[1].sessionId && plannedId(grammarEnv, "night-shift", "worker-a") !== plannedId(grammarEnv, "night-shift", "worker-b"));
+// 两个角色的会话由 `roles=` 声明 —— 这是 §10.2.8.2 之后声明角色的**唯一**拼法。
+const grammarRolesEnv = teamSessionEnv({ askScript: ["创建"] });
+await grammarRolesEnv.run("team=night-shift roles=worker-a,worker-b");
+check("U16 端到端文法: each role resolves to its own session id (the lookup reads the id's role segment, not the create order)", grammarRolesEnv.creates.length === 2 && plannedId(grammarRolesEnv, "night-shift", "worker-a") === grammarRolesEnv.creates[0].sessionId && plannedId(grammarRolesEnv, "night-shift", "worker-b") === grammarRolesEnv.creates[1].sessionId && plannedId(grammarRolesEnv, "night-shift", "worker-a") !== plannedId(grammarRolesEnv, "night-shift", "worker-b"));
 
 // --- U18: 血统 (the meta carries cwd/agentPreset and nothing else) -----------
 check("U18 血统: meta carries exactly {cwd, agentPreset} — no origin / parentSession / delegationDepth", okEnv.creates.every((options) => Object.keys(options.meta).sort().join(",") === "agentPreset,cwd") && okEnv.creates.every((options) => options.meta.origin === undefined && options.meta.parentSession === undefined && options.meta.delegationDepth === undefined && options.meta.isSeeded === undefined));
@@ -5342,7 +5460,7 @@ check("DEFECT-4 ② rename 抛错 ⇒ 同样只降级: 恰一行 warn/会话（�
 // 口径说明（任务第 5 条）：确认框与回执都要说明**设了什么标题**、用户想改随时可改。
 const titleTextEnv = teamSessionEnv({ askScript: ["创建"] });
 const titleTextOut = await titleTextEnv.run("n=2 team=title-dialog roles=worker-a,worker-b");
-const titleTextBody = titleTextEnv.uq.requests[0]?.questions[0]?.question ?? "";
+const titleTextBody = titleTextEnv.uq.requests[0]?.questions[0]?.detail ?? "";
 const titleTextApplied = sessionTitleOf(titleTextEnv).map((row) => row.title);
 check(`DEFECT-4 ② 确认框说明设了什么标题: 每个新会话逐行写出将被设成的标题（与真正交给 rename 的那一份是同一个读数），并写明「想改随时在壳里重命名」${titleTextApplied.every((title) => typeof title === "string" && titleTextBody.includes(`（标题：${title}）`)) ? "" : `（实测：${show({ titleTextApplied, titleTextBody })}）`}`, titleTextApplied.length === 2 && titleTextBody.includes("（标题：title-dialog · worker-a）") && titleTextBody.includes("（标题：title-dialog · worker-b）") && titleTextBody.includes("想改随时在壳里重命名") && titleTextBody.includes("工作区名"));
 check("DEFECT-4 ② 回执说明设了什么标题: 完成清单逐会话列出**真正设成**的标题，并说明可随时改（不再让用户自己去侧边栏发现它们全同名）", titleTextOut.kind === "success" && titleTextOut.text.includes("worker-a → title-dialog · worker-a") && titleTextOut.text.includes("worker-b → title-dialog · worker-b") && titleTextOut.text.includes("想改随时"));

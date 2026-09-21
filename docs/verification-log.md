@@ -113,6 +113,7 @@ node client-half.test.mjs   # 浏览器半边
 | roster / 黑板 | 写权限三态与现任比对、upsert-team 幂等与 workspace 捕获、set-role 版本史与「不迁移 pairs」、retire 的置空/版本史/两条清理对话框分支、镜像一致性与失败降级、团队名与 file 白名单、decisions seq 与行格式与 500 字符上限、discipline baseHash 乐观锁两路、末 20 条窗口 |
 | **U16–U19 `/team_session` 自动建队（§10.2）** | 命令面：可选 `commands` 注入下注册 `/team_session`（descriptor + hint + `recordInput`），**服务缺席/迟到/无 `register()` 三种降级**都只丢这条命令且每个未挂载窗口恰一行 warn，模块级 `inject` 仍 4 项；参数文法（`n` / `count` / `team` / `roles` / `role` / `task` / `preset` / `model=<provider>/<model>` + 位置角色名）与逐类拒绝——**文法面的位置角色名真的进计划**（`bare` 折进 `roles`，不是只收集）、**`task=` 取到行尾/下一个 `key=` 边界**（`task=fix the bug` 不再截成 `fix` 并把 `the`/`bug` 丢进被忽略的桶）、**`key="value"` 剥引号**（`team="t"` / `task="fix the bug"`，半引号一律拒绝）、缺 `team=` 时明确报缺（两处都有**端到端**断言：真跑一条命令，读计划/创建/确认框/启动任务正文）；**两个代码常量**：N ≤ 8、每队成员 ≤ 24（含「恰 24 合法」「把团队顶过 24 拒绝并报两个计数」「同名角色在一批里重复拒绝」），并断言它们不在 settings schema 里；确认框正文含**数量 / 模型 / 预设 / cwd / 保守成本 / 配对授权**，选项恰为「创建 / 取消」，**取消 ⇒ 零创建零 pairs**、无确认服务 ⇒ fail-closed、N > 8 不进对话框；创建：`meta` **恰 `{cwd, agentPreset}`**（无 origin / parentSession / delegationDepth / isSeeded）、无 `parentAgent` / `seed`、id 形如 `team-link-<team>-<role>-<uuid8>`（含代理项与路径分隔符被剥离）、cwd 为调用者绝对路径；**生命周期**：handle 由**插件根 ctx** 的控制器持有（`controller.rootCtx === ctx`，别的 ctx 没有控制器），运行期由既有 registry 面寻址，`list_sessions` 对「盘上有会话但无活代理」读 `✕ 未运行 + verdict=dead`；**驱动**：kickoff 用 `followup`（非 `inject`）、`source` **恰三成员**、正文含团队/角色/任务/cwd/回报方式，且动作日志证明**全部 create 先于任何 followup**；**幂等**：整批重跑零创建零 pairs 且 roster/pairs 逐字节不变、混合批只建缺的角色；**失败即停**：第 k 个 create 失败停住、已建者保留并照常驱动、报告逐行列出每个角色的结局、pairs 只给真正建成的、首个即失败时零创建零 pairs 零 roster；**既有团队走既有 `writerGate`**（非现任在对话框之前就被拒）；**孤儿防护**：`pending-creates` 意图写于 create 之前、成功回填、失败留行，TTL 过期由**插件自身启动清扫**报告「可收编清单」（不判会话是否存在、不删会话、报告即记录）、healthy boot 零行；prepare 文案不再声称「本插件不能编程创建会话」 |
 | **U19 红线回归（§10.3）+ 并发纪律（§10.2.6）** | **①/② 红线**：源码级锁定「**本模块自己不长出日志写入面**」——无 `ctx.session` 写入缝（`ctx.*` 的会话接触只有**读**面：`sessionQuery` 的**四个**读方法 `listSessions` / `readSession` / `readSurface` / `readTitleSnapshots`，外加 `sessionReferenceResolver` 与 `agents`），无 `session.append` / `appendEvent` / `writeEvent` / `logEvent` / `ctx.emit`；注意措辞的边界（差异审计修复轮 🔵-1）：插件对会话的写入面**是存在的**——`ctx.agents.create` 与 `agent.followup`——红线不破的理由是那两条路径产生的事件类型由**上游定义**，而这条源码断言**证明不了**事件类型（它证明的是本模块没有 append/emit 面；审计的变异 M6「往模块里放一个日志写入 API → 1 红」证明的正是这个锁会咬）。**导入面是六模块白名单**（新增依赖无法偷渡写入 API；`@deepseek-ai/dsh-session-reference` 是上游深链解析器，不是日志写入器）；客户端半边**零 import** ⇒ ① 同样到不了写入面；真跑一批（2 worker）后回放插件自己的 `agent/pre-step` 监听器 ⇒ 事件只剩**上游深链**一条，运行时状态**只落 settings 命名空间 + `agents.create` + `agent.followup`** 三个既有出口 ⇒ **不产生任何新的日志事件类型**（**旁证**而非判据：那条用例读的是**桩**，结构上观察不到新事件类型）；`source` 仍**恰三成员**（复用 U17 的 kickoff + 新跑一批各一条）；模块级 `inject` 仍 4 项且导出面恰 `apply`/`inject`/`__testing`/`name`；**既有 schema 与投递双门零改动**——policy 命名空间仍恰 8 键（② 自己那一个 `pendingCreates` + 先前七个）、`team_link_send` 参数面仍恰 `message`/`meta`/`targetSessionId`/`targets`（`required:["message"]`）、配对免双门、无配对时双门两次都在、接收方选项表逐字、**整批恰弹一次对话框**（§10.2.4 那个，pairs 而非新旁路）。**G2 并发**：在飞 `agents.create` 峰值由**提供方侧**计数（每次 create 故意加 20ms），断言 **≤2** 且**实测恰 1**（单条 `await` 串行循环；源码面同证：全模块 `agents.create(` 恰一处、无并行组合器） |
+| **U30–U34 §10.2.8 三条真机缺陷修订（2026-09-22）** | ① 输入文法（方案 A「参数可省」）：R1 参数区只在行首且谓词闭合（静默结束 ⇒ 归正文；key 未知或取值不合法 ⇒ 整条拒绝）、R2 正文不解析（`N=3` / `pid=384448` / `word=` 逐字保留）、R3 失败点名并给出路；**位置角色名废除**（裸 token 是正文的起点，`roles` 只由 `roles=` 声明）与三个默认值（`team` = 调用会话工作区目录名、`n` = 1、一个 `worker-1`）；**正文逐字送达**（kickoff 与确认框交出去的是同一段）；② 结果可见性 = **通道 1**（复用 D 模式：按 `data.name` 过滤 `command/run`、按见过的 `commandId` 认领 `command/done`、有界 64、成功与失败同一条通道），**不新增任何日志事件类型**；③ 确认框边界：**换槽位**（`question` 一行话 ≤120 码点且无换行，披露正文整段进 `detail` ≤600 码点 / ≤12 换行）、任务预览截断标注、不逐角色展开（前 3 个 + 「…等 N 个」且总数写全）、长 cwd / 长团队名的裁剪标注、必备披露与角色指引在压缩后一字不少；④ `/team_rotate` 回归守卫（位置角色名语法与结果不变）|
 | 广播 fan-out | 寻址解析与通配仅协调者、逐目标独立过门与 fail-closed、≤8 上限与整次拒绝（**表达式**数；卡内**行数**另受 §10.1.2 的 24 行上限约束）、去重、no-holder、单目标/广播互斥 |
 | 信封 banner | 枚举校验全表、ref 按码点截断并注明、首行格式与部分键、source 仍三成员、fan-out 共享 meta |
 | busy 预判 | 运行中分钟数 / 时间戳不可读回退 / 空闲原文案 / fan-out 逐目标 |
@@ -557,4 +558,70 @@ GET /team-link/export?session=<真实 id> Host evil.example:3080-> 403 (9 B, bod
 **复跑核对（eng_coder，2026-09-21 21:37，同一读法）**：上表九行**逐字重现**（含 68 B / 0 B / 9 B 的表体大小、`forbidden` 体文，以及末行的 401）；真实 id 另用 `8fff041d-5c31-4d68-a09f-118c25fd1bf7` 与 `4a95884d-97cb-446a-b512-41ecdf315ff7`（`team_link_list_sessions` 读出）各跑一次，与 `bogus-id` **同判 403（9 B）**。
 
 **仍未闭合的两半（如实记，不粉饰）**：① 该点自身的正路径「**同源带 cookie（已登录浏览器）→ 200 全量**」仍**无读数**（需一次已登录浏览器的下载复验）；② **真机复验点 3** 的收起态 / 标题栏收起态两态仍未在真机核对（无浏览器驱动面，与批次 3、批次 4 同口径留给父侧）。
+
+## §10.2.8 三条真机缺陷修订（U30–U34）（2026-09-22；当次实测 `951 (failed: 0)` / `269 (failed: 0)`，基线 `927` / `259`）
+
+**设计（唯一事实源）**：`docs/collab-enhancements-design-2026-09-19.md` **§10.2.8**（§10.2.8.0 现象与证据 / §10.2.8.2 修订后的文法 / §10.2.8.3 结果可见性 / §10.2.8.4 确认框边界 / §10.2.8.6 明确不做 / §10.2.8.7 角色指引）与 **§10.4 的 U30–U34**。本轮的「修了什么 / 为什么」见 `CHANGELOG.md` 的 0.3.10 条目；本节只记**证据**。
+
+### 隔离夹具的构造（红相怎么来的）
+
+真机缺陷是「**新测试 + 旧实现**」的红相，所以夹具是本轮的新测试配 `git show HEAD:` 的旧实现：
+
+```
+$d = ".tmp-head"
+New-Item -ItemType Directory -Force -Path "$d\lib" | Out-Null
+git show HEAD:lib/index.js  | Set-Content -Encoding utf8 "$d\lib\index.js"
+git show HEAD:lib/client.js | Set-Content -Encoding utf8 "$d\lib\client.js"
+git show HEAD:README.md     | Set-Content -Encoding utf8 "$d\README.md"
+git show HEAD:package.json  | Set-Content -Encoding utf8 "$d\package.json"
+Copy-Item host-half.test.mjs,client-half.test.mjs $d -Force
+cd $d; node host-half.test.mjs; node client-half.test.mjs
+```
+
+（新断言按本仓 **Y7 纪律**先做类型守卫，所以红相是**报 FAIL**而不是崩在缺面上——两条套件都跑到底、都打印了 `assertion total`。）
+
+### 病灶（修复前必红，实测读数）
+
+| 套件 | 修复前（新测试 + HEAD 实现） | 修复后（本树） |
+| --- | --- | --- |
+| `node host-half.test.mjs` | `assertion total: 951 (failed: 30)` | `assertion total: 951 (failed: 0)` |
+| `node client-half.test.mjs` | `assertion total: 269 (failed: 22)` | `assertion total: 269 (failed: 0)` |
+
+逐条判据的红/绿（`…` 内是本轮新增的断言组）：
+
+| 判据 | 红相（修复前） | 绿相（修复后） |
+| --- | --- | --- |
+| **U30（9 条）+ U31（4 条）** | **13 条全红**（宿主侧 30 条 FAIL 中的 13 条） | 13 条全绿 |
+| **U33（9 条）** | **9 条全红**；其中「换槽位」两条把旧读数留在案上：`question` = **1068 码点 / 14 换行**，`detail` = **63 码点**（一行话） | 9 条全绿；`question` **≤120 码点且 0 换行**，`detail` **≤600 码点且 ≤12 换行** |
+| **U32（10 条，客户端）** | 客户端侧 22 条 FAIL 中 **8 条红**；另 **2 条是负相断言**（「不认别的类型」「状态不可读时不抛错」—— 断言的是**缺席**，缺该 definition 的构建上**本来就会绿**） | 10 条全绿 |
+| **U34（2 条，回归守卫）** | **两条都绿**（设计明示：本判据改前改后都应为绿） | 两条都绿 |
+| 同批改写的既有断言（宿主 `input.hint` / 三条位置角色名 / 「U16 端到端文法」组 / 5 处披露槽位；客户端 3 条 chat-node 计数 / 1 条 warn 计数 / 若干 `fresh.length` 与 `names()` / `applyWith` 的按 kind 计数） | 这些断言**在旧实现上本来就红**（它们断言的是新语义），是本轮红相的一部分 | 全绿 |
+
+**U33 的两条槽位读数（逐字）**：
+
+- **修复前**：`question` = 那段 1068 码点 / 14 换行的披露正文（正是「长文放在无高度钳制的 header 里」的形状）；`detail` = 63 码点的一行话「本命令是 §10.2.4 的批量动作：…」。
+- **修复后**：`question` = 「确认创建 2 个 worker 会话并登记进团队 night-shift？」（**单行、≤120 码点**）；`detail` = 披露正文整段（**逐字等于 `teamSessionDialogText` 的产物**，两个预算都断言）。常规用例实测 **594 / 600 码点、9 / 12 换行**；压力用例（8 会话 + 3000 字正文 / 39 字团队名 / 110 字 cwd / 两者都长）实测 **558 / 565 / 592 / 566 码点、均 9 换行**，全部在预算内，被裁的用例都带「已裁剪至 600 码点 / 12 行上限」标注。
+
+### U34 的红相（回归守卫怎么证明自己是活的）
+
+U34 的绿相是**两端都绿**（改前/改后），所以它的「红」只能由**单点变异**给出：把新文法搬到 `/team_rotate` 的解析器上（`lib/index.js` 的 `readTeamRotateCommand` 内，把「第二个裸 token ⇒ 拒绝」改成 `continue`，即「位置角色名之后的裸 token 一律当正文」）：
+
+- **变异后**：`node host-half.test.mjs` **在 `host-half.test.mjs:4646`（§11.2 的既有文法面）当场崩**（该面直接读 `.error.includes`），整轮 30 条 FAIL —— **守卫是活的**；变异逐字回退后复跑 `951 (failed: 0)`。
+- 两条 U34 断言本身（`/team_rotate` 的 `coordinator` / `coordinator team=night-shift` 照旧解析；自由正文仍按位置角色名读并因「只接受一个角色名」拒绝）在**夹具（HEAD 实现）里也是 PASS** —— 与设计 §10.2.8.6 的「两条命令各有自己的解析器，只共用 commands seam」逐字相符。
+
+### 红线回归（本批，运行时/源码级读数）
+
+| 红线 | 读数 |
+| --- | --- |
+| 不新增任何日志事件类型 | `lib/` 内 `ctx.session`（**单数**）/ `appendEvent` / `session.log` / `.append(` 四条模式 **各 0 命中**（`Select-String` 逐条计数） |
+| 模块级 `inject` 仍恰 4 项 | `node -e "import('./lib/index.js').then(m=>console.log(JSON.stringify(m.inject)))"` → `["sessionReferenceResolver","tools","sessionQuery","agents"]` |
+| 投递门 / `source` 三成员 / 既有 schema key | 未触碰（U19 与 `AUDITED_SOURCE_KINDS` 的既有断言同批全绿） |
+| 通道 1 只读既有事件 | 新 definition 的 `match` 只认 `command/run`（`name` 过滤）与 `command/done`（见过的 `commandId`），其余事件类型一律 `null`（含 `user/message` / `assistant/message` / `turn/*` / `tool/*` / `session/title`） |
+
+### 如实标注
+
+- **未做真机验证**：本批全部读数来自两套单元套件与上述隔离夹具；宿主半边需 DSH 重启、§10.2.8.3 的客户端节点需重建 bundle + 刷新页面。**U33 的「渲染高度不超视口」是设计显式降级的真机项**（依赖窗口宽度），**刻意不作单测断言** —— 本节不声称这一条已验。
+- **U32 的两条负相断言在红相里也绿**（见上表），读红相时不要把它们算成「修复前已通过」。
+- **通道 1 的实机观察项**：壳可能本来就画出自己的 `kind:"command"` 通用行（`dsh-client-ui-chat` 也注册了一个），本插件无法查询「壳渲染了什么」⇒ 「是否与壳的通用行并存」留作真机观察项。
+- **`README.md` 的三处读数仍未同步**（不在本轮文件清单内）：第 7 行 tests 徽章 `927 + 259`、第 863 行「当前读数」、第 880 行「判据 U30–U34，未落码」—— 见 `CHANGELOG.md` 0.3.10 条目的「如实标注」末条。
 

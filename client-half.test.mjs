@@ -195,15 +195,34 @@ const registrations = [];
  * Captured so the assertions can read the REAL copy (a key renamed in lib/ and
  * not here would show up as the key name itself). */
 const localeDicts = new Map();
-/** The Definition this plugin hands to the uiConversation registry (§10.1.3 D);
- * U15 drives it the way the assembler does. `definitionRegistrations` counts the
- * calls into the registry, so an apply() that must NOT register anything (F3's
- * missing-service cases) can be told apart from one that did. */
+/** Every Definition this plugin hands to the uiConversation registry, keyed by its
+ * `kind` — the registry's own discriminator (§10.1.3 D registers `team-link-send`;
+ * §10.2.8.3 通道 1 registers `team-link-team-session`). The capture is
+ * KIND-PARTITIONED on purpose: one flat "last registration wins" slot made U15's
+ * assertions drive whichever definition registered LAST, and that stopped being the
+ * send card the moment the §10.2.8.3 通道 1 definition landed — U15 was then judging
+ * the wrong definition (its `tool/call` / `tool/result` assertions) while still
+ * passing everything that happens to hold for both. */
+const registeredDefinitionsByKind = new Map();
+/** The §10.1.3 D definition (kind `team-link-send`) — the one U15 drives, picked out
+ * of the map BY KIND instead of by registration order. */
 let registeredDefinition = null;
+/** register() calls, per kind and in total, so an apply() that must NOT register
+ * anything (F3's missing-service cases) can be told apart from one that did — and so
+ * an assertion can name the FACE it is about rather than a total a second definition
+ * legitimately moves. */
+const definitionRegistrationsByKind = new Map();
 let definitionRegistrations = 0;
 const uiConversationStub = {
 	events: {
-		register(definition) { definitionRegistrations += 1; registeredDefinition = definition; return () => {}; },
+		register(definition) {
+			definitionRegistrations += 1;
+			const kind = definition !== null && definition !== undefined && typeof definition.kind === "string" ? definition.kind : "";
+			definitionRegistrationsByKind.set(kind, (definitionRegistrationsByKind.get(kind) ?? 0) + 1);
+			registeredDefinitionsByKind.set(kind, definition);
+			if (kind === "team-link-send") registeredDefinition = definition;
+			return () => {};
+		},
 	},
 };
 /** The three client services §4.3.5 reads at runtime. `sessions` deliberately
@@ -865,7 +884,7 @@ check("U14 跨轮 对照: a 3-target card and a no-mark 24-row card carry NO tru
 // is a property of the PAIR of faces, so both are needed by the A assertions too.)
 check("U15: the top-level node renderer is registered under its own kind, beside the receiver's context card", topSlot !== undefined && relayNodeSlot !== undefined && topSlot.options.key !== relayNodeSlot.options.key);
 check("U15: ... at the §10.1.3 priority, in this plugin's locale namespace", topSlot.options.priority === -90 && topSlot.options.locale === "dsh-team-link");
-check("U15: the two coexist on the same keyed slot (a second entry at the SAME key would throw; these are different keys)", registrations.filter((entry) => entry.options.name === "conversation.chat.node").length === 2);
+check("U15: the THREE chat-node rows coexist on the same keyed slot (a second entry at the SAME key would throw; these three keys are all different — the receiver card, §10.1.3 D's summary and §10.2.8.3 通道 1's command row)", registrations.filter((entry) => entry.options.name === "conversation.chat.node").length === 3 && new Set(registrations.filter((entry) => entry.options.name === "conversation.chat.node").map((entry) => entry.options.key)).size === 3);
 check("U15: the definition reaches the uiConversation registry, and its kind is the card's discriminator (def / slot / data cannot drift apart)", registeredDefinition !== null && registeredDefinition.kind === "team-link-send" && registeredDefinition.kind === topSlot.options.key);
 check("U15: the definition declares the chat view target together with a buildViewNode (the registry requires the pair)", registeredDefinition.target === "chat" && typeof registeredDefinition.buildViewNode === "function");
 check("U15: the definition owns no Location-data publication and no new event source — it is a reader of the existing log", registeredDefinition.buildLocationData === undefined);
@@ -1013,6 +1032,68 @@ check("U15: the renderer stays total for a hostile getter too", (() => {
 	}
 })());
 
+// ---------------------------------------------------------------------------
+// U32 (§10.2.8.3 · **通道 1**): the /team_session RESULT as a top-level row
+// ---------------------------------------------------------------------------
+// 缺陷② 是「命令失败了界面上什么都看不到」——`command/run` 与 `command/done` 都是
+// **log-only** 事件（§10.2.8.3 的前提纠正：不进模型面、也不保证在壳里渲染），落点只在发
+// 命令的那个输入框里。§10.2.8.3 规定按通道优先级取**可用的第一条**；本组断言咬的就是
+// **通道 1**（复用 §10.1.3 的 D 模式：match 既有 log-only 事件 ＋ 客户端顶层节点），
+// 不是通道 2（roster 黑板 decisions.md）也不是通道 3（logger.warn）——后两者都不是 UI
+// 可见物，若落在那里必须按「可查」口径断言。这里取到的是最强的那个。
+//
+// 四个读数：① 注册形状（自己的 kind，与壳自带的 kind:"command" 行并存）；② 事件归属
+// （command/run 按 data.name 过滤；command/done 本身不带 name，只能按**见过的 commandId**
+// 认领）；③ 不认别的类型（读既有事件、不发明事件）；④ **成功与失败都出节点**。
+
+const teamSessionKind = moduleExports.__testing === undefined ? undefined : moduleExports.__testing.TEAM_SESSION_NODE_KIND;
+const teamSessionDefinition = teamSessionKind === undefined ? undefined : registeredDefinitionsByKind.get(teamSessionKind);
+/** Y7 纪律（见 §4.3 那段）：本文件也要能跑在**没有** 通道 1 的构建上（红相），所以对它的每次
+ * 调用都先类型守卫 —— 崩溃会把断言总数一起藏起来，而「这个面不存在」本身是要被**报成 FAIL** 的
+ * 读数。守卫只挡崩溃，不改任何断言的判据。 */
+const tsMatch = (event) => (typeof teamSessionDefinition?.match === "function" ? teamSessionDefinition.match(event) : null);
+const commandRun = (commandId, name, seq = 20, args = "n=2 team=t") => ({ type: "command/run", seq, time: 1_700_000_002_000, data: { commandId, name, args } });
+const commandDone = (commandId, kind, text, seq = 21) => ({ type: "command/done", seq, time: 1_700_000_003_000, data: { commandId, kind, text } });
+
+check("U32 通道 1 注册: definition 真的经**动态 uiConversation 注入**注册了，而且挂在它**自己的 kind** 上（与壳自带的 kind=command 行、与 §10.1.3 D 的 send 节点都不撞：注册表只拒同 kind）", teamSessionKind === "team-link-team-session" && teamSessionDefinition !== undefined && teamSessionDefinition.kind === teamSessionKind && teamSessionDefinition.target === "chat" && typeof teamSessionDefinition.buildViewNode === "function" && (definitionRegistrationsByKind.get(teamSessionKind) ?? 0) >= 1);
+check("U32 通道 1 注册: 它的渲染面成对注册在同一个键控槽上（node kind 永不缺渲染器），且不与 send 节点 / 接收方 context 卡共享 key", typeof relayNodeSlot?.component === "function" && typeof topSlot?.component === "function" && (() => { const slot = registrations.find((entry) => entry.options.name === "conversation.chat.node" && entry.options.key === teamSessionKind); return slot !== undefined && typeof slot.component === "function"; })());
+check("U32 通道 1 归属: command/run **按 data.name 过滤** —— 只有 name=team_session 才认领（壳里其它命令的 run 一律不认）", JSON.stringify(tsMatch(commandRun("cmd-ts", "team_session"))) === JSON.stringify({ id: "cmd-ts", role: "start" }) && ["team_rotate", "permission", "export", undefined].every((name) => tsMatch(commandRun("cmd-other", name)) === null));
+check("U32 通道 1 归属: command/done **按见过的 commandId** 认领 —— done 事件本身不带 name（dsh-commands 只写 commandId/kind/text），认每一个 done 会给会话里每条命令都造一个节点", JSON.stringify(tsMatch(commandDone("cmd-ts", "error", "N 必须是整数（会话个数，1..8）。"))) === JSON.stringify({ id: "cmd-ts", role: "update" }) && tsMatch(commandDone("cmd-never-seen", "success", "x")) === null);
+check("U32 通道 1 不认别的类型: 除那两种之外任何事件类型都不被认领（读既有事件，绝不发明事件类型 —— §10.3 红线）", ["user/message", "assistant/message", "turn/start", "turn/end", "tool/call", "tool/result", "session/title", "team-link-send"].every((type) => tsMatch({ type, seq: 1, time: 1, data: {} }) === null));
+check("U32 通道 1 有界重放安全: 记住的 commandId 表有界（64）—— 远超上限之后最早的 id 被忘掉（宁可少画一行，也不无界增长），而最新的仍然认", (() => {
+	for (let index = 0; index < 80; index += 1) tsMatch(commandRun("cmd-flood-" + index, "team_session"));
+	return tsMatch(commandDone("cmd-flood-0", "success", "x")) === null && JSON.stringify(tsMatch(commandDone("cmd-flood-79", "error", "boom"))) === JSON.stringify({ id: "cmd-flood-79", role: "update" });
+})());
+
+/** Drive 通道 1's definition the way the assembler does — the same shape U15's
+ * `driveDefinition` uses, for the other kind (start for the run, update for the
+ * done, with the Context grown as it goes). */
+function driveTeamSession(events) {
+	let context = { key: teamSessionKind + "\u0000cmd-run", kind: teamSessionKind, id: "cmd-run", matches: [], start: undefined, state: undefined };
+	for (const event of events) {
+		const match = tsMatch(event);
+		if (match === null) continue;
+		const entry = { event, role: match.role, location: { kind: "step", turn: {}, step: {} } };
+		const isStart = match.role === "start";
+		context = { ...context, matches: [...context.matches, entry], start: isStart ? entry : context.start };
+		if (isStart) context.state = teamSessionDefinition.start(context, entry);
+		else if (context.state !== undefined) context.state = teamSessionDefinition.update(context, entry);
+	}
+	return { context, node: typeof teamSessionDefinition?.buildViewNode === "function" ? teamSessionDefinition.buildViewNode(context) : null };
+}
+const teamSessionSlot = registrations.find((entry) => entry.options.name === "conversation.chat.node" && entry.options.key === teamSessionKind);
+const tsErrRun = driveTeamSession([commandRun("cmd-run", "team_session", 40), commandDone("cmd-run", "error", "N 必须是整数（会话个数，1..8）。", 41)]);
+const tsOkRun = driveTeamSession([commandRun("cmd-run", "team_session", 30), commandDone("cmd-run", "success", "批量建队完成清单（团队 t）：- worker-1 → 已创建 + 已投递启动任务", 31)]);
+check("U32 通道 1 失败相: 失败的 `command/done` 出一个**顶层节点**，正文就是宿主回的那句错误原文（缺陷② 的现象正是「5 条 kind=error 写进日志、界面上一行都没有」）", tsErrRun.node !== null && typeof teamSessionKind === "string" && tsErrRun.node.kind === teamSessionKind && tsErrRun.node.data.outcome.kind === "error" && typeof teamSessionSlot?.component === "function" && treeText(flatten(teamSessionSlot.component({ node: tsErrRun.node, t: tZh }))).includes("N 必须是整数（会话个数，1..8）。"));
+check("U32 通道 1 成功相: 成功的 `command/done` 走**同一个** definition 出节点（成功与失败同一条通道，不另开分支），正文是完成清单", tsOkRun.node !== null && typeof teamSessionKind === "string" && tsOkRun.node.kind === teamSessionKind && tsOkRun.node.data.outcome.kind === "success" && tsOkRun.node.data.commandId === "cmd-run" && typeof teamSessionSlot?.component === "function" && treeText(flatten(teamSessionSlot.component({ node: tsOkRun.node, t: tZh }))).includes("批量建队完成清单（团队 t）"));
+check("U32 通道 1 入参预览有界: 行上写出人类敲的原始入参（客户端**不重解析**文法 —— 重解析就是第二份文法实现），渲染时截到 120 码点并留下省略号，完整原文留在 title 上（有界呈现，不吞也不丢）", tsOkRun.node !== null && typeof teamSessionKind === "string" && tsOkRun.node.data.args === "n=2 team=t" && (() => {
+	const long = driveTeamSession([commandRun("cmd-long", "team_session", 50, "x".repeat(400)), commandDone("cmd-long", "success", "ok", 51)]);
+	if (long.node === null || typeof teamSessionSlot?.component !== "function") return false;
+	const span = treeByClass(flatten(teamSessionSlot.component({ node: long.node, t: tZh })), "dshsl-ts-args");
+	return span !== null && treeText(span) === "x".repeat(119) + "…" && [...treeText(span)].length === 120 && span.props.title === "x".repeat(400);
+})());
+check("U32 通道 1 降级优先: 状态不可读时 buildViewNode 返回 null 而不是抛错（客户端失败不得影响会话，§10.1.5），且 match 对畸形事件是全域的", [null, undefined, 7, {}, { state: null }, { state: "x" }].every((context) => { try { return typeof teamSessionDefinition?.buildViewNode !== "function" || teamSessionDefinition.buildViewNode(context) === null; } catch { return false; } }) && [null, undefined, 7, {}, { type: "command/run" }, { type: "command/done" }].every((event) => { try { const matched = tsMatch(event); return matched === null || typeof matched === "object"; } catch { return false; } }));
+
 // --- the degradation contract: a broken registry is "no top-level row" ------
 // §10.1.5 降级优先: the uiConversation face is a newer public surface, so a shell
 // whose registry refuses the definition (or lacks the service entirely) must
@@ -1026,6 +1107,7 @@ function applyWith(overrides = {}) {
 	const fresh = [];
 	const warnings = [];
 	const definitionsBefore = definitionRegistrations;
+	const definitionsBeforeByKind = new Map(definitionRegistrationsByKind);
 	const context = {
 		effect(fn) { const disposer = fn(); return typeof disposer === "function" ? disposer : () => {}; },
 		locale: { register(_namespace, lang, dict) { localeDicts.set(lang, dict); return () => {}; }, bind() { return (key) => key; } },
@@ -1064,13 +1146,23 @@ function applyWith(overrides = {}) {
 		documentStub.querySelector = realQuery;
 		console.warn = realWarn;
 	}
-	return { fresh, warnings, thrown, registered: registeredDefinition, definitionCalls: definitionRegistrations - definitionsBefore };
+	return {
+		fresh,
+		warnings,
+		thrown,
+		registered: registeredDefinition,
+		definitionCalls: definitionRegistrations - definitionsBefore,
+		/** register() calls that landed under ONE kind during THIS apply — the reading
+		 * an assertion about a single face has to use, because the total now legitimately
+		 * counts two definitions (the send card and the §10.2.8.3 通道 1 row). */
+		definitionCallsOf: (kind) => (definitionRegistrationsByKind.get(kind) ?? 0) - (definitionsBeforeByKind.get(kind) ?? 0),
+	};
 }
 
 const refusing = applyWith({ inject(_specs, callback) { return callback({ uiConversation: { events: { register() { throw new Error("registry refused"); } } } }); } });
 check("U15: a registry that REFUSES the definition does not throw out of apply()", refusing.thrown === null);
-check("U15: ... it costs only the top-level card, and says so once in the browser console", refusing.warnings.length === 1 && refusing.warnings[0].includes("uiConversation.events.register") && refusing.warnings[0].includes("top-level message card stays off"));
-check("U15: ... while every other registration still lands (the header strip, the tool row, both chat rows, the §4.3 sidebar entry)", refusing.fresh.length === 5 && refusing.fresh.filter((entry) => entry.options.name === "conversation.chat.node").length === 2 && refusing.fresh.some((entry) => entry.options.name === "tool.call.toolview" && entry.options.key === "team_link_send"));
+check("U15: ... it costs only the two DEFINITION-backed rows, and each one says so in the browser console (one line per face, §10.1.5's 坏了只是不渲染)", refusing.warnings.length === 2 && refusing.warnings.every((line) => line.includes("uiConversation.events.register")) && refusing.warnings.some((line) => line.includes("top-level message card stays off")) && refusing.warnings.some((line) => line.includes("the /team_session result row stays off")));
+check("U15: ... while every other registration still lands (the header strip, the tool row, all THREE chat rows, the §4.3 sidebar entry)", refusing.fresh.length === 6 && refusing.fresh.filter((entry) => entry.options.name === "conversation.chat.node").length === 3 && refusing.fresh.some((entry) => entry.options.name === "tool.call.toolview" && entry.options.key === "team_link_send"));
 // --- F3 (差异审计): the missing service costs the TOP-LEVEL CARD only --------
 // Pre-F3 the module-level `inject` array carried `uiConversation`, so a shell
 // without that service never ran `apply()` at all: the header strip, the export
@@ -1079,13 +1171,13 @@ check("U15: ... while every other registration still lands (the header strip, th
 // cordis's `ctx.inject` (registry mixin, `cordis/lib/index.js:743`), and a
 // callback whose deps are unmet simply never runs.
 const serviceless = applyWith({ inject(_specs, callback) { return callback({}); } });
-check("F3: a shell without the uiConversation service loses ONLY the top-level card — no definition is registered, the other registrations all land", serviceless.thrown === null && serviceless.warnings.length === 0 && serviceless.fresh.length === 5 && serviceless.definitionCalls === 0 && serviceless.fresh.some((entry) => entry.options.name === "tool.call.toolview") && serviceless.fresh.some((entry) => entry.options.name === "conversation.chat.node" && entry.options.key === "context"));
+check("F3: a shell without the uiConversation service loses ONLY the definition-backed rows — no definition is registered, the other registrations all land", serviceless.thrown === null && serviceless.warnings.length === 0 && serviceless.fresh.length === 6 && serviceless.definitionCalls === 0 && serviceless.fresh.some((entry) => entry.options.name === "tool.call.toolview") && serviceless.fresh.some((entry) => entry.options.name === "conversation.chat.node" && entry.options.key === "context"));
 // The real cordis shape when the service is absent (or not yet provided): the
 // injected callback is never called at all and nothing throws.
 const waiting = applyWith({ inject() { return undefined; } });
-check("F3: ... and a context whose inject callback never fires (the real cordis shape without the service) still applies to completion with the same registrations", waiting.thrown === null && waiting.warnings.length === 0 && waiting.fresh.length === 5 && waiting.definitionCalls === 0);
+check("F3: ... and a context whose inject callback never fires (the real cordis shape without the service) still applies to completion with the same registrations", waiting.thrown === null && waiting.warnings.length === 0 && waiting.fresh.length === 6 && waiting.definitionCalls === 0);
 const injectless = applyWith({ inject: undefined });
-check("U15: a client context that cannot inject at all is still applied to completion", injectless.thrown === null && injectless.warnings.length === 0 && injectless.fresh.length === 5 && injectless.definitionCalls === 0);
+check("U15: a client context that cannot inject at all is still applied to completion", injectless.thrown === null && injectless.warnings.length === 0 && injectless.fresh.length === 6 && injectless.definitionCalls === 0);
 check("F3: the module-level inject array is back to the three services apply() cannot live without — uiConversation is NOT one of them (a hard dependency here would kill the whole client half)", moduleExports.inject.join(",") === "slots,sessions,locale" && moduleExports.inject.indexOf("uiConversation") === -1);
 check("F3: the definition still reaches the registry through the dynamic injection when the service IS there (the §10.1.5 contract is a fallback, not a removal)", moduleExports.inject.indexOf("uiConversation") === -1 && registeredDefinition !== null && registeredDefinition.kind === "team-link-send");
 
@@ -1097,20 +1189,20 @@ check("F3: the definition still reaches the registry through the dynamic injecti
 const names = (result) => result.fresh.map((entry) => entry.options.name === "conversation.chat.node" ? `${entry.options.name}:${entry.options.key}` : entry.options.name).sort().join(",");
 const toolRowRefused = applyWith({ refuseRegister: (options) => options.name === "tool.call.toolview" });
 check("B3: a refused tool row does not abort apply()", toolRowRefused.thrown === null);
-check("B3: ... and the two chat rows, the header strip and the §4.3 entry still land (4 of 5, minus the refused one)", names(toolRowRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.session.header.actions,sidebar.footer.action" && toolRowRefused.warnings.length === 1 && toolRowRefused.warnings[0].includes("tool.call.toolview") && toolRowRefused.warnings[0].includes("other slots are unaffected"));
-check("B3: ... and the top-level definition is unaffected by a slot refusal (the faces degrade independently)", toolRowRefused.definitionCalls === 1);
+check("B3: ... and the three chat rows, the header strip and the §4.3 entry still land (5 of 6, minus the refused one)", names(toolRowRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.chat.node:team-link-team-session,conversation.session.header.actions,sidebar.footer.action" && toolRowRefused.warnings.length === 1 && toolRowRefused.warnings[0].includes("tool.call.toolview") && toolRowRefused.warnings[0].includes("other slots are unaffected"));
+check("B3: ... and the §10.1.3 D definition is unaffected by a slot refusal (the faces degrade independently)", toolRowRefused.definitionCallsOf("team-link-send") === 1);
 const relayRowRefused = applyWith({ refuseRegister: (options) => options.name === "conversation.chat.node" && options.key === "context" });
-check("B3: a refused receiver card costs that row alone — the tool row and the top-level card still land", relayRowRefused.thrown === null && names(relayRowRefused) === "conversation.chat.node:team-link-send,conversation.session.header.actions,sidebar.footer.action,tool.call.toolview" && relayRowRefused.warnings.length === 1 && relayRowRefused.warnings[0].includes("conversation.chat.node") && relayRowRefused.definitionCalls === 1);
+check("B3: a refused receiver card costs that row alone — the tool row and both top-level definitions still land", relayRowRefused.thrown === null && names(relayRowRefused) === "conversation.chat.node:team-link-send,conversation.chat.node:team-link-team-session,conversation.session.header.actions,sidebar.footer.action,tool.call.toolview" && relayRowRefused.warnings.length === 1 && relayRowRefused.warnings[0].includes("conversation.chat.node") && relayRowRefused.definitionCallsOf("team-link-send") === 1);
 const topRowRefused = applyWith({ refuseRegister: (options) => options.name === "conversation.chat.node" && options.key === "team-link-send" });
-check("B3: a refused top-level row costs that row alone — the two other registrations still land", topRowRefused.thrown === null && names(topRowRefused) === "conversation.chat.node:context,conversation.session.header.actions,sidebar.footer.action,tool.call.toolview" && topRowRefused.warnings.length === 1 && topRowRefused.warnings[0].includes("team-link-send"));
+check("B3: a refused §10.1.3 D row costs that row alone — the other five registrations still land", topRowRefused.thrown === null && names(topRowRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-team-session,conversation.session.header.actions,sidebar.footer.action,tool.call.toolview" && topRowRefused.warnings.length === 1 && topRowRefused.warnings[0].includes("team-link-send"));
 const injectRefused = applyWith({ refuseInject: (name) => name === "tool.call.toolview" });
-check("B3: a THROWING `slots.inject` is caught too (the tool row is the only casualty)", injectRefused.thrown === null && names(injectRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.session.header.actions,sidebar.footer.action" && injectRefused.warnings.length === 1 && injectRefused.warnings[0].includes("slots.inject refused"));
+check("B3: a THROWING `slots.inject` is caught too (the tool row is the only casualty)", injectRefused.thrown === null && names(injectRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.chat.node:team-link-team-session,conversation.session.header.actions,sidebar.footer.action" && injectRefused.warnings.length === 1 && injectRefused.warnings[0].includes("slots.inject refused"));
 // The header strip is the FOURTH registration and the first to run: unguarded, a
 // refusal there aborted the tool row, both chat rows and the deep-link opener
 // (round-1 🔵 #3 — the asymmetry B3 exists to remove).
 const headerRefused = applyWith({ refuseRegister: (options) => options.name === "conversation.session.header.actions" });
-check("B3: a refused HEADER strip costs that row alone — all three §10.1 registrations still land", headerRefused.thrown === null && names(headerRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,sidebar.footer.action,tool.call.toolview" && headerRefused.warnings.length === 1 && headerRefused.warnings[0].includes("conversation.session.header.actions") && headerRefused.warnings[0].includes("other slots are unaffected"));
-check("B3: ... and the top-level definition still registers (the strip is not on the definition's path)", headerRefused.definitionCalls === 1);
+check("B3: a refused HEADER strip costs that row alone — every §10.1 / §10.2.8.3 registration still lands", headerRefused.thrown === null && names(headerRefused) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.chat.node:team-link-team-session,sidebar.footer.action,tool.call.toolview" && headerRefused.warnings.length === 1 && headerRefused.warnings[0].includes("conversation.session.header.actions") && headerRefused.warnings[0].includes("other slots are unaffected"));
+check("B3: ... and the §10.1.3 D definition still registers (the strip is not on the definition's path)", headerRefused.definitionCallsOf("team-link-send") === 1);
 
 // --- dictionary parity (the copy both faces render comes from one place) -----
 const zhKeys = Object.keys(localeDicts.get("zh")).sort().join(",");
@@ -1207,7 +1299,7 @@ if (sessionToolsSurfacePresent) {
 	});
 	check("U12: with any of the three services missing the entry is NOT registered at all (a fake button is worse than no button)", missingServices.thrown === null && missingServices.fresh.every((entry) => entry.options.name !== "sidebar.footer.action"));
 	check("U12: ... and exactly ONE console line names what is missing (§4.3.6)", missingServices.warnings.length === 1 && missingServices.warnings[0].includes("sidebar.footer.action") && missingServices.warnings[0].includes("missing workspaces, uiWorkspace") && missingServices.warnings[0].includes("NOT registered"));
-	check("U12: ... while every other face of this plugin still registers (N1: one face lost, never the plugin)", names(missingServices) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.session.header.actions,tool.call.toolview");
+	check("U12: ... while every other face of this plugin still registers (N1: one face lost, never the plugin)", names(missingServices) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.chat.node:team-link-team-session,conversation.session.header.actions,tool.call.toolview");
 
 	const lateServices = applyWith({
 		get() { return undefined; },
@@ -1219,7 +1311,7 @@ if (sessionToolsSurfacePresent) {
 	const noPrimitives = applyWith();
 	primitivesAvailable = true;
 	check("U12: a shell whose seed module carries no Modal does not register the entry either — no dialog, no entry", noPrimitives.fresh.every((entry) => entry.options.name !== "sidebar.footer.action") && noPrimitives.warnings.length === 1 && noPrimitives.warnings[0].includes("ui-primitives(Modal)"));
-	check("U12: ... and loses nothing else", names(noPrimitives) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.session.header.actions,tool.call.toolview");
+	check("U12: ... and loses nothing else", names(noPrimitives) === "conversation.chat.node:context,conversation.chat.node:team-link-send,conversation.chat.node:team-link-team-session,conversation.session.header.actions,tool.call.toolview");
 	check("U12: this half's module graph is exactly react plus the seed module — no injected package is required from the bundle", [...new Set(required)].sort().join(",") === ["@deepseek-ai/dsh-client-ui-primitives", "react"].join(","));
 
 	// --- §4.3.1: the entry's two faces (wide row vs 56px rail) ------------------
@@ -1495,7 +1587,7 @@ windowStub.location.pathname = "/s/session-target";
 const deepC = deepLinkEnv("session-target", { withoutNavigation: true });
 const appliedC = applyCapturingWarnings(deepC.context);
 check("U14 降级: a shell without uiWorkspace loses the FOCUS step only — the deep link opens and nothing throws", appliedC.thrown === null && deepC.nav.length === 0);
-check("U14 降级: ... and §4.3's own rule holds in that same shell (no uiWorkspace ⇒ no「会话工具」entry, everything else applied)", deepC.slotNames.indexOf("sidebar.footer.action") === -1 && deepC.slotNames.length === 4);
+check("U14 降级: ... and §4.3's own rule holds in that same shell (no uiWorkspace ⇒ no「会话工具」entry, everything else applied)", deepC.slotNames.indexOf("sidebar.footer.action") === -1 && deepC.slotNames.length === 5);
 
 windowStub.location.pathname = "/s/session-target";
 const deepD = deepLinkEnv("session-target", { navigationThrows: true });
