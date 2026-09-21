@@ -5190,6 +5190,16 @@ const u33Model = askedQuestion(u33ModelEnv);
 check("U33 长 model= 封顶: 300 字的 model= 取值被逐字段封顶（省略号可辨，不许原样内插），detail 两个预算仍不破，question 仍单行 ≤120 码点"
 	+ (u33Model?.detail?.includes("model=" + "m".repeat(39) + "…") === true && codePointsOf(u33Model?.detail) <= 600 && newlinesOf(u33Model?.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Model?.detail), nl: newlinesOf(u33Model?.detail), modelLine: typeof u33Model?.detail === "string" ? u33Model.detail.split("\n").find((line) => line.startsWith("- 模型/预设：")) : undefined }) + "）"),
 	codePointsOf(u33Model?.question) <= 120 && newlinesOf(u33Model?.question) === 0 && typeof u33Model?.detail === "string" && u33Model.detail.includes("model=" + "m".repeat(39) + "…") && !u33Model.detail.includes("m".repeat(60)) && codePointsOf(u33Model.detail) <= 600 && newlinesOf(u33Model.detail) <= 12);
+// §10.2.8.4 (b) 的 per-field 上限清单里 `preset=` **有它自己的一格（24，与 provider 同级）**，
+// 不再复用角色的 8 码点（2026-09-22 第 2 轮评审 🔵#3：常见 preset id 会被截成认不出，而这一行是
+// §10.2.4 的**必备披露**）。写法与上面长 `model=` 那条同构：60 字取值 ⇒ 封顶后带省略号、不许原样内插，
+// 两个预算仍不破；「不再复用 8」由**封顶到 24**（23 字 + 省略号）这个读数直接量出来。
+const u33PresetEnv = teamSessionEnv({ askScript: ["取消"] });
+await u33PresetEnv.run("n=2 team=night-shift roles=worker-a,worker-b task=做接口 preset=" + "p".repeat(60));
+const u33Preset = askedQuestion(u33PresetEnv);
+check("U33 长 preset= 封顶（自有上限 24，与 provider 同级）: 60 字的 preset= 取值被逐字段封顶（省略号可辨，**不再复用角色的 8 码点**），detail 两个预算仍不破，question 仍单行 ≤120 码点"
+	+ (u33Preset?.detail?.includes("preset=" + "p".repeat(23) + "…") === true && codePointsOf(u33Preset?.detail) <= 600 && newlinesOf(u33Preset?.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Preset?.detail), nl: newlinesOf(u33Preset?.detail), presetLine: typeof u33Preset?.detail === "string" ? u33Preset.detail.split("\n").find((line) => line.startsWith("- 模型/预设：")) : undefined }) + "）"),
+	codePointsOf(u33Preset?.question) <= 120 && newlinesOf(u33Preset?.question) === 0 && typeof u33Preset?.detail === "string" && u33Preset.detail.includes("preset=" + "p".repeat(23) + "…") && !u33Preset.detail.includes("p".repeat(30)) && codePointsOf(u33Preset.detail) <= 600 && newlinesOf(u33Preset.detail) <= 12);
 const u33BothEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
 await u33BothEnv.run("n=8 team=" + U33_LONG_TEAM + " roles=w1,w2,w3,w4,w5,w6,w7,w8 task=" + "y".repeat(500));
 const u33Both = askedQuestion(u33BothEnv);
@@ -5254,6 +5264,18 @@ check("U30 默认值第 4 条: `team=t n=2`（既无正文也无 task=）⇒ **�
 check("U30 默认值第 4 条（措辞同步）: 确认框与完成回报都如实说这一支 —— 框里写「只建会话、不投启动任务」、回报里写「未投启动任务」，两处都不留一句会被读成「已经派活了」的话"
 	+ (typeof noTaskEnv.uq.requests[0]?.questions?.[0]?.detail === "string" && noTaskEnv.uq.requests[0].questions[0].detail.includes("只建会话、不投启动任务") && noTaskOut.text.includes("未投启动任务") ? "" : "（实测：" + show({ detail: noTaskEnv.uq.requests[0]?.questions?.[0]?.detail, report: noTaskOut.text }) + "）"),
 	typeof noTaskEnv.uq.requests[0]?.questions?.[0]?.detail === "string" && noTaskEnv.uq.requests[0].questions[0].detail.includes("- 启动任务：（未给正文/task=，只建会话、不投启动任务）") && noTaskEnv.uq.requests[0].questions[0].detail.includes("确认则：创建 → 登记 roster 与 pairs（本次未给正文/task=，不投启动任务）") && noTaskOut.text.includes("已创建（未给正文/task=，不投启动任务）") && !noTaskOut.text.includes("已投递启动任务"));
+// 同支纪律（§10.2.8.2 默认值第 4 条下的补条，2026-09-22 第 2 轮评审 🟡#1）：**成本行也必须按同一支写** ——
+// 否则同一张框一面说「不投启动任务」、一面说「followup 驱动一次」，被读成「已经派活了」。
+// 判据落在**成本行本身**（从框里按行取出来再读），且**两侧互为对照**：无任务支不得出现「followup 驱动一次」，
+// 有任务支必须保留它 —— 否则「把半句抹掉」也能让无任务支变绿，那是把披露改软而不是改准。
+/** 从确认框正文里取出「成本口径（保守）」那一行（取不到 ⇒ undefined，交给断言判假而不是抛错）。 */
+const costLineOf = (text) => (typeof text === "string" ? text.split("\n").find((line) => line.startsWith("成本口径（保守）")) : undefined);
+const noTaskDetail = noTaskEnv.uq.requests[0]?.questions?.[0]?.detail;
+const noTaskCostLine = costLineOf(noTaskDetail);
+const taskCostLine = costLineOf(u30Env.uq.requests[0]?.questions?.[0]?.detail);
+check("U30 默认值第 4 条（措辞同步 · 成本行）: 「成本口径（保守）」那一行按同一支写 —— 无任务支写 0 次驱动 / 不投启动任务、**不得**再出现「followup 驱动一次」，有任务支保留原意（两侧都咬，抹掉半句不算修），两个预算仍不破"
+	+ (noTaskCostLine === undefined || taskCostLine === undefined || noTaskCostLine.includes("followup") || noTaskCostLine.includes("0 次驱动") === false || !taskCostLine.includes("followup 驱动一次") ? "（实测：" + show({ noTaskCostLine, taskCostLine, cp: codePointsOf(noTaskDetail), nl: newlinesOf(noTaskDetail) }) + "）" : ""),
+	noTaskCostLine !== undefined && noTaskCostLine.includes("0 次驱动") && noTaskCostLine.includes("不投启动任务") && !noTaskCostLine.includes("followup") && taskCostLine !== undefined && taskCostLine.includes("followup 驱动一次") && codePointsOf(noTaskDetail) <= 600 && newlinesOf(noTaskDetail) <= 12);
 
 // --- U31 错误可解释性（R3：失败必须点名）--------------------------------------
 check("U31 offender 回显: 任何参数错误都**原样回显**冒犯的那个 token（n=abc / bogus=1 / roles= 逐字回来，不被折断、不被改写）", readTeamSessionCommand("n=abc 帮我做 X").error.includes("n=abc") && readTeamSessionCommand("team=t bogus=1").error.includes("bogus=1") && readTeamSessionCommand("team=t roles=").error.includes("roles="));
