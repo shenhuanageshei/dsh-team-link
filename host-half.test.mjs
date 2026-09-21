@@ -5161,6 +5161,13 @@ await u33LongEnv.run("n=8 team=night-shift roles=w1,w2,w3,w4,w5,w6,w7,w8 task=" 
 const u33Long = askedQuestion(u33LongEnv);
 check("U33 截断标注: 正文被截时写明「共 N 字 / 仅显示前 M 字 / 完整正文会原样投递」（三个数都读得出来），且两个预算不破", u33Long?.detail.includes("共 " + u33LongTask.length + " 字") && u33Long.detail.includes("此处仅显示前 " + __testing.TEAM_SESSION_DIALOG_TASK_CHARS + " 字") && u33Long.detail.includes("完整正文会原样作为启动任务投递") && codePointsOf(u33Long.detail) <= 600 && newlinesOf(u33Long.detail) <= 12 && newlinesOf(u33Long.question) === 0 && codePointsOf(u33Long.question) <= 120);
 check("U33 不逐角色展开: 8 个角色只列前 3 个 + 「…等 8 个」，而**总数 8** 仍在正文里（有界呈现，沿用 U13/U14 约定）", u33Long?.detail.includes("共 8 个") && u33Long.detail.includes("仅列前 3 个") && u33Long.detail.includes("…等 8 个") && !u33Long.detail.includes("w5；") && (u33Long.detail.match(/w[1-4]；/gu) ?? []).length === 3);
+// §10.2.8.4 (b) 的**前半句**：「只给 **id 形状 ＋ 计数**，全量清单进完成回报」。2026-09-22 的只读审计
+// 指出：修法表第 0 行换槽位时把旧实现里那行 `- 会话 id：team-link-<team>-<role>-<uuid8>`
+// （`teamSessionIdPrefix()`，见 `git show ee7c48a^:lib/index.js`）**整条删掉**了，于是「id 形状」在框里一处不剩。
+// 这条把它钉回来，同时钉住**后半句**：形状是**常量**（全批共用一个梗），逐个会话的 id 清单不进框（那是完成回报的活）。
+check("U33 id 形状在场（§10.2.8.4 (b)「只给 id 形状 ＋ 计数」）: 正文里给出 id 的形状 team-link-<team>-<role>-<uuid8> 与本次**总数**，而**不逐个会话展开 id**（全量清单留给完成回报）"
+	+ (typeof u33Long?.detail === "string" && u33Long.detail.includes("team-link-<team>-<role>-<uuid8>") && u33Long.detail.includes("共 8 个") && !/team-link-night-shift-w\d/u.test(u33Long.detail) ? "" : "（实测：" + show({ hasShape: typeof u33Long?.detail === "string" && u33Long.detail.includes("team-link-<team>-<role>-<uuid8>"), counts: typeof u33Long?.detail === "string" && u33Long.detail.includes("共 8 个"), idListed: typeof u33Long?.detail === "string" && /team-link-night-shift-w\d/u.test(u33Long.detail) }) + "）"),
+	typeof u33Long?.detail === "string" && u33Long.detail.includes("team-link-<team>-<role>-<uuid8>") && u33Long.detail.includes("共 8 个") && !/team-link-night-shift-w\d/u.test(u33Long.detail));
 
 // 长 cwd / 长团队名：可变字段仍可能顶破，所以「按段落裁剪并标注」是必需品，不是防御性代码。
 const u33CwdEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
@@ -5173,6 +5180,16 @@ const u33TeamEnv = teamSessionEnv({ askScript: ["取消"] });
 await u33TeamEnv.run("n=2 team=" + U33_LONG_TEAM + " roles=worker-a,worker-b");
 const u33Team = askedQuestion(u33TeamEnv);
 check("U33 长团队名裁剪标注: 39 字的团队名被截且留下省略号，段落裁剪的标注（「已裁剪至 600 码点 / 12 行上限」）同时在场，两个预算不破", u33Team?.detail.includes("ttttttttttttttttttt…") && !u33Team.detail.includes("t".repeat(25)) && u33Team.detail.includes("已裁剪至 600 码点 / 12 行上限") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 && codePointsOf(u33Team.question) <= 120 && newlinesOf(u33Team.question) === 0);
+// §10.2.8.4 (b) 的逐字段封顶必须覆盖**用户可任意长的取值**：`model=` / `provider=` 由命令行给出，
+// 解析器只定形状（`TEAM_SESSION_MODEL_RE`）不定长度 ⇒ 修前它们**原样内插**进模型行，单这一句
+// 就能顶破 600 码点（而 per-field caps 存在的理由正是「必备披露装得下**每一个**输入」）。
+// 这条用 300 字的 `model=` 直接量它：封顶后模型行带省略号，两个预算仍不破。
+const u33ModelEnv = teamSessionEnv({ askScript: ["取消"] });
+await u33ModelEnv.run("n=2 team=night-shift roles=worker-a,worker-b task=做接口 model=" + "m".repeat(300));
+const u33Model = askedQuestion(u33ModelEnv);
+check("U33 长 model= 封顶: 300 字的 model= 取值被逐字段封顶（省略号可辨，不许原样内插），detail 两个预算仍不破，question 仍单行 ≤120 码点"
+	+ (u33Model?.detail?.includes("model=" + "m".repeat(39) + "…") === true && codePointsOf(u33Model?.detail) <= 600 && newlinesOf(u33Model?.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Model?.detail), nl: newlinesOf(u33Model?.detail), modelLine: typeof u33Model?.detail === "string" ? u33Model.detail.split("\n").find((line) => line.startsWith("- 模型/预设：")) : undefined }) + "）"),
+	codePointsOf(u33Model?.question) <= 120 && newlinesOf(u33Model?.question) === 0 && typeof u33Model?.detail === "string" && u33Model.detail.includes("model=" + "m".repeat(39) + "…") && !u33Model.detail.includes("m".repeat(60)) && codePointsOf(u33Model.detail) <= 600 && newlinesOf(u33Model.detail) <= 12);
 const u33BothEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
 await u33BothEnv.run("n=8 team=" + U33_LONG_TEAM + " roles=w1,w2,w3,w4,w5,w6,w7,w8 task=" + "y".repeat(500));
 const u33Both = askedQuestion(u33BothEnv);
@@ -5215,6 +5232,28 @@ check("U30b 正文送达逐字一致: 确认框交出去的正文是**同一段*
 check("U30 R1(a) 静默结束（负相 ⇒ 归正文）: 裸 token 不含 = ⇒ 参数区在此结束、它自己就是正文的起点 —— 不报错、不当角色名（a b c 与 team=t n=2 a b c 两条都读）", (() => { const parsed = readTeamSessionCommand("a b c"); return parsed.error === undefined && parsed.value.task === "a b c" && parsed.value.roles === undefined; })() && (() => { const parsed = readTeamSessionCommand("team=t n=2 a b c"); return parsed.error === undefined && parsed.value.team === "t" && parsed.value.n === 2 && parsed.value.task === "a b c" && parsed.value.roles === undefined; })());
 check("U30 R1(b) 报错（正相）: token 形状合法而取值本地不合法（n=abc）⇒ **整条命令拒绝**，不是静默「归正文」（否则同一行会在两种读法下得到不同的建队结果）", (() => { const parsed = readTeamSessionCommand("n=abc 帮我做 X"); return parsed.error !== undefined && parsed.value === undefined && readTeamSessionCommand("team=t n=abc").error !== undefined; })());
 check("U30 既有 key 语义不变: 同一完整参数集下 team= / n= / roles= 的结果与今天一致（各 key 自身的解析规则一字未改 —— 变的只有「裸 token 归正文」这一条）", (() => { const parsed = readTeamSessionCommand("n=2 team=night-shift roles=worker-a,worker-b task=做接口"); const plan = teamSessionPlan(parsed.value, []).value; return parsed.error === undefined && plan.team === "night-shift" && plan.creating.join(",") === "worker-a,worker-b" && plan.task === "做接口" && plan.sessions.length === 2 && parsed.value.bare.length === 0; })());
+// §10.2.8.2 的「正文与 `task=` 同现 ⇒ 报错（任务只能给一处）」：2026-09-22 由只读审计给出反例、代码评审复核，
+// **两次独立认定「可达」** —— `task=` 的取值在**下一个已知 key=**（`model=`）处被截断，其后的裸 token 走 R1(a)
+// 成为正文 ⇒ 同一个「启动任务」槽被给了两处。修法表第 0 行换槽位之后这条行为**零断言**，本批把它钉住
+// （**行为一字不改**：实现现在的拒绝就是对的，这两条只是把它锁上）。
+check("U30 同现 ⇒ 报错（§10.2.8.2「任务只能给一处」）: `task=` 被后续已知 key 截断、其后又有裸 token ⇒ 与正文同现 ⇒ **整条命令拒绝**并报「任务只能给一处」，且把正文的起点原样点名（否则用户不知道该删哪一处）"
+	+ (readTeamSessionCommand("team=t task=a model=m b").error?.includes("任务只能给一处") === true && readTeamSessionCommand("team=t task=a model=m b").error.includes("正文从「b」开始") ? "" : "（实测：" + show(readTeamSessionCommand("team=t task=a model=m b")) + "）"),
+	readTeamSessionCommand("team=t task=a model=m b").error !== undefined && readTeamSessionCommand("team=t task=a model=m b").value === undefined && readTeamSessionCommand("team=t task=a model=m b").error.includes("任务只能给一处") && readTeamSessionCommand("team=t task=a model=m b").error.includes("正文从「b」开始") && readTeamSessionCommand("team=t task=a model=m b").error.includes("task="));
+check("U30 同现 ⇒ 报错（引号形）: `task=\"q\" 正文` 也被拒 —— 闭引号之后不许再有任何内容（那是「任务只能给一处」的另一条来路：引号形 task 取值之后又跟了正文）"
+	+ (readTeamSessionCommand('task="q" 正文').error !== undefined ? "" : "（实测：" + show(readTeamSessionCommand('task="q" 正文')) + "）"),
+	readTeamSessionCommand('task="q" 正文').error !== undefined && readTeamSessionCommand('task="q" 正文').value === undefined && readTeamSessionCommand('task="q" 正文').error.includes("task=") && readTeamSessionCommand('task="q" 正文').error.includes("落在闭引号之后"));
+// --- U30 默认值第 4 条（§10.2.8.2）：既无正文也无 `task=` ⇒ 只建会话、不投启动任务 ------------
+// 正文与 `task=` 是**同一个槽**（R2: 正文 = 启动任务）⇒ 两者都没给就是**没有任务**。旧实现在这一支
+// 仍然 followup 一具「请等待主会话派活」的 kickoff（= 插件替人类编了一条他没写的任务）；判据落在
+// 「建了几个」与「followup 了几次」两个读数上，落点不是措辞。
+const noTaskEnv = teamSessionEnv({ askScript: ["创建"] });
+const noTaskOut = await noTaskEnv.run("team=t n=2");
+check("U30 默认值第 4 条: `team=t n=2`（既无正文也无 task=）⇒ **只建会话、不投启动任务** —— 会话照建（恰 2 个），而 followup / inject / steer **各零次**（没有任务要交出去，插件不替人类编一条）"
+	+ (noTaskEnv.creates.length === 2 && noTaskEnv.created.every((item) => item.calls.followedup.length === 0) ? "" : "（实测：" + show({ creates: noTaskEnv.creates.length, followups: noTaskEnv.created.map((item) => item.calls.followedup.length) }) + "）"),
+	noTaskEnv.creates.length === 2 && noTaskEnv.created.length === 2 && noTaskEnv.created.every((item) => item.calls.followedup.length === 0 && item.calls.injected.length === 0 && item.calls.steered.length === 0) && noTaskOut.kind === "success");
+check("U30 默认值第 4 条（措辞同步）: 确认框与完成回报都如实说这一支 —— 框里写「只建会话、不投启动任务」、回报里写「未投启动任务」，两处都不留一句会被读成「已经派活了」的话"
+	+ (typeof noTaskEnv.uq.requests[0]?.questions?.[0]?.detail === "string" && noTaskEnv.uq.requests[0].questions[0].detail.includes("只建会话、不投启动任务") && noTaskOut.text.includes("未投启动任务") ? "" : "（实测：" + show({ detail: noTaskEnv.uq.requests[0]?.questions?.[0]?.detail, report: noTaskOut.text }) + "）"),
+	typeof noTaskEnv.uq.requests[0]?.questions?.[0]?.detail === "string" && noTaskEnv.uq.requests[0].questions[0].detail.includes("- 启动任务：（未给正文/task=，只建会话、不投启动任务）") && noTaskEnv.uq.requests[0].questions[0].detail.includes("确认则：创建 → 登记 roster 与 pairs（本次未给正文/task=，不投启动任务）") && noTaskOut.text.includes("已创建（未给正文/task=，不投启动任务）") && !noTaskOut.text.includes("已投递启动任务"));
 
 // --- U31 错误可解释性（R3：失败必须点名）--------------------------------------
 check("U31 offender 回显: 任何参数错误都**原样回显**冒犯的那个 token（n=abc / bogus=1 / roles= 逐字回来，不被折断、不被改写）", readTeamSessionCommand("n=abc 帮我做 X").error.includes("n=abc") && readTeamSessionCommand("team=t bogus=1").error.includes("bogus=1") && readTeamSessionCommand("team=t roles=").error.includes("roles="));
@@ -5290,7 +5329,10 @@ check("U18 preset= 显式给出: 走的是**同一条**代码（resolve(\"coder\
 // the missing composition costs (the setup callback really runs — the stub awaits
 // it, as the factory does — so this is the composed path's own line).
 const noPresetServiceEnv = teamSessionEnv({ askScript: ["创建"], omitAgentPresets: true });
-const noPresetServiceOut = await noPresetServiceEnv.run("n=2 team=defect1 roles=worker-a,worker-b");
+// ⚠ 2026-09-22（§10.2.8.2 默认值第 4 条落码后改夹具，**判据文本一字未改**）：这几具夹具原本是**无正文无 task=**
+// 的行，而新默认是「只建会话、不投启动任务」——「照建**照驱动**」这条claim 于是失去触发条件。给它们补上 `task=`
+// 是**保住原有覆盖**（缺服务时那两件事仍然都要发生），不是把断言改软；新默认自己有专门的断言（U30 默认值第 4 条）。
+const noPresetServiceOut = await noPresetServiceEnv.run("n=2 team=defect1 roles=worker-a,worker-b task=验降级仍驱动");
 check("DEFECT-1 降级（唯一允许跳过的分支）: agentPresets 服务缺席 ⇒ 零 mount、meta 只剩 cwd、每个新会话恰一行 warn，而会话照建、照驱动（不因服务缺失让整条创建失败）", noPresetServiceEnv.creates.length === 2 && noPresetServiceEnv.agentPresets.mounts.length === 0 && noPresetServiceEnv.creates.every((options) => Object.keys(options.meta).sort().join(",") === "cwd") && presetServiceWarns(noPresetServiceEnv).length === 2 && noPresetServiceEnv.created.every((item) => item.calls.followedup.length === 1) && noPresetServiceOut.kind === "success");
 check("DEFECT-1 降级: 那行 warn 说清了后果（没有 persona-prefix 组装源、首回合可能起不来），不是一句无声的「跳过了」", presetServiceWarns(noPresetServiceEnv).length === 2 && presetServiceWarns(noPresetServiceEnv).every((line) => line.includes("persona-prefix")));
 // A preset that IS named but cannot be resolved is a REAL failure, not a reason
@@ -5321,7 +5363,7 @@ check("DEFECT-2 ② meta.cwd 来自 workspace.path（模板 :103）: registry �
 // 服务缺席是**唯一**允许跳过 workspace 面的分支（§10.3：不许为了它把模块级 inject
 // 撑大 ⇒ 走 `ctx.get`）。降级但绝不静默：会话照建照驱动，每个会话一行 warn。
 const noWsServiceEnv = teamSessionEnv({ askScript: ["创建"], omitWorkspaceRegistry: true });
-const noWsServiceOut = await noWsServiceEnv.run("n=2 team=defect2 roles=worker-a,worker-b");
+const noWsServiceOut = await noWsServiceEnv.run("n=2 team=defect2 roles=worker-a,worker-b task=验降级仍驱动");
 check("DEFECT-2 降级（唯一允许跳过的分支）: workspaceRegistry 缺席 ⇒ 零 attach、零工作区创建、meta.cwd 回落到调用方 cwd，而会话照建、照驱动（不因服务缺失让整条创建失败）", noWsServiceEnv.creates.length === 2 && noWsServiceEnv.workspaceRegistry.attached.length === 0 && noWsServiceEnv.workspaceRegistry.creates.length === 0 && noWsServiceEnv.creates.every((options) => options.meta.cwd === TEAM_WS) && noWsServiceEnv.created.every((item) => item.calls.followedup.length === 1) && noWsServiceOut.kind === "success");
 check("DEFECT-2 降级不静默: 恰一行 warn/会话，且点名「未挂进工作区，可能不会出现在侧边栏」——正是用户当时找不到会话的那个现象", workspaceServiceWarns(noWsServiceEnv).length === 2 && workspaceServiceWarns(noWsServiceEnv).every((line) => line.includes("未挂进工作区，可能不会出现在侧边栏")));
 // 回滚（模板 :135-147）：失败的创建不留下半个已挂载的会话 —— attach 抛错 ⇒
@@ -5450,12 +5492,12 @@ check(`缺口2 超长团队名下 role 段活下来: 同队两个 role 的标题
 // warn、不阻断创建**。这与 preset / 模型选择那两处的 fail-fast 口径**故意不同**：那两处
 // 决定的是会话**能不能跑**（缺了首回合就死），标题只决定它在侧边栏里长什么样。
 const noTitleEnv = teamSessionEnv({ askScript: ["创建"], omitSessionTitle: true });
-const noTitleOut = await noTitleEnv.run("n=2 team=defect4 roles=worker-a,worker-b");
+const noTitleOut = await noTitleEnv.run("n=2 team=defect4 roles=worker-a,worker-b task=验降级仍驱动");
 check("DEFECT-4 ② 服务缺席降级不阻断创建: sessionTitle 缺席 ⇒ 零 rename，而两个会话照建、照驱动、照登记（团队里 worker-a/worker-b 两个角色都在，外加创建路径认领的 coordinator），批次仍报成功（其余面一字不变）", noTitleEnv.creates.length === 2 && noTitleEnv.sessionTitle.renames.length === 0 && noTitleEnv.created.every((item) => item.calls.followedup.length === 1) && noTitleEnv.store().length === 1 && at(noTitleEnv.store(), 0, { roles: [] }).roles.map((entry) => entry.role).sort().join(",") === "coordinator,worker-a,worker-b" && noTitleOut.kind === "success");
 check("DEFECT-4 ② 降级不静默: 一个会话一行 warn，点名「未设标题」的后果（宿主默认标题很可能是工作区名、同一批 worker 在侧边栏里会无法区分）与出路（可在壳里改），并把**打算用的**那个标题如实写出来", sessionTitleServiceWarns(noTitleEnv).length === 2 && sessionTitleServiceWarns(noTitleEnv).every((line) => line.includes("未设标题") && line.includes("工作区名") && line.includes("无法区分") && line.includes("手动")) && sessionTitleServiceWarns(noTitleEnv).some((line) => line.includes("defect4 · worker-a")) && sessionTitleServiceWarns(noTitleEnv).some((line) => line.includes("defect4 · worker-b")));
 // 第二档降级：服务在、但 rename 抛错（标题为空 / 会话不在册 / 服务已 dispose）。
 const refuseRenameEnv = teamSessionEnv({ askScript: ["创建"], sessionTitleOptions: { refuseRename: true } });
-const refuseRenameOut = await refuseRenameEnv.run("n=1 team=defect4 roles=worker-a");
+const refuseRenameOut = await refuseRenameEnv.run("n=1 team=defect4 roles=worker-a task=验降级仍驱动");
 check("DEFECT-4 ② rename 抛错 ⇒ 同样只降级: 恰一行 warn/会话（点名 rename failed 与后果），会话照建照驱动、批次仍报成功（异常不许从呈现面漏出去炸掉建队）", refuseRenameEnv.creates.length === 1 && refuseRenameEnv.sessionTitle.renames.length === 0 && refuseRenameEnv.created.every((item) => item.calls.followedup.length === 1) && sessionTitleRenameWarns(refuseRenameEnv).length === 1 && sessionTitleRenameWarns(refuseRenameEnv)[0].includes("工作区名") && refuseRenameOut.kind === "success");
 // 口径说明（任务第 5 条）：确认框与回执都要说明**设了什么标题**、用户想改随时可改。
 const titleTextEnv = teamSessionEnv({ askScript: ["创建"] });
@@ -5568,7 +5610,7 @@ check("U17 幂等: a mixed batch creates only the missing role, skips the seated
 
 // --- 部分失败: 失败即停 · 已建者保留 · 如实报告 -------------------------------
 const failEnv = teamSessionEnv({ askScript: ["创建"], failCreateAt: 1 });
-const failOut = await failEnv.run("n=3 team=night-shift roles=worker-a,worker-b,worker-c");
+const failOut = await failEnv.run("n=3 team=night-shift roles=worker-a,worker-b,worker-c task=做接口");
 const failFirstId = at(failEnv.creates, 0, {}).sessionId;
 check("U17 失败即停: the k-th create failing stops the loop — the third session is never attempted", failEnv.creates.length === 2 && failOut.kind === "error" && failOut.text.includes("未尝试") && failOut.text.includes("失败即停"));
 check("U17 保留: the sessions already created are KEPT (nothing is rolled back) and the first one is still driven", failEnv.created.length === 1 && failEnv.created[0].calls.followedup.length === 1 && failEnv.agentFor(failFirstId) !== undefined && failOut.text.includes(`worker-a → ${failFirstId}：已创建 + 已投递启动任务`));
