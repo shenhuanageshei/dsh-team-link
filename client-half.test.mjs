@@ -1196,7 +1196,7 @@ if (sessionToolsSurfacePresent) {
 	// --- U12: registration, and the refusal to register a fake button -----------
 	check("U12: the「会话工具」entry is registered into the official sidebar.footer.action slot", sessionToolsSlot !== undefined);
 	check("U12: ... exactly once", registrations.filter((entry) => entry.options.name === "sidebar.footer.action").length === 1);
-	check("U12: ... with the design's id and order (0 = below the usage card's -10 and above 【设置】)", sessionToolsSlot.options.id === "team-link-session-tools" && sessionToolsSlot.options.order === 0 && sessionToolsSlot.options.order > -10);
+	check("U12: ... with the design's id and order (0 = AFTER the usage card's -10, in the same flex row to its right — not below it)", sessionToolsSlot.options.id === "team-link-session-tools" && sessionToolsSlot.options.order === 0 && sessionToolsSlot.options.order > -10);
 	check("U12: ... in this plugin's locale namespace (that is where its t comes from)", sessionToolsSlot.options.locale === "dsh-team-link");
 	check("U12: ... and the slot/id/order/limit are the literals the design names (the testing surface IS the registration's own literal)", t9.SESSION_TOOLS_SLOT === "sidebar.footer.action" && t9.SESSION_TOOLS_ID === "team-link-session-tools" && t9.SESSION_TOOLS_ORDER === 0 && t9.SESSION_TOOLS_LIMIT === 50);
 	check("U12: the gap rule names every service §4.3.5 requires — nothing present means all three are reported, everything present means none", JSON.stringify(pure("sessionToolsGaps")(undefined, primitivesStub)) === JSON.stringify(["sessions", "workspaces", "uiWorkspace"]) && JSON.stringify(pure("sessionToolsGaps")(scene(popularList, NO_WORKSPACES), primitivesStub)) === "[]");

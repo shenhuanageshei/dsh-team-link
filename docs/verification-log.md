@@ -533,3 +533,28 @@ content-disposition: attachment; filename="d38e2c6f-8c20-4e5f-a623-d51ce0ee0d3a.
 **结论（如实报告，不粉饰）**：三条请求里 **`/` 与 `/open-in-app/apps` 与内置路由同判 401/403，而本插件路由在跨站标记下仍返回 200 + 整份会话数据** ——即**运行中的 3080 进程仍是修复前的宿主半边**。这与 0.3.9 的发布状态行一致（**①② 属宿主半边，需 DSH 重启才在真机生效**），也解释了为什么本轮的绿相在本机不可得：**真机点 1 的红相实测留证完成，绿相需要在一次 DSH 重启窗口里复跑同六条**（预期：本插件路由与 `/open-in-app/apps` 同判 401/403，且 `sessionQuery.readSession` 不再被调用）。本轮**刻意不重启**（重启会拆掉运行中的会话代理，属父侧操作）。
 
 **真机复验点 3**（侧栏入口的收起态 / 标题栏收起态两态渲染）：需要驱动浏览器并在 3080 页面上切侧栏形态，本轮无法执行（无浏览器驱动面）——与批次 3 同口径**留给父侧**，不把未验的说成已验。
+
+## 批次 4 · H 真机复验点 1 · 绿相（重启后）（2026-09-21）
+
+**方法**：`curl.exe`（Windows 自带），对 **DSH 重启后**的 `http://127.0.0.1:3080` 逐条重放；每条跑两种 Host 形态（`127.0.0.1` / `evil.example:3080`），**除末行外每一条都带跨站标记**（`-H "Origin: http://evil.example" -H "Sec-Fetch-Site: cross-site"`）。会话 id 上，一条用不存在的 `bogus-id`，另一条取 `team_link_list_sessions` 读出的**真实会话 id**。**读数时间**：2026-09-21（重启后由架构师复跑）。本节是上文「### H 真机复验点 1」小节的**后半**——那一节记的是**同一次复验在重启前的红相**（本插件路由仍 200 + 5,479,970 B），本节是重启后的绿相。
+
+原始读数（逐字）：
+
+```
+GET /                        Host 127.0.0.1        -> 401 (68 B)
+GET /                        Host evil.example:3080-> 401 (68 B)
+GET /open-in-app/apps        Host 127.0.0.1        -> 403 (0 B)
+GET /open-in-app/apps        Host evil.example:3080-> 403 (0 B)
+GET /team-link/export?session=bogus-id  Host 127.0.0.1        -> 403 (9 B, body forbidden)
+GET /team-link/export?session=bogus-id  Host evil.example:3080-> 403 (9 B, body forbidden)
+GET /team-link/export?session=<真实 id> Host 127.0.0.1        -> 403 (9 B, body forbidden)
+GET /team-link/export?session=<真实 id> Host evil.example:3080-> 403 (9 B, body forbidden)
+同源无 token（不加跨站标记）                                 -> 401
+```
+
+**判定**：**真实 id 与 bogus id 同判 403** ⇒ 拒绝发生在任何 `readSession` 之前；**403 = Host/Origin 栅栏、401 = 浏览器鉴权**，与设计 §4.1 的两段语义逐字相符。表体的大小也自洽：9 B / 12 B 分别就是官方 `client-connection` 的 RPC 通道写的 `forbidden` / `unauthorized` 两个词——**同源无 token** 那一行走的正是「栅栏放行 → 鉴权拦下」（401 `unauthorized`），而不是栅栏拒绝。
+
+**复跑核对（eng_coder，2026-09-21 21:37，同一读法）**：上表九行**逐字重现**（含 68 B / 0 B / 9 B 的表体大小、`forbidden` 体文，以及末行的 401）；真实 id 另用 `8fff041d-5c31-4d68-a09f-118c25fd1bf7` 与 `4a95884d-97cb-446a-b512-41ecdf315ff7`（`team_link_list_sessions` 读出）各跑一次，与 `bogus-id` **同判 403（9 B）**。
+
+**仍未闭合的两半（如实记，不粉饰）**：① 该点自身的正路径「**同源带 cookie（已登录浏览器）→ 200 全量**」仍**无读数**（需一次已登录浏览器的下载复验）；② **真机复验点 3** 的收起态 / 标题栏收起态两态仍未在真机核对（无浏览器驱动面，与批次 3、批次 4 同口径留给父侧）。
+
