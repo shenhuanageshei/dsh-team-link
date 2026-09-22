@@ -5,7 +5,7 @@
 > 原名 `dsh-session-link-pro`（0.2.4 及之前），**GitHub 仓库已于 2026-09-18 改名为 `dsh-team-link`**（旧地址由 GitHub 自动重定向）。历史会话日志里的旧工具名 `session_link_pro_*` 与消息 id 前缀 `slp-` 保持原样——它们是取证链，不做回写。
 
 [![tests](https://img.shields.io/badge/tests-995%20%2B%20269%20assertions-brightgreen)](#十测试)
-[![version](https://img.shields.io/badge/version-0.3.8-blue)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.3.10-blue)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
 Fork 自 [PwnKY/dsh-session-link](https://github.com/PwnKY/dsh-session-link)——深链复制、`/s/<id>` 打开器与深链上下文注入保留自上游；本仓库在其上长出了完整的多会话协作层。
@@ -891,7 +891,7 @@ node client-half.test.mjs   # 浏览器半边：卡片渲染 / 降级路径 / �
 
 完整变更史见 **[CHANGELOG.md](CHANGELOG.md)**——0.3.1 → 0.3.10（未发布） 逐版条目，每版按「修了什么 → 为什么 → 怎么验证」组织，行为修复都附**变异验证**证据（修复前必红 / 修复后全绿）。
 
-**最近一次发布：0.3.8（2026-09-20）**——发送方可见性（A/D 卡片）· `/team_session` 自动建队 · 自动换届交接（`successor:"auto"` + 交接文档契约）与团队恢复工具 `team_link_recover`，外加真机验证暴露的一批缺陷修复（DEFECT-1…5）。**逐轮红相/绿相读数**见 [`docs/verification-log.md`](docs/verification-log.md)。
+**最近一次发布：0.3.10（2026-09-22，发布时一次性收口 0.3.9 ＋ 0.3.10）**——**加固与恢复**（导出路由接入平台信任栅栏 · 恢复能力加宽 · 侧栏「会话工具」入口 · 深链聚焦修复）· **§10.2.8 `/team_session` 三条真机缺陷修订**（输入文法 · 结果可见性 · 确认框边界）· **§10.2.8.9 / §10.2.8.10 四项裁定**（默认团队名带日期 · 现任失联则释放并认领 · 调用方回执通道 4 · 无任务也投最小唤醒）。**逐轮红相/绿相读数与真机取证**见 [`docs/verification-log.md`](docs/verification-log.md)。**逐轮红相/绿相读数**见 [`docs/verification-log.md`](docs/verification-log.md)。
 ---
 
 ## Credits
