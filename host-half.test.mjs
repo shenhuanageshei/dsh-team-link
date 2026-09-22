@@ -5197,7 +5197,10 @@ check("U33 id 形状在场（§10.2.8.4 (b)「只给 id 形状 ＋ 计数」）:
 
 // 长 cwd / 长团队名：可变字段仍可能顶破，所以**逐字段封顶**是必需品，不是防御性代码。这两条读的是
 // **字段级**裁剪留下的省略号（`dialogField` 的「…」＝「截断必须标注」这条本仓既有规矩，与 U13/U14
-// 同源）。2026-09-22 裁定 A 之后框里没有可裁的**段**（唯一的自述段整段移出了框体）⇒ 这两条不再断言
+// 同源）。**`team` 封顶由 20 提到 32**（2026-09-22 裁定：带日期的默认团队名 29 码点必须完整显示，
+// 见设计档 §10.2.8.9 ①）—— `dialogField` 的封顶**含省略号**（`slice(0, limit - 1) + "…"`），
+// 所以 39 字的团队名截成 **31 字 ＋ 「…」＝ 32 码点**，下面这条按**新封顶**逐字量。
+// 2026-09-22 裁定 A 之后框里没有可裁的**段**（唯一的自述段整段移出了框体）⇒ 这两条不再断言
 // 「段落级标注在场」（那件事现在由**没有标注**这件事实承载，见本节末的 U33c 组），字段级封顶的
 // 判据面一字未撤。
 const u33CwdEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
@@ -5217,7 +5220,11 @@ const u33Team = askedQuestion(u33TeamEnv);
 // 理由见 u33AnnotationLines 的注释）。
 check("U33 长团队名字段封顶: 39 字的团队名被截且留下省略号，两个预算不破，且交付串里没有段落级标注（裁定 A 之后没有可裁的段）也不含那句自证矛盾的「已裁剪至 …」"
 	+ (typeof u33Team?.detail === "string" && u33AnnotationLines(u33Team.detail).length === 0 && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Team?.detail), nl: newlinesOf(u33Team?.detail), annotationLines: u33AnnotationLines(u33Team?.detail), contradictory: typeof u33Team?.detail === "string" && u33Team.detail.includes("已裁剪至") }) + "）"),
-	typeof u33Team?.detail === "string" && u33Team.detail.includes("ttttttttttttttttttt…") && !u33Team.detail.includes("t".repeat(25)) && u33AnnotationLines(u33Team.detail).length === 0 && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 && codePointsOf(u33Team.question) <= 120 && newlinesOf(u33Team.question) === 0);
+	(() => {
+		const detail = u33Team?.detail;
+		const ok = typeof detail === "string" && detail.includes("t".repeat(31) + "…") && !detail.includes("t".repeat(32)) && u33AnnotationLines(detail).length === 0 && !detail.includes("已裁剪至") && codePointsOf(detail) <= 600 && newlinesOf(detail) <= 12 && codePointsOf(u33Team?.question) <= 120 && newlinesOf(u33Team?.question) === 0;
+		return ok || (console.log(`     实测读数 ${show({ teamLine: typeof detail === "string" ? (detail.split("\n").find((line) => line.includes("登记进团队")) ?? "") : null, tRuns: typeof detail === "string" ? (detail.match(/t{2,}/gu) ?? []).map((run) => run.length) : null })}`), false);
+	})());
 // §10.2.8.4 (b) 的逐字段封顶必须覆盖**用户可任意长的取值**：`model=` / `provider=` 由命令行给出，
 // 解析器只定形状（`TEAM_SESSION_MODEL_RE`）不定长度 ⇒ 修前它们**原样内插**进模型行，单这一句
 // 就能顶破 600 码点（而 per-field caps 存在的理由正是「**常规与已验证的极端**装得下」—— 不是
@@ -5280,24 +5287,33 @@ check("U33 必备披露逐件点名（数量 / 模型 / cwd / 成本 / 信任授
 // 放回（+8 码点 —— 它是成本口径的一部分），于是上界由 **350 放宽到 380**：这是一次**有代价的放宽**，
 // 换的是**一条必备事实的回归**（不是「本来就 380」，也不是为了迁就某个读数而放宽）。两个参照
 // （12 码点 **353** / 28 码点 **369**）都在 380 内，且把一处解释性文字加回的变异读数 **387 > 380**
-// 仍红 ⇒ 码点侧照样咬得住（见交付报告的变异验证）。
+// 仍红 ⇒ 码点侧照样咬得住（见交付报告的变异验证）。**封顶 20 ⇒ 32（设计档 §10.2.8.4 (b) 2026-09-22
+// 用户裁定：带日期默认名 29 码点须完整显示）之后，两个参照读数由 353 / 369 变为 362 / 378，仍都在 380 内**
+// （380 判据本身一字未动）。
 // **夹具**：输入 `/team_session 你是新的主管会话` ＋ **12 码点**协调者 id（`session-self`，下面钉住）
 // ＋ 工作区目录名 `dsh-session-link-pro`（真机 cwd 与它同长 —— cwd 字段封顶 24 码点，**长度**逐字相同，
 // 只是可见前缀不同；这里用仓内临时目录，避免把仓外的绝对路径写进测试）。
 const U33C_WS = path.join(TEAM_TMP, "dsh-session-link-pro");
 const u33cEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: U33C_WS });
+// §10.2.8.9 ①：默认名 = `<basename>-YYYYMMDD` ⇒ 这具**注入「当天」**（与 U35 同一条缝、同一纪律：
+// 不靠墙钟），期望逐字就是带日期的默认名。U33c 在 U35 的注入助手之前声明，所以这里直接经守卫取缝。
+const U33C_DAY = new Date(2026, 8, 22, 12, 0, 0, 0).getTime();
+const U33C_DEFAULT_TEAM = "dsh-session-link-pro-20260922";
+if (typeof __testing.teamSessionInjectNow === "function") __testing.teamSessionInjectNow(U33C_DAY);
 const u33cOut = await u33cEnv.run("你是新的主管会话");
+if (typeof __testing.teamSessionInjectNow === "function") __testing.teamSessionInjectNow(undefined);
 const u33c = askedQuestion(u33cEnv);
 const u33cCp = codePointsOf(u33c?.detail);
 const u33cLines = newlinesOf(u33c?.detail) + 1;
-check(`U33c 参照夹具（/team_session 你是新的主管会话 ＋ 12 码点协调者 id）: 交付 detail **≤ 6 行且 ≤ 380 码点**（判据由 350 放宽 —— 放回「按各自模型计费」这条必备事实，理由见上），团队仍取工作区目录名、正文仍是那 8 个字、成本口径那半句仍在（实测 ${u33cCp} 码点 / ${u33cLines} 行；改前 569 / 10）`
-	+ (u33cCp <= 380 && newlinesOf(u33c?.detail) <= 5 ? "" : "（实测：" + show({ cp: u33cCp, lines: u33cLines, detail: u33c?.detail }) + "）"),
-	codePointsOf(u33cEnv.senderAgent.id) === 12 && typeof u33c?.detail === "string" && u33cCp <= 380 && newlinesOf(u33c.detail) <= 5
-		&& u33c.detail.startsWith("将创建 1 个 worker 根会话并登记进团队 dsh-session-link-pro") && u33c.detail.includes("）：worker-1。")
-		&& u33c.detail.includes("- 启动任务：共 8 字：你是新的主管会话")
-		&& u33c.detail.includes("至少一个完整回合（followup 驱动一次，按各自模型计费）")
-		&& newlinesOf(u33c.question) === 0 && codePointsOf(u33c.question) <= 120
-		&& u33cOut.text.includes("零创建、零 pairs"));
+const u33cOk = codePointsOf(u33cEnv.senderAgent.id) === 12 && typeof u33c?.detail === "string" && u33cCp <= 380 && newlinesOf(u33c.detail) <= 5
+	&& u33c.detail.startsWith("将创建 1 个 worker 根会话并登记进团队 " + U33C_DEFAULT_TEAM) && u33c.detail.includes("）：worker-1。")
+	&& u33c.detail.includes("- 启动任务：共 8 字：你是新的主管会话")
+	&& u33c.detail.includes("至少一个完整回合（followup 驱动一次，按各自模型计费）")
+	&& newlinesOf(u33c.question) === 0 && codePointsOf(u33c.question) <= 120
+	&& u33cOut.text.includes("零创建、零 pairs");
+check(`U33c 参照夹具（/team_session 你是新的主管会话 ＋ 12 码点协调者 id）: 交付 detail **≤ 6 行且 ≤ 380 码点**（判据由 350 放宽 —— 放回「按各自模型计费」这条必备事实，理由见上），团队取工作区目录名＋当天日期（§10.2.8.9 ①，注入当天 ⇒ 逐字 ${U33C_DEFAULT_TEAM}，封顶 32 保证它完整显示）、正文仍是那 8 个字、成本口径那半句仍在（实测 ${u33cCp} 码点 / ${u33cLines} 行；改前 569 / 10）`
+	+ (u33cOk ? "" : "（实测：" + show({ cp: u33cCp, lines: u33cLines, detail: u33c?.detail, question: u33c?.question, out: u33cOut.text }) + "）"),
+	u33cOk);
 // 裁定 A 的**删除面**逐条点名（与上一条的「保留面」互为对照）：用户点名的几类废话与整段自述段在框里
 // **一处都不剩**，而正文那 8 个字仍逐字在「- 启动任务：」那一行上（「只去废话」而不是「去字」）。
 const u33cRemoved = [
@@ -5394,10 +5410,54 @@ check("U33 (iii) 机制一的成因可读: 该夹具的 8 个角色里 3 个**�
 const U30_BODY = "帮我做 X：同窗 N=3）。pid=384448 与 word= 逐字保留；收尾 a b c。";
 const u30Parsed = readTeamSessionCommand(U30_BODY);
 check("U30 文法: /team_session 后面直接写正文即成立 —— roles 为空、正文整段进 task（这就是方案 A 的核心语义：正文 = 启动任务，与 task= 同一个槽）", u30Parsed.error === undefined && u30Parsed.value.roles === undefined && u30Parsed.value.n === undefined && u30Parsed.value.team === undefined && u30Parsed.value.task === U30_BODY && u30Parsed.value.bare.length === 0);
+// §10.2.8.9 ①（U35）：默认名带日期。夹具**注入「当天」**（teamSessionInjectNow 缝 / 显式 now），
+// 不靠墙钟；缝在旧实现上不存在 ⇒ 经守卫取用，缺缝时断言自己红、不把套件打崩（Y7 纪律）。
+const u35InjectNow = (now) => { if (typeof __testing.teamSessionInjectNow === "function") __testing.teamSessionInjectNow(now); };
+/** 本地时区某天正午的时间戳 —— 注入用的「当天」。 */
+const u35Noon = (year, month, day) => new Date(year, month - 1, day, 12, 0, 0, 0).getTime();
+const U35_DAY1 = u35Noon(2026, 9, 22);
+const U35_DAY2 = u35Noon(2026, 9, 23);
+const U35_STAMP1 = "20260922";
+const U35_STAMP2 = "20260923";
+const U30_DEFAULT_TEAM = path.basename(TEAM_WS) + "-" + U35_STAMP1;
 const u30Env = teamSessionEnv({ askScript: ["创建"] });
+u35InjectNow(U35_DAY1);
 const u30Out = await u30Env.run(U30_BODY);
-check("U30 默认值: 裸正文那条行建出**恰 1 个** worker-1，team 取调用会话工作区目录名（basename(cwd)）、n 省略即 1", u30Out.kind === "success" && u30Env.creates.length === 1 && u30Env.creates[0].sessionId.startsWith("team-link-" + path.basename(TEAM_WS) + "-worker-1-") && u30Env.store().length === 1 && u30Env.store()[0].name === path.basename(TEAM_WS) && u30Env.store()[0].roles.map((entry) => entry.role).sort().join(",") === "coordinator,worker-1");
-check("U30 默认值: 目录名不合 [a-z0-9-]+ 时回退 default —— 用户没有**敲**这个值，所以不为一个目录名拒绝整条命令（而它是 team 缺省值的唯一可能失败处）", typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(path.join(TEAM_TMP, "工作 区")) === "default" && __testing.teamSessionDefaultTeam(TEAM_WS) === path.basename(TEAM_WS) && __testing.teamSessionDefaultTeam("relative/dir") === "dir");
+u35InjectNow(undefined);
+check("U30 默认值: 裸正文那条行建出**恰 1 个** worker-1，team 取调用会话工作区目录名＋当天日期（§10.2.8.9 ①：<basename>-YYYYMMDD，注入的「当天」）、n 省略即 1", u30Out.kind === "success" && u30Env.creates.length === 1 && u30Env.creates[0].sessionId.startsWith("team-link-" + U30_DEFAULT_TEAM + "-worker-1-") && u30Env.store().length === 1 && u30Env.store()[0].name === U30_DEFAULT_TEAM && u30Env.store()[0].roles.map((entry) => entry.role).sort().join(",") === "coordinator,worker-1");
+check("U30 默认值: 目录名不合 [a-z0-9-]+ 时回退 default-<日期> —— 用户没有**敲**这个值，所以不为一个目录名拒绝整条命令（而它是 team 缺省值的唯一可能失败处；三支都注入「当天」，不靠墙钟）", typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(path.join(TEAM_TMP, "工作 区"), U35_DAY1) === "default-" + U35_STAMP1 && __testing.teamSessionDefaultTeam(TEAM_WS, U35_DAY1) === U30_DEFAULT_TEAM && __testing.teamSessionDefaultTeam("relative/dir", U35_DAY1) === "dir-" + U35_STAMP1);
+
+// --- U35 默认团队名带日期（§10.2.8.9 ①）---------------------------------------
+check("U35 格式: team 省略 ⇒ <basename(cwd)>-YYYYMMDD（注入「当天」= 本地时区 2026-09-22 ⇒ 尾巴恰是 20260922），非法目录名 ⇒ default-YYYYMMDD —— 两支的**日期逐字同一**、整串还合团队名字法 [a-z0-9-]+（日期就是当天，不是别的什么）", typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(TEAM_WS, U35_DAY1) === path.basename(TEAM_WS) + "-" + U35_STAMP1 && __testing.teamSessionDefaultTeam(path.join(TEAM_TMP, "工作 区"), U35_DAY1) === "default-" + U35_STAMP1 && /^[a-z0-9-]+-\d{8}$/u.test(__testing.teamSessionDefaultTeam(TEAM_WS, U35_DAY1)) && /^[a-z0-9-]+-\d{8}$/u.test(__testing.teamSessionDefaultTeam(path.join(TEAM_TMP, "工作 区"), U35_DAY1)));
+check("U35 同日幂等（纯函数，注入「当天」不靠墙钟）: 同一本地日内两个相距 23:59:59 的时刻 ⇒ **逐字同一**默认名（同一天怎么发都是同一个团队）；跨过午夜 00:00:00 ⇒ 名字变（自然成新团队）", typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(TEAM_WS, new Date(2026, 8, 22, 0, 0, 0, 0).getTime()) === __testing.teamSessionDefaultTeam(TEAM_WS, new Date(2026, 8, 22, 23, 59, 59, 999).getTime()) && __testing.teamSessionDefaultTeam(TEAM_WS, new Date(2026, 8, 23, 0, 0, 0, 0).getTime()) !== __testing.teamSessionDefaultTeam(TEAM_WS, new Date(2026, 8, 22, 23, 59, 59, 999).getTime()));
+// 命令级三连：同日两条 ⇒ 同一团队且第二条零创建（§10.2.6 幂等一字不动）；注入次日 ⇒ 新团队。
+const u35Env = teamSessionEnv({ askScript: ["创建", "创建"] });
+u35InjectNow(U35_DAY1);
+const u35Day1First = await u35Env.run("同日第一条：默认名要带日期");
+const u35Day1Second = await u35Env.run("同日第二条：还该指向同一个团队");
+// 这条必须**在注入次日之前**读 store/creates/requests：它断言的是「同日两条之后」那一刻的状态
+// （§10.2.6 命令级幂等），放在跨日那条之后读就会看见跨日命令新建的第二个团队 —— 夹具读态的时点错位，
+// 不是被测行为的红。
+check("U35 同日幂等（命令级，注入「当天」）: 同日两条同参命令 ⇒ store 里**恰一个**团队 <basename>-20260922、第二条零创建零对话框（默认名带日期之后 §10.2.6 的幂等一字未动）"
+	+ (u35Day1First.kind === "success" && u35Day1Second.kind === "success" && u35Day1Second.text.includes("无需创建") && u35Env.uq.requests.length === 1 && u35Env.store().length === 1 && u35Env.store()[0].name === U30_DEFAULT_TEAM && u35Env.creates.length === 1 ? "" : "（实测：" + show({ firstKind: u35Day1First.kind, secondKind: u35Day1Second.kind, secondText: u35Day1Second.text, requests: u35Env.uq.requests.length, store: u35Env.store().map((row) => row.name), creates: u35Env.creates.length }) + "）"),
+	u35Day1First.kind === "success" && u35Day1Second.kind === "success" && u35Day1Second.text.includes("无需创建") && u35Env.uq.requests.length === 1 && u35Env.store().length === 1 && u35Env.store()[0].name === U30_DEFAULT_TEAM && u35Env.creates.length === 1);
+u35InjectNow(U35_DAY2);
+const u35Day2 = await u35Env.run("跨日再发同一行：这是新团队");
+u35InjectNow(undefined);
+check("U35 跨日 ⇒ 新团队（命令级，注入「当天」= 2026-09-23）: 同一条行解析到 <basename>-20260923、store 变成**两个**团队，而第一天那行原样还在 —— 跨日不是「换名覆盖」，是自然另起一队", u35Day2.kind === "success" && u35Env.store().length === 2 && u35Env.store().map((row) => row.name).join(",") === U30_DEFAULT_TEAM + "," + path.basename(TEAM_WS) + "-" + U35_STAMP2 && u35Env.creates.length === 2);
+// 孤立后果（§10.2.8.9 ①，审计 #3，必须显式声明）：无日期的既有团队仍有效，但默认名永不再解析到它、无迁移。
+const u35LegacyEnv = teamSessionEnv({
+	askScript: ["创建"],
+	teams: [teamRow({ name: path.basename(TEAM_WS), current: "session-other", roles: [
+		{ role: "coordinator", current: "session-other", pending: null, history: [{ session: "session-other", from: 1_700_000_000_000, until: null }] },
+	] })],
+});
+u35InjectNow(U35_DAY1);
+const u35LegacyOut = await u35LegacyEnv.run("默认名不再落到无日期的旧团队上");
+u35InjectNow(undefined);
+check("U35 孤立后果声明: 无日期的既有团队（<basename>）**仍完全有效但无迁移** —— 默认名（<basename>-20260922）不再解析到它：同 cwd 的命令建出**第二个**团队，旧那行的现任与角色一字未动（默认名永不再指向它们）"
+	+ (typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(TEAM_WS, U35_DAY1) !== path.basename(TEAM_WS) && u35LegacyOut.kind === "success" && u35LegacyEnv.store().length === 2 && u35LegacyEnv.store()[1].name === U30_DEFAULT_TEAM && u35LegacyEnv.store()[0].name === path.basename(TEAM_WS) && u35LegacyEnv.store()[0].roles[0]?.current === "session-other" && u35LegacyEnv.store()[0].roles.length === 1 && u35LegacyEnv.store()[0].roles[0].role === "coordinator" && u35LegacyEnv.store()[0].roles[0].current === "session-other" ? "" : "（实测：" + show({ kind: u35LegacyOut.kind, text: u35LegacyOut.text, store: u35LegacyEnv.store() }) + "）"),
+	typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(TEAM_WS, U35_DAY1) !== path.basename(TEAM_WS) && u35LegacyOut.kind === "success" && u35LegacyEnv.store().length === 2 && u35LegacyEnv.store()[1].name === U30_DEFAULT_TEAM && u35LegacyEnv.store()[0].name === path.basename(TEAM_WS) && u35LegacyEnv.store()[0].roles[0]?.current === "session-other" && u35LegacyEnv.store()[0].roles.length === 1 && u35LegacyEnv.store()[0].roles[0].role === "coordinator" && u35LegacyEnv.store()[0].roles[0].current === "session-other");
 check("U30b 正文逐字保留（§10.2.8.1 的病灶本身）: 正文里的 N=3）。/ pid=384448 / word= 一个都不许被当参数 —— 旧实现在**整条输入**上做 token 扫描，把「同窗 N=3）。」读成 n=3）。并在参数校验阶段就拒掉整条命令", u30Parsed.error === undefined && u30Parsed.value.task.includes("N=3）。") && u30Parsed.value.task.includes("pid=384448") && u30Parsed.value.task.includes("word=") && u30Parsed.value.n === undefined && u30Parsed.value.team === undefined && u30Parsed.value.model === undefined);
 check("U30b 正文送达逐字一致: worker 收到的 kickoff 文本里，正文与人类敲的**逐字一致**（零改写、零截断、零转义）", u30Env.created.length === 1 && u30Env.created[0].calls.followedup.length === 1 && u30Env.created[0].calls.followedup[0].content[0].text.includes("- 任务：" + U30_BODY));
 check("U30b 正文送达逐字一致: 确认框交出去的正文是**同一段**（截断只发生在预览上，且标注了完整正文仍会原样投递）", typeof askedQuestion(u30Env)?.detail === "string" && askedQuestion(u30Env).detail.includes("- 启动任务：共 " + [...U30_BODY].length + " 字，此处仅显示前 " + __testing.TEAM_SESSION_DIALOG_TASK_CHARS + " 字") && askedQuestion(u30Env).detail.includes("完整正文会原样作为启动任务投递") && askedQuestion(u30Env).question.includes("确认创建 1 个 worker 会话"));
