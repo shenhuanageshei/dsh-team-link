@@ -1059,7 +1059,7 @@ cd $d; node host-half.test.mjs; node client-half.test.mjs
 
 **旧实现** = 本批改动前的 `348385a:lib/index.js`（含 §10.2.8 与裁定 A 的全部修法、不含本批）；**新测试** = 本树 `host-half.test.mjs`；夹具在 `.test-tmp-r7pre/`（`node_modules` 用 **junction** 指回仓内 —— `Copy-Item -Recurse` 不跟 junction，照抄会得到一棵坏树 `ERR_MODULE_NOT_FOUND: @deepseek-ai/cosmokit`）。
 
-**32 条红，逐条点名**（按套件顺序；★ = 该条在旧实现上**绿**，属**负相**，如实记不算「修复前已红」）：
+**33 条红，逐条点名**（按套件顺序；★ = 该条在旧实现上**绿**，属**负相**，如实记不算「修复前已红」）：
 
 | 组 | 红 | 备注 |
 | --- | --- | --- |
@@ -1119,6 +1119,20 @@ cd $d; node host-half.test.mjs; node client-half.test.mjs
 | 7 | 🔵 | 注入缝 `TEAM_SESSION_NOW_INJECTED` 有泄漏面（一条断言在注入窗口内抛错 ⇒ 墙钟被钉死、红相骗人） | **Fixed**：测试侧新增 `withInjectedNow(now, fn)`（**try/finally 还原**）并全部改用，删掉手动 inject/uninject 的助手 |
 
 **处置后的全部读数（重测，不是复用旧数）**：绿相 `994 (failed: 0)` / `269 (failed: 0)` · 红相 `994 (failed: 33)` · 变异 **A** `994 (failed: 1)`（只红 U37 (乙)）· **B** `994 (failed: 2)`（U37 变异基线 2 ＋ 那条**既有计时器偶发红**）· **C** `994 (failed: 1)`（只红 TOCTOU 那条）。**评审 round-2** 针对处置后的修订重跑，见下节。
+
+### 评审 round-2（`advisor-dsh-22`，路由 deepseek-official:deepseek-flash）与处置
+
+**VERDICT: PASS** —— 上表 **7 条逐条核实为 Fixed**（它逐条引出落点），另提 **2 条新的非阻断 🔵 ＋ 1 条同类残余**：
+
+| # | 级别 | 指出 | 处置 |
+| --- | --- | --- | --- |
+| 3-残余 | 🔵 | 同一字面量在 **`lib/index.js` 的三处注释**里仍写「12 码点」 | **Fixed**：三处一并改 11（其中两处带勘误指针；另几处「12 码点」指的是**协调者 id 长度**，那是对的，未动） |
+| 8 | 🔵 | 修 #1 时**新加的那条断言**绕过了本块自己的 Y7 守卫（直接读 `__testing.TEAM_SESSION_RELEASE_NOTES.archived`） | **Fixed**：改读受守卫别名 `RELEASE_NOTES.archived`，并就地记一句「为什么这里必须走别名」 |
+| 9 | 🔵 | 本节红相引导句仍写「**32 条红**」，而同节标题是 `994 (failed: 33)`、分组和也是 33 | **Fixed**：改 33 |
+
+**关于 round-2 尾部的 `[host-verified] 0/16 citations match current file state` —— 这是校验器的假警报，不是评审编造行号。** 我抽 5 条逐字核对：`lib/index.js:4908`（当时那行 `12-code-point` 注释）· `:6089` `emptyBatchNote` · `:6152` `receipt.reason` · `host-half.test.mjs:5392`（U33c 参照 B/E 标签）· `:5331`/`:5334`（`withInjectedNow` 的 seam 与 `try/finally`）—— **全部逐字对上**。成因应是校验器把评审给出的**裸相对路径**（`lib/index.js`）按**会话工作区**解析（那里没有 `lib/`），找不到文件 ⇒ 0/16。**记此以免后人把这条警报读成「评审引文不可信」。**
+
+**round-3**（只验上表 3 行，不猎新问题）见本文件末尾的续记（如有）。处置后读数：绿相 `994 (failed: 0)`。
 
 6. **`README.md` 的两处计数已同批更新**（徽章 `966 → 994`、「当前读数」`966 → 994`）—— 本仓「计数与列表同改」：本批**新增了 23 条断言**，因此这两处**必须**动（与上一批「没有变化 ⇒ 没有编辑」相对）。另在「十、测试」下加了一段**用法变化**（空会话里发命令会有回执把会话显出来 ＋ 代价）。
 

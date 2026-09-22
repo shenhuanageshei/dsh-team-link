@@ -5754,7 +5754,9 @@ const relEmptyReceipt = receiptTextOr(relEmptyEnv);
 check("U36 空批角: 现任已确证失联、但本次**没有任何要建/登记的角色** ⇒ 仍然**零写入**（未释放未认领、roster 一字未动、pairs 零条），而**命令输出与回执都必须说出这件事**（不许静默丢弃：那会被读成「接管完成」）"
 	+ (typeof relEmptyOut.text === "string" && relEmptyOut.text.includes("未释放、未认领") && typeof relEmptyReceipt === "string" ? "" : probe("U36 空批角", { out: relEmptyOut.text, receipt: relEmptyReceipt })),
 	relEmptyOut.kind === "success" && relEmptyEnv.uq.requests.length === 0 && relEmptyEnv.creates.length === 0 && relEmptyEnv.pairs().length === 0 && coordOf(relEmptyEnv).current === GONE_COORD && relEmptyEnv.store()[0].roles.length === 1
-	&& relEmptyOut.text.includes("未释放、未认领") && relEmptyOut.text.includes(__testing.TEAM_SESSION_RELEASE_NOTES.archived) && relEmptyOut.text.includes("新角色")
+	// 走**受守卫的别名**（本块自己声明的纪律：先取值再判类型）—— 直接读 __testing.… 在本块里
+	// 是一处漏网的同类问题（评审 round-2 🔵#8）。
+	&& relEmptyOut.text.includes("未释放、未认领") && relEmptyOut.text.includes(RELEASE_NOTES.archived) && relEmptyOut.text.includes("新角色")
 	&& typeof relEmptyReceipt === "string" && relEmptyReceipt.includes("未释放未认领") && codePointsOf(relEmptyReceipt) <= RECEIPT_MAX);
 
 // --- 变异基线（每条都是「把这一行改坏 ⇒ 这一条当场变红」）------------------------
