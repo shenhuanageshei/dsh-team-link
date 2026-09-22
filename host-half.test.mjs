@@ -5145,13 +5145,19 @@ const U33_LONG_TEAM = "t".repeat(39);
 const u33CropTiers = Array.isArray(__testing.TEAM_SESSION_DIALOG_CROP_NOTE_TIERS) ? __testing.TEAM_SESSION_DIALOG_CROP_NOTE_TIERS : [];
 const u33FullNote = (dropped) => (typeof at(u33CropTiers, 0) === "function" ? u33CropTiers[0](dropped) : `（已省略 ${dropped} 段自述；必备披露一字未少。）`);
 const u33MinimalNote = (dropped) => (typeof at(u33CropTiers, 1) === "function" ? u33CropTiers[1](dropped) : `（已省略 ${dropped} 段自述）`);
-/** 交付串里那句标注（若真有）永远是**被追加的最后一行** ⇒ 按**行**剥离就能把「必备 body」与「标注」
- * 分开量，不必逐字匹配某一档的措辞。同一个助手对**新旧两棵树都成立**：裁定 A 之后这条剥离是
- * **恒等**（没有可裁段 ⇒ 没有标注行），而它在旧树上照旧剥得掉 —— U33 (i)/(ii)/(iii) 三条因此都写成
- * 「交付 `detail` 逐字等于必备 body」，在两棵树上都能给出**有意义的红相**（旧树：body ＋ 标注 ≠ body）。 */
-const u33CropNoteLine = /\n（已[^\n]*）$/u;
-const u33RequiredBodyOf = (detail) => String(detail ?? "").replace(u33CropNoteLine, "");
-const u33HasCropNote = (detail) => typeof detail === "string" && u33RequiredBodyOf(detail) !== detail;
+/** 段落级标注的**形状**：两档模板都以「（已省略」开头、以「）」结尾，且**独占一行**
+ * （`TEAM_SESSION_DIALOG_CROP_NOTE_TIERS` / `teamSessionDialogCropNote` 的产物）。裁定 A 之后框里
+ * **没有可裁段**（唯一的 `required: false` 段「会话标题」整段移出了框体）⇒ 交付串里本就不该有这形状的
+ * 任何一行，U33 (i)/(ii)/(iii) 三条因此都**正面**量这件事。
+ *
+ * 2026-09-22 偏差修复轮（独立发散审计 DIVERGENCE #5）：这里原是
+ * `u33RequiredBodyOf(detail) === detail` / `!u33HasCropNote(detail)` 这一对 —— 右边是从 `detail`
+ * **自己算出来**的（剥掉一个当前永不匹配的正则），所以它在**结构上恒真**，却被注释说成防「假绿」的
+ * 守卫 —— 那是把「反正没断言」包装成断言。现在改成对**交付串本身**的正面判定：真有一行标注出现，
+ * `u33AnnotationLines` 就非空，断言当场变红（本轮变异验证：把标注人为塞回 ⇒ 这三条红）。 */
+const u33CropNoteShape = /^（已省略 [^\n]*）$/u;
+/** 交付串里**落进标注形状的那些行** —— 空数组 = 框内没有任何段落级标注。 */
+const u33AnnotationLines = (detail) => (typeof detail === "string" ? detail.split("\n").filter((line) => u33CropNoteShape.test(line)) : []);
 
 // --- U33 换槽位（§10.2.8.4 修法表第 0 行，首要、结构性）-----------------------
 // 壳把 question 渲进**无高度钳制、且在滚动容器之外**的 <header><h2>，而 detail 在
@@ -5206,11 +5212,12 @@ const u33Team = askedQuestion(u33TeamEnv);
 // 2026-09-22 会诊 #68 批（U33 口径定档）**＋ 同日裁定 A**：旧文案「已裁剪至 600 码点 / 12 行上限」
 // 在交付串恰好超线时**自证矛盾**，两档新文案都不再写它；而裁定 A 移走了框里唯一的可裁段 ⇒ 现在
 // **任何**交付串都不带段落级标注。本条按**现在真正的交付形状**写：团队名照旧被封顶（省略号在场）、
-// 两个预算照旧都断言、不含那句自证矛盾的话，且**没有**段落级标注（那件事由 U33c 的「逐字交付」
-// 一条钉住）。
+// 两个预算照旧都断言、不含那句自证矛盾的话，且**没有**段落级标注（正面断言：标注形状的行数为 0 ——
+// 那正是「没有可裁段」的直接后果；偏差修复轮把这条从「绕一层判是否有标注」改成直读交付串本身，
+// 理由见 u33AnnotationLines 的注释）。
 check("U33 长团队名字段封顶: 39 字的团队名被截且留下省略号，两个预算不破，且交付串里没有段落级标注（裁定 A 之后没有可裁的段）也不含那句自证矛盾的「已裁剪至 …」"
-	+ (typeof u33Team?.detail === "string" && !u33HasCropNote(u33Team.detail) && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Team?.detail), nl: newlinesOf(u33Team?.detail), note: u33HasCropNote(u33Team?.detail), contradictory: typeof u33Team?.detail === "string" && u33Team.detail.includes("已裁剪至") }) + "）"),
-	typeof u33Team?.detail === "string" && u33Team.detail.includes("ttttttttttttttttttt…") && !u33Team.detail.includes("t".repeat(25)) && !u33HasCropNote(u33Team.detail) && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 && codePointsOf(u33Team.question) <= 120 && newlinesOf(u33Team.question) === 0);
+	+ (typeof u33Team?.detail === "string" && u33AnnotationLines(u33Team.detail).length === 0 && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Team?.detail), nl: newlinesOf(u33Team?.detail), annotationLines: u33AnnotationLines(u33Team?.detail), contradictory: typeof u33Team?.detail === "string" && u33Team.detail.includes("已裁剪至") }) + "）"),
+	typeof u33Team?.detail === "string" && u33Team.detail.includes("ttttttttttttttttttt…") && !u33Team.detail.includes("t".repeat(25)) && u33AnnotationLines(u33Team.detail).length === 0 && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 && codePointsOf(u33Team.question) <= 120 && newlinesOf(u33Team.question) === 0);
 // §10.2.8.4 (b) 的逐字段封顶必须覆盖**用户可任意长的取值**：`model=` / `provider=` 由命令行给出，
 // 解析器只定形状（`TEAM_SESSION_MODEL_RE`）不定长度 ⇒ 修前它们**原样内插**进模型行，单这一句
 // 就能顶破 600 码点（而 per-field caps 存在的理由正是「**常规与已验证的极端**装得下」—— 不是
@@ -5236,8 +5243,8 @@ const u33BothEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
 await u33BothEnv.run("n=8 team=" + U33_LONG_TEAM + " roles=w1,w2,w3,w4,w5,w6,w7,w8 task=" + "y".repeat(500));
 const u33Both = askedQuestion(u33BothEnv);
 check("U33 两者都长（团队名 + cwd + 8 会话 + 长正文）: 两个预算仍然不破，交付串里没有段落级标注（可裁段已整段移出）也不含那句自证矛盾的「已裁剪至 …」"
-	+ (codePointsOf(u33Both?.detail) <= 600 && newlinesOf(u33Both?.detail) <= 12 && !u33HasCropNote(u33Both?.detail) ? "" : "（实测：" + show({ cp: codePointsOf(u33Both?.detail), nl: newlinesOf(u33Both?.detail), note: u33HasCropNote(u33Both?.detail) }) + "）"),
-	typeof u33Both?.detail === "string" && codePointsOf(u33Both.detail) <= 600 && newlinesOf(u33Both.detail) <= 12 && newlinesOf(u33Both.question) === 0 && codePointsOf(u33Both.question) <= 120 && !u33HasCropNote(u33Both.detail) && !u33Both.detail.includes("已裁剪至"));
+	+ (codePointsOf(u33Both?.detail) <= 600 && newlinesOf(u33Both?.detail) <= 12 && u33AnnotationLines(u33Both?.detail).length === 0 ? "" : "（实测：" + show({ cp: codePointsOf(u33Both?.detail), nl: newlinesOf(u33Both?.detail), annotationLines: u33AnnotationLines(u33Both?.detail) }) + "）"),
+	typeof u33Both?.detail === "string" && codePointsOf(u33Both.detail) <= 600 && newlinesOf(u33Both.detail) <= 12 && newlinesOf(u33Both.question) === 0 && codePointsOf(u33Both.question) <= 120 && u33AnnotationLines(u33Both.detail).length === 0 && !u33Both.detail.includes("已裁剪至"));
 
 // 必备披露与「压缩只压自述段」：**逐件点名**（新的断言 ①）。判据不是「正文里有没有东西」，而是
 // §10.2.4 的必备五件（数量 / 模型 / cwd / 成本 / 信任授予）＋ §10.2.8.7 的角色指引 ＋ 确认则（创建 /
@@ -5247,7 +5254,9 @@ const u33Required = [
 	["数量", "将创建 8 个 worker 根会话并登记进团队"],
 	["模型", "- 模型/预设："],
 	["cwd", "cwd："],
-	["成本", "成本：8 个会话 × 至少一个完整回合（followup 驱动一次）"],
+	// 2026-09-22 偏差修复轮：这条**逐字**点名成本口径 —— 有任务支那句的「按各自模型计费」曾被漏删，
+	// 现在放回，所以这里的 token 也**逐字**含它（缺这半句 ⇒ 这一件当场点名变红）。
+	["成本", "成本：8 个会话 × 至少一个完整回合（followup 驱动一次，按各自模型计费）"],
 	["信任授予", "信任授予：与主会话 session-self 建立双向免确认 pairs 配对"],
 	["角色指引", __testing.TEAM_SESSION_ROLE_GUIDANCE],
 	["确认则（两支）", "确认则：创建 → 投递启动任务 → 登记 roster 与 pairs；取消则零创建、零 pairs。"],
@@ -5261,11 +5270,17 @@ check("U33 必备披露逐件点名（数量 / 模型 / cwd / 成本 / 信任授
 	+ (u33MissingRequired(u33Both?.detail).length === 0 ? "" : "（缺：" + show(u33MissingRequired(u33Both?.detail)) + "）"),
 	u33MissingRequired(u33Both?.detail).length === 0);
 
-// --- U33c 裁定 A 的硬指标：参照夹具 ≤ 6 行且 ≤ 350 码点（2026-09-22 用户裁定 = A）---------------
+// --- U33c 裁定 A 的硬指标：参照夹具 ≤ 6 行且 ≤ 380 码点（2026-09-22 用户裁定 = A）---------------
 // 真机读数（用户实测）：同一个输入 `detail` 收前 **569 码点 / 10 行**（截图那次协调者 id 取满 28 码点
 // ⇒ 585），用户判「有点大，文字也太多了，导致选项被积压」⇒ 裁定 A：压掉解释性括号与 § 号、把
 // 「会话标题」自述段整段移出框体。判据就是这两条上界，外加「必备五件一件不少」（上一条逐件点名）与
 // 「标题读数在完成回报里」（DEFECT-4 ② 那一条）。
+// **判据 350 → 380 的放宽（2026-09-22 偏差修复轮，审计 DIVERGENCE #3 / #4）**：此前写的 ≤350 只对
+// 12 码点参照成立（历史来源是那次本地复现）；本轮把有任务支成本行里**被漏删**的「按各自模型计费」
+// 放回（+8 码点 —— 它是成本口径的一部分），于是上界由 **350 放宽到 380**：这是一次**有代价的放宽**，
+// 换的是**一条必备事实的回归**（不是「本来就 380」，也不是为了迁就某个读数而放宽）。两个参照
+// （12 码点 **353** / 28 码点 **369**）都在 380 内，且把一处解释性文字加回的变异读数 **387 > 380**
+// 仍红 ⇒ 码点侧照样咬得住（见交付报告的变异验证）。
 // **夹具**：输入 `/team_session 你是新的主管会话` ＋ **12 码点**协调者 id（`session-self`，下面钉住）
 // ＋ 工作区目录名 `dsh-session-link-pro`（真机 cwd 与它同长 —— cwd 字段封顶 24 码点，**长度**逐字相同，
 // 只是可见前缀不同；这里用仓内临时目录，避免把仓外的绝对路径写进测试）。
@@ -5275,11 +5290,12 @@ const u33cOut = await u33cEnv.run("你是新的主管会话");
 const u33c = askedQuestion(u33cEnv);
 const u33cCp = codePointsOf(u33c?.detail);
 const u33cLines = newlinesOf(u33c?.detail) + 1;
-check(`U33c 参照夹具（/team_session 你是新的主管会话 ＋ 12 码点协调者 id）: 交付 detail **≤ 6 行且 ≤ 350 码点**，团队仍取工作区目录名、正文仍是那 8 个字（实测 ${u33cCp} 码点 / ${u33cLines} 行；改前 569 / 10）`
-	+ (u33cCp <= 350 && newlinesOf(u33c?.detail) <= 5 ? "" : "（实测：" + show({ cp: u33cCp, lines: u33cLines, detail: u33c?.detail }) + "）"),
-	codePointsOf(u33cEnv.senderAgent.id) === 12 && typeof u33c?.detail === "string" && u33cCp <= 350 && newlinesOf(u33c.detail) <= 5
+check(`U33c 参照夹具（/team_session 你是新的主管会话 ＋ 12 码点协调者 id）: 交付 detail **≤ 6 行且 ≤ 380 码点**（判据由 350 放宽 —— 放回「按各自模型计费」这条必备事实，理由见上），团队仍取工作区目录名、正文仍是那 8 个字、成本口径那半句仍在（实测 ${u33cCp} 码点 / ${u33cLines} 行；改前 569 / 10）`
+	+ (u33cCp <= 380 && newlinesOf(u33c?.detail) <= 5 ? "" : "（实测：" + show({ cp: u33cCp, lines: u33cLines, detail: u33c?.detail }) + "）"),
+	codePointsOf(u33cEnv.senderAgent.id) === 12 && typeof u33c?.detail === "string" && u33cCp <= 380 && newlinesOf(u33c.detail) <= 5
 		&& u33c.detail.startsWith("将创建 1 个 worker 根会话并登记进团队 dsh-session-link-pro") && u33c.detail.includes("）：worker-1。")
 		&& u33c.detail.includes("- 启动任务：共 8 字：你是新的主管会话")
+		&& u33c.detail.includes("至少一个完整回合（followup 驱动一次，按各自模型计费）")
 		&& newlinesOf(u33c.question) === 0 && codePointsOf(u33c.question) <= 120
 		&& u33cOut.text.includes("零创建、零 pairs"));
 // 裁定 A 的**删除面**逐条点名（与上一条的「保留面」互为对照）：用户点名的几类废话与整段自述段在框里
@@ -5316,31 +5332,33 @@ check("U33 标注档位（具名常量）: 两档都在、长度按**实际 `dro
 	+ (u33CropTiers.length === 2 && codePointsOf(u33FullNote(1)) === 21 && codePointsOf(u33MinimalNote(1)) === 11 && codePointsOf(u33FullNote(10)) === 22 && codePointsOf(u33MinimalNote(10)) === 12 && !u33CropTiers.some((tier) => typeof tier === "function" && tier(1).includes("已裁剪至")) ? "" : "（实测：" + show({ tiers: u33CropTiers.length, full1: codePointsOf(u33FullNote(1)), minimal1: codePointsOf(u33MinimalNote(1)), full10: codePointsOf(u33FullNote(10)), minimal10: codePointsOf(u33MinimalNote(10)) }) + "）"),
 	u33CropTiers.length === 2 && codePointsOf(u33FullNote(1)) === 21 && codePointsOf(u33MinimalNote(1)) === 11 && codePointsOf(u33FullNote(10)) === 22 && codePointsOf(u33MinimalNote(10)) === 12 && !u33CropTiers.some((tier) => typeof tier === "function" && tier(1).includes("已裁剪至")));
 
-// (i) **中间档夹具**（改前 body 582 ⇒ 交付 594，最小档）：裁定 A 压缩之后 body 是 **496**，交付**逐字**
-// 等于它（可裁段为空 ⇒ 不裁剪、不追加标注），两个预算仍不破。夹具守卫**同时**断言 body 落在 600 之内
-// 且交付与 body **逐字**相同 —— 否则「一字未裁」会退化成「反正没断言」而假绿。
+// (i) **中间档夹具**（改前 body 582 ⇒ 交付 594，最小档）：裁定 A 压缩之后交付是 **504**（修复轮把
+// 「按各自模型计费」放回后 +8），两个预算仍不破。夹具守卫**正面**断言「框内没有段落级标注」—— 那正是
+// 「一字未裁」在**没有可裁段**之后的直接后果（不裁剪 ⇒ 也就没有标注行）；**它是可假的**：真有一行标注
+// 出现就红（2026-09-22 偏差修复轮的变异验证就是这么做的：把标注人为塞回 ⇒ 这三条红）。
 const u33BandLine = "n=8 team=" + U33_LONG_TEAM + " roles=a,b,c,d,e,f,g,h task=" + "z".repeat(200) + " preset=" + "p".repeat(15) + " model=" + "m".repeat(30);
 const u33BandEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
 await u33BandEnv.run(u33BandLine);
 const u33Band = askedQuestion(u33BandEnv);
-const u33BandBody = codePointsOf(u33RequiredBodyOf(u33Band?.detail));
-check("U33 (i) 中间档夹具: 交付 `detail` **逐字等于必备 body**（不裁剪、不追加标注 —— 可裁段已整段移出）且 ≤ 600 码点 / ≤ 12 换行"
-	+ (typeof u33Band?.detail === "string" && codePointsOf(u33Band.detail) <= 600 && newlinesOf(u33Band.detail) <= 12 && u33Band.detail === u33RequiredBodyOf(u33Band.detail) ? "" : "（实测：" + show({ bodyCp: u33BandBody, cp: codePointsOf(u33Band?.detail), nl: newlinesOf(u33Band?.detail), note: u33HasCropNote(u33Band?.detail) }) + "）"),
-	typeof u33Band?.detail === "string" && u33BandBody <= 600 && codePointsOf(u33Band.detail) === u33BandBody && u33Band.detail === u33RequiredBodyOf(u33Band.detail) && !u33HasCropNote(u33Band.detail) && codePointsOf(u33Band.detail) <= 600 && newlinesOf(u33Band.detail) <= 12 && !u33Band.detail.includes("已裁剪至"));
+const u33BandNotes = u33AnnotationLines(u33Band?.detail);
+check("U33 (i) 中间档夹具: 交付 `detail` 里**没有**段落级标注（可裁段已整段移出 ⇒ 无可裁段就没有标注行）且 ≤ 600 码点 / ≤ 12 换行，也不含「已裁剪至 …」这类自证矛盾句"
+	+ (typeof u33Band?.detail === "string" && codePointsOf(u33Band.detail) <= 600 && newlinesOf(u33Band.detail) <= 12 && u33BandNotes.length === 0 ? "" : "（实测：" + show({ cp: codePointsOf(u33Band?.detail), nl: newlinesOf(u33Band?.detail), annotationLines: u33BandNotes }) + "）"),
+	typeof u33Band?.detail === "string" && u33BandNotes.length === 0 && codePointsOf(u33Band.detail) <= 600 && newlinesOf(u33Band.detail) <= 12 && !u33Band.detail.includes("已裁剪至"));
 
 // (ii) **第二具中间档夹具**（改前 body 592 ⇒ 交付 634 ＝ body ＋ 全档标注，超线 34 ✗）：裁定 A 压缩之后
-// body 是 **506**，交付同样**逐字**等于它，两个预算都不破。这一具与上一具的区别只在 `model=` 的取值
-// 长度（30 vs 300 码点，都封顶到 40）⇒ 两具一起钉住「可变字段封顶 + 逐字交付」这条组合。
+// 交付是 **514**（修复轮 +8），两个预算都不破。这一具与上一具的区别只在 `model=` 的取值长度
+// （30 vs 300 码点，都封顶到 40）⇒ 两具一起钉住「可变字段封顶 ＋ 框内没有段落级标注」这条组合。
 const u33EdgeLine = "n=8 team=" + U33_LONG_TEAM + " roles=a,b,c,d,e,f,g,h task=" + "z".repeat(200) + " preset=" + "p".repeat(15) + " model=" + "m".repeat(300);
 const u33EdgeEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
 await u33EdgeEnv.run(u33EdgeLine);
 const u33Edge = askedQuestion(u33EdgeEnv);
-const u33EdgeBody = codePointsOf(u33RequiredBodyOf(u33Edge?.detail));
-check("U33 (ii) 第二具中间档夹具: 交付 `detail` **逐字等于必备 body**（那一具改前是 body ＋ 标注 = 634 超线 ✗）且 ≤ 600 码点 / ≤ 12 换行、不含「已裁剪至 600 码点」这类自证矛盾的句子"
-	+ (typeof u33Edge?.detail === "string" && codePointsOf(u33Edge.detail) <= 600 && newlinesOf(u33Edge.detail) <= 12 && u33Edge.detail === u33RequiredBodyOf(u33Edge.detail) ? "" : "（实测：" + show({ bodyCp: u33EdgeBody, cp: codePointsOf(u33Edge?.detail), nl: newlinesOf(u33Edge?.detail), note: u33HasCropNote(u33Edge?.detail), contradictory: typeof u33Edge?.detail === "string" && u33Edge.detail.includes("已裁剪至") }) + "）"),
-	typeof u33Edge?.detail === "string" && u33EdgeBody <= 600 && codePointsOf(u33Edge.detail) === u33EdgeBody && u33Edge.detail === u33RequiredBodyOf(u33Edge.detail) && !u33HasCropNote(u33Edge.detail) && codePointsOf(u33Edge.detail) <= 600 && newlinesOf(u33Edge.detail) <= 12 && !u33Edge.detail.includes("已裁剪至"));
+const u33EdgeNotes = u33AnnotationLines(u33Edge?.detail);
+check("U33 (ii) 第二具中间档夹具: 交付 `detail` 里**没有**段落级标注（那一具改前是 body ＋ 标注 = 634 超线 ✗）且 ≤ 600 码点 / ≤ 12 换行、不含「已裁剪至 600 码点」这类自证矛盾的句子"
+	+ (typeof u33Edge?.detail === "string" && codePointsOf(u33Edge.detail) <= 600 && newlinesOf(u33Edge.detail) <= 12 && u33EdgeNotes.length === 0 ? "" : "（实测：" + show({ cp: codePointsOf(u33Edge?.detail), nl: newlinesOf(u33Edge?.detail), annotationLines: u33EdgeNotes, contradictory: typeof u33Edge?.detail === "string" && u33Edge.detail.includes("已裁剪至") }) + "）"),
+	typeof u33Edge?.detail === "string" && u33EdgeNotes.length === 0 && codePointsOf(u33Edge.detail) <= 600 && newlinesOf(u33Edge.detail) <= 12 && !u33Edge.detail.includes("已裁剪至"));
 
-// (iii) **机制一夹具**：必备 body > 600（改前 693 ⇒ 交付 705；裁定 A 压缩后 **607**，交付**逐字**等于它）。
+// (iii) **机制一夹具**：必备 body > 600（改前 693 ⇒ 交付 705；裁定 A 压缩后 **607**，修复轮 +8 ⇒ **615** ——
+// 交付仍**逐字**等于必备 body，因为它没有可裁的段）。
 // 39 字团队名 ＋ 8 个 8 码点角色名（其中 3 个**已登记**，触发「（已登记，跳过）」后缀）＋ 3000 字正文 ＋
 // 300 字 model= ＋ 60 字 preset= ＋ 长 cwd ＋ **取满 28 码点**的协调者 id。必备块**永不裁剪** ⇒ 这一档
 // 仍必然超线，而**没有可裁的段**可省 ⇒ 交付就是必备 body 本身（既没有「标注成为第二个破约者」这种事，
@@ -5361,10 +5379,10 @@ const u33Mech1Env = teamSessionEnv({
 });
 await u33Mech1Env.run("n=8 team=" + U33_LONG_TEAM + " roles=" + U33_MECH1_ROLES.join(",") + " task=" + "x".repeat(3000) + " preset=" + "p".repeat(60) + " model=" + "m".repeat(300), u33Mech1Agent);
 const u33Mech1 = askedQuestion(u33Mech1Env);
-const u33Mech1Body = codePointsOf(u33RequiredBodyOf(u33Mech1?.detail));
-check("U33 (iii) 机制一夹具（必备 body > 600）: 必备块永不裁剪 ⇒ 这一档**必然**超线，而交付**逐字等于必备 body**（没有可裁的段 ⇒ 不裁剪、不追加标注；超额只能由不可裁的必备块引起）"
-	+ (typeof u33Mech1?.detail === "string" && u33Mech1Body > 600 && u33Mech1.detail === u33RequiredBodyOf(u33Mech1.detail) ? "" : "（实测：" + show({ bodyCp: u33Mech1Body, cp: codePointsOf(u33Mech1?.detail), nl: newlinesOf(u33Mech1?.detail), note: u33HasCropNote(u33Mech1?.detail) }) + "）"),
-	typeof u33Mech1?.detail === "string" && u33Mech1Body > 600 && codePointsOf(u33Mech1.detail) === u33Mech1Body && u33Mech1.detail === u33RequiredBodyOf(u33Mech1.detail) && !u33HasCropNote(u33Mech1.detail) && !u33Mech1.detail.includes("已裁剪至"));
+const u33Mech1Notes = u33AnnotationLines(u33Mech1?.detail);
+check("U33 (iii) 机制一夹具（必备 body > 600）: 必备块永不裁剪 ⇒ 这一档**必然**超线，而交付里**没有**段落级标注（没有可裁的段 ⇒ 不裁剪、也不追加标注 ⇒ 超额只能由不可裁的必备块引起）"
+	+ (typeof u33Mech1?.detail === "string" && codePointsOf(u33Mech1.detail) > 600 && u33Mech1Notes.length === 0 ? "" : "（实测：" + show({ cp: codePointsOf(u33Mech1?.detail), nl: newlinesOf(u33Mech1?.detail), annotationLines: u33Mech1Notes }) + "）"),
+	typeof u33Mech1?.detail === "string" && codePointsOf(u33Mech1.detail) > 600 && u33Mech1Notes.length === 0 && !u33Mech1.detail.includes("已裁剪至"));
 check("U33 (iii) 机制一的成因可读: 该夹具的 8 个角色里 3 个**已登记**（「（已登记，跳过）」后缀）且必登记的必备块一字不少 —— 超额的成因是**必备块自超**，不是标注；这一条把「跳过」后缀与必备披露连带钉住"
 	+ (typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("（已登记，跳过）") && u33Mech1.detail.includes("3 个角色已登记，跳过") && u33Mech1.detail.includes("将创建 5 个 worker 根会话") && u33Mech1.detail.includes("共 8 个") ? "" : "（实测：" + show({ skipped: typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("3 个角色已登记，跳过"), creating: typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("将创建 5 个 worker 根会话") }) + "）"),
 	typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("（已登记，跳过）") && u33Mech1.detail.includes("3 个角色已登记，跳过") && u33Mech1.detail.includes("将创建 5 个 worker 根会话") && u33Mech1.detail.includes("共 8 个"));
@@ -5413,6 +5431,9 @@ check("U30 默认值第 4 条（措辞同步）: 确认框与完成回报都如�
 // 否则同一张框一面说「不投启动任务」、一面说「followup 驱动一次」，被读成「已经派活了」。
 // 判据落在**成本行本身**（从框里按行取出来再读），且**两侧互为对照**：无任务支不得出现「followup 驱动一次」，
 // 有任务支必须保留它 —— 否则「把半句抹掉」也能让无任务支变绿，那是把披露改软而不是改准。
+// **2026-09-22 偏差修复轮（审计 DIVERGENCE #4）**：两侧**都**要留住成本口径的另半句「按各自模型计费」
+// （每队各按自己的模型计费）—— 它在裁定 A 落码时被有任务支一并删掉，本轮放回，故这条判据同时咬住它
+// （有任务支必须含、无任务支本来就有：两支都不许悄悄少一句）。
 /** 从确认框正文里取出「成本」那一行（取不到 ⇒ undefined，交给断言判假而不是抛错）。裁定 A 之后这
  * 一行还**并入了信任授予**（同一行两件事实），所以它现在比旧文案长 —— 判据仍是「这一行按同一支写」
  * 与「它确实**是**一行」（下面两具互为对照：无任务支 0 次驱动 / 有任务支 followup 驱动一次）。 */
@@ -5420,9 +5441,9 @@ const costLineOf = (text) => (typeof text === "string" ? text.split("\n").find((
 const noTaskDetail = noTaskEnv.uq.requests[0]?.questions?.[0]?.detail;
 const noTaskCostLine = costLineOf(noTaskDetail);
 const taskCostLine = costLineOf(u30Env.uq.requests[0]?.questions?.[0]?.detail);
-check("U30 默认值第 4 条（措辞同步 · 成本行）: 「成本」那一行按同一支写 —— 无任务支写 0 次驱动 / 不投启动任务、**不得**再出现「followup 驱动一次」，有任务支保留原意（两侧都咬，抹掉半句不算修），两个预算仍不破"
-	+ (noTaskCostLine === undefined || taskCostLine === undefined || noTaskCostLine.includes("followup") || noTaskCostLine.includes("0 次驱动") === false || !taskCostLine.includes("followup 驱动一次") ? "（实测：" + show({ noTaskCostLine, taskCostLine, cp: codePointsOf(noTaskDetail), nl: newlinesOf(noTaskDetail) }) + "）" : ""),
-	noTaskCostLine !== undefined && noTaskCostLine.includes("0 次驱动") && noTaskCostLine.includes("不投启动任务") && !noTaskCostLine.includes("followup") && taskCostLine !== undefined && taskCostLine.includes("followup 驱动一次") && codePointsOf(noTaskDetail) <= 600 && newlinesOf(noTaskDetail) <= 12);
+check("U30 默认值第 4 条（措辞同步 · 成本行）: 「成本」那一行按同一支写 —— 无任务支写 0 次驱动 / 不投启动任务、**不得**再出现「followup 驱动一次」，有任务支保留原意（两侧都咬，抹掉半句不算修），且**两支都留住「按各自模型计费」**这条成本口径，两个预算仍不破"
+	+ (noTaskCostLine === undefined || taskCostLine === undefined || noTaskCostLine.includes("followup") || noTaskCostLine.includes("0 次驱动") === false || !taskCostLine.includes("followup 驱动一次") || !noTaskCostLine.includes("按各自模型计费") || !taskCostLine.includes("按各自模型计费") ? "（实测：" + show({ noTaskCostLine, taskCostLine, cp: codePointsOf(noTaskDetail), nl: newlinesOf(noTaskDetail) }) + "）" : ""),
+	noTaskCostLine !== undefined && noTaskCostLine.includes("0 次驱动") && noTaskCostLine.includes("不投启动任务") && !noTaskCostLine.includes("followup") && noTaskCostLine.includes("按各自模型计费") && taskCostLine !== undefined && taskCostLine.includes("followup 驱动一次") && taskCostLine.includes("按各自模型计费") && codePointsOf(noTaskDetail) <= 600 && newlinesOf(noTaskDetail) <= 12);
 
 // --- U31 错误可解释性（R3：失败必须点名）--------------------------------------
 check("U31 offender 回显: 任何参数错误都**原样回显**冒犯的那个 token（n=abc / bogus=1 / roles= 逐字回来，不被折断、不被改写）", readTeamSessionCommand("n=abc 帮我做 X").error.includes("n=abc") && readTeamSessionCommand("team=t bogus=1").error.includes("bogus=1") && readTeamSessionCommand("team=t roles=").error.includes("roles="));
