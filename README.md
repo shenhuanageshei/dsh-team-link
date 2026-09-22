@@ -871,7 +871,7 @@ node client-half.test.mjs   # 浏览器半边：卡片渲染 / 降级路径 / �
 
 两条都是**自报计数**的脚本（结尾打印 `assertion total: N (failed: 0)` 并以退出码表态）；**不要**用 `node --test`（沙箱下 `spawn EPERM`）。
 
-> **逐轮的 红相/绿相 证据账本已移到 [`docs/verification-log.md`](docs/verification-log.md)**——0.3.1 → 0.3.9 每一轮的审计变异、修复前必红读数，以及本仓库的「变异验证」验收文化。本节的定位是**面向读者**：怎么跑、现在多少条、红线是什么。
+> **逐轮的 红相/绿相 证据账本已移到 [`docs/verification-log.md`](docs/verification-log.md)**——0.3.1 → 0.3.10（未发布） 每一轮的审计变异、修复前必红读数，以及本仓库的「变异验证」验收文化。本节的定位是**面向读者**：怎么跑、现在多少条、红线是什么。
 
 **红线由哪些断言把守**（宿主套件内的源码级与运行时锁）：模块级 `inject` 恒 4 项；投递 `source` 恰三成员；**不引入任何新的会话日志事件类型**；`PolicyConfig` 的键集；`writerGate` 函数体逐字节不变。
 ## 设计文档索引
@@ -883,13 +883,13 @@ node client-half.test.mjs   # 浏览器半边：卡片渲染 / 降级路径 / �
 | [`docs/hardening-and-recovery-design-2026-09-21.md`](docs/hardening-and-recovery-design-2026-09-21.md) | **加固与恢复设计（v1，0.3.9）**：① 导出路由接入平台信任栅栏 · ② 恢复能力加宽（`revive` 角色面 / `reappoint` 自建继任者）· ③ 侧栏「会话工具」入口（§4.3 是本入口 UI/交互的唯一事实源）· ④ 深链聚焦修复（§4.4）；含 §5 红线 B1–B9、§6 判据 U1–U14、§9 假设与待验项、§11 分批。会诊 #62 纪要见 `docs/consult-minutes/2026-09-21-consult-62-minutes.md` |
 | [`docs/team-upgrade-research-2026-09-17.md`](docs/team-upgrade-research-2026-09-17.md) | 调研：一次 16+ 小时真实多会话联调的复盘，与升级提案（**其 §5 已被设计取代**，以设计文档为准） |
 | [`docs/consult-minutes/`](docs/consult-minutes/) | 多模型会诊纪要（含裁定层：逐条采纳/不采纳与理由、分歧父侧裁定、教训、不可验清单） |
-| [`docs/verification-log.md`](docs/verification-log.md) | **验证账本**（证据，不是说明书）：0.3.1 → 0.3.9 逐轮的红相/绿相读数、审计变异矩阵、以及每次真机验证的原始取证（含 0.3.7 那次「静默失效一整天」的完整调试历程） |
+| [`docs/verification-log.md`](docs/verification-log.md) | **验证账本**（证据，不是说明书）：0.3.1 → 0.3.10（未发布） 逐轮的红相/绿相读数、审计变异矩阵、以及每次真机验证的原始取证（含 0.3.7 那次「静默失效一整天」的完整调试历程） |
 
 ---
 
 ## Changelog
 
-完整变更史见 **[CHANGELOG.md](CHANGELOG.md)**——0.3.1 → 0.3.9 逐版条目，每版按「修了什么 → 为什么 → 怎么验证」组织，行为修复都附**变异验证**证据（修复前必红 / 修复后全绿）。
+完整变更史见 **[CHANGELOG.md](CHANGELOG.md)**——0.3.1 → 0.3.10（未发布） 逐版条目，每版按「修了什么 → 为什么 → 怎么验证」组织，行为修复都附**变异验证**证据（修复前必红 / 修复后全绿）。
 
 **最近一次发布：0.3.8（2026-09-20）**——发送方可见性（A/D 卡片）· `/team_session` 自动建队 · 自动换届交接（`successor:"auto"` + 交接文档契约）与团队恢复工具 `team_link_recover`，外加真机验证暴露的一批缺陷修复（DEFECT-1…5）。**逐轮红相/绿相读数**见 [`docs/verification-log.md`](docs/verification-log.md)。
 ---
