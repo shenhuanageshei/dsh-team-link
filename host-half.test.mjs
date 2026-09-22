@@ -5099,8 +5099,14 @@ const cancelledEnv = teamSessionEnv({ askScript: ["取消"] });
 const cancelledOut = await cancelledEnv.run("n=2 team=night-shift roles=worker-a,worker-b task=做接口");
 const cancelledQuestion = cancelledEnv.uq.requests[0].questions[0];
 check("U16 确认框: cancel creates NOTHING and writes NO pairs (零创建零 pairs)", cancelledEnv.creates.length === 0 && cancelledEnv.pairs().length === 0 && cancelledEnv.store().length === 0 && cancelledOut.text.includes("零创建、零 pairs"));
-check("U16 确认框: the body carries the counts, the model/preset, the cwd and the conservative cost口径", cancelledQuestion.detail.includes("将创建 2 个 worker 根会话") && cancelledQuestion.detail.includes("工作目录（cwd）：") && cancelledQuestion.detail.includes("成本口径（保守）") && cancelledQuestion.detail.includes("2 个会话 × 至少一个完整回合"));
-check("U16 确认框: ... and the pairing grant is written out BEFORE it exists (信任授予不得默默发生)", cancelledQuestion.detail.includes("建立 pairs 配对——双向免确认通道") && cancelledQuestion.detail.includes("预置配对") && cancelledQuestion.detail.includes("绕过发送方审批与接收方 ask 两道门"));
+// 2026-09-22 裁定 A 收紧措辞之后，这两条的**判据面一字未撤**，只是换成框里现在真正写着的那些字：
+// cwd 的标签由「工作目录（cwd）」收成 `cwd：`（同义 gloss 是字数，不是事实），成本行去掉「（保守）」
+// 与「口径」两个虚词 —— 「成本」这件必备披露仍然在场、仍然按支写。
+check("U16 确认框: the body carries the counts, the model/preset, the cwd and the conservative cost口径", cancelledQuestion.detail.includes("将创建 2 个 worker 根会话") && cancelledQuestion.detail.includes("cwd：") && cancelledQuestion.detail.includes("成本：") && cancelledQuestion.detail.includes("2 个会话 × 至少一个完整回合") && cancelledQuestion.detail.includes("- 模型/预设："));
+// 信任授予的判据**逐字**点名整句（含协调者 id）—— 收紧删掉的是括号里的解释（「绕过…两道门，§10.2.3
+// 预置配对」），留下的仍是「在它存在之前就写出来」这件事本身；强度不降反升（旧断言咬两个子串，
+// 这条咬整句）。
+check("U16 确认框: ... and the pairing grant is written out BEFORE it exists (信任授予不得默默发生)", cancelledQuestion.detail.includes("信任授予：与主会话 session-self 建立双向免确认 pairs 配对。") && !cancelledQuestion.detail.includes("本会话默认"));
 check("U16 确认框: the options are exactly 创建 / 取消, and the question id matches what the handler reads back", cancelledQuestion.options.map((option) => option.label).join(",") === "创建,取消" && cancelledQuestion.id === "team-session-batch");
 // No confirmation service at all is fail-closed, like the M4 claim dialog.
 const noUqCmdEnv = teamSessionEnv({ omitUserQuestions: true });
@@ -5139,9 +5145,10 @@ const U33_LONG_TEAM = "t".repeat(39);
 const u33CropTiers = Array.isArray(__testing.TEAM_SESSION_DIALOG_CROP_NOTE_TIERS) ? __testing.TEAM_SESSION_DIALOG_CROP_NOTE_TIERS : [];
 const u33FullNote = (dropped) => (typeof at(u33CropTiers, 0) === "function" ? u33CropTiers[0](dropped) : `（已省略 ${dropped} 段自述；必备披露一字未少。）`);
 const u33MinimalNote = (dropped) => (typeof at(u33CropTiers, 1) === "function" ? u33CropTiers[1](dropped) : `（已省略 ${dropped} 段自述）`);
-/** 交付串里那句标注永远是**被追加的最后一行** ⇒ 按**行**剥离就能把「必备 body」与「标注」分开量，
- * 不必逐字匹配某一档的措辞。同一个助手对**新旧两棵树都成立**，因此 U33 (i) 的红相落在
- * 「交付 ≤ 600」这条判据上，而不是落在夹具守卫（body 落在哪条带里）上。 */
+/** 交付串里那句标注（若真有）永远是**被追加的最后一行** ⇒ 按**行**剥离就能把「必备 body」与「标注」
+ * 分开量，不必逐字匹配某一档的措辞。同一个助手对**新旧两棵树都成立**：裁定 A 之后这条剥离是
+ * **恒等**（没有可裁段 ⇒ 没有标注行），而它在旧树上照旧剥得掉 —— U33 (i)/(ii)/(iii) 三条因此都写成
+ * 「交付 `detail` 逐字等于必备 body」，在两棵树上都能给出**有意义的红相**（旧树：body ＋ 标注 ≠ body）。 */
 const u33CropNoteLine = /\n（已[^\n]*）$/u;
 const u33RequiredBodyOf = (detail) => String(detail ?? "").replace(u33CropNoteLine, "");
 const u33HasCropNote = (detail) => typeof detail === "string" && u33RequiredBodyOf(detail) !== detail;
@@ -5162,7 +5169,7 @@ check("U33 换槽位: 确认框的 question 是**一行话** —— 无换行、
 const u33DetailIsBody = typeof teamSessionDialogText === "function" && u33Question?.detail === teamSessionDialogText(u33Plan, TEAM_WS, "session-self");
 check("U33 换槽位: 披露正文**整段**进了 detail（逐字等于 teamSessionDialogText 的产物，≤600 码点且 ≤12 换行 —— 两个预算都是断言）"
 	+ (u33DetailIsBody && codePointsOf(u33Question.detail) <= 600 && newlinesOf(u33Question.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Question?.detail), nl: newlinesOf(u33Question?.detail) }) + "）"),
-	u33DetailIsBody && codePointsOf(u33Question.detail) <= 600 && newlinesOf(u33Question.detail) <= 12 && u33Question.detail.startsWith("将创建 2 个 worker 根会话并登记进团队 night-shift。"));
+	u33DetailIsBody && codePointsOf(u33Question.detail) <= 600 && newlinesOf(u33Question.detail) <= 12 && u33Question.detail.startsWith("将创建 2 个 worker 根会话并登记进团队 night-shift（id 形状 ") && u33Question.detail.includes("）：worker-a；worker-b。"));
 check("U33 换槽位: options 一字未动（换槽位只搬正文，不碰「创建 / 取消」这对授权面）", u33Question.options.map((option) => option.label).join(",") === "创建,取消" && u33Question.id === "team-session-batch" && u33Question.header === "批量建队确认");
 
 // --- U33 有界呈现（§10.2.8.4 (a) / (b)）-------------------------------------
@@ -5182,22 +5189,28 @@ check("U33 id 形状在场（§10.2.8.4 (b)「只给 id 形状 ＋ 计数」）:
 	+ (typeof u33Long?.detail === "string" && u33Long.detail.includes("team-link-<team>-<role>-<uuid8>") && u33Long.detail.includes("共 8 个") && !/team-link-night-shift-w\d/u.test(u33Long.detail) ? "" : "（实测：" + show({ hasShape: typeof u33Long?.detail === "string" && u33Long.detail.includes("team-link-<team>-<role>-<uuid8>"), counts: typeof u33Long?.detail === "string" && u33Long.detail.includes("共 8 个"), idListed: typeof u33Long?.detail === "string" && /team-link-night-shift-w\d/u.test(u33Long.detail) }) + "）"),
 	typeof u33Long?.detail === "string" && u33Long.detail.includes("team-link-<team>-<role>-<uuid8>") && u33Long.detail.includes("共 8 个") && !/team-link-night-shift-w\d/u.test(u33Long.detail));
 
-// 长 cwd / 长团队名：可变字段仍可能顶破，所以「按段落裁剪并标注」是必需品，不是防御性代码。
+// 长 cwd / 长团队名：可变字段仍可能顶破，所以**逐字段封顶**是必需品，不是防御性代码。这两条读的是
+// **字段级**裁剪留下的省略号（`dialogField` 的「…」＝「截断必须标注」这条本仓既有规矩，与 U13/U14
+// 同源）。2026-09-22 裁定 A 之后框里没有可裁的**段**（唯一的自述段整段移出了框体）⇒ 这两条不再断言
+// 「段落级标注在场」（那件事现在由**没有标注**这件事实承载，见本节末的 U33c 组），字段级封顶的
+// 判据面一字未撤。
 const u33CwdEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
 await u33CwdEnv.run("n=2 team=night-shift roles=worker-a,worker-b");
 const u33Cwd = askedQuestion(u33CwdEnv);
-check("U33 长 cwd 裁剪标注: cwd 字段被截就留下省略号（裁剪是**标注过的**，不是静默丢字），且两个预算仍不破"
+check("U33 长 cwd 字段封顶: cwd 字段被截就留下省略号（字段级裁剪是**标注过的**，不是静默丢字），且两个预算仍不破"
 	+ (codePointsOf(u33Cwd?.detail) <= 600 && newlinesOf(u33Cwd?.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Cwd?.detail), nl: newlinesOf(u33Cwd?.detail) }) + "）"),
-	u33Cwd?.detail.includes("（cwd）：") && u33Cwd.detail.includes("…") && !u33Cwd.detail.includes("d".repeat(40)) && codePointsOf(u33Cwd.detail) <= 600 && newlinesOf(u33Cwd.detail) <= 12 && newlinesOf(u33Cwd.question) === 0 && codePointsOf(u33Cwd.question) <= 120);
+	u33Cwd?.detail.includes("cwd：") && u33Cwd.detail.includes("…") && !u33Cwd.detail.includes("d".repeat(40)) && codePointsOf(u33Cwd.detail) <= 600 && newlinesOf(u33Cwd.detail) <= 12 && newlinesOf(u33Cwd.question) === 0 && codePointsOf(u33Cwd.question) <= 120);
 const u33TeamEnv = teamSessionEnv({ askScript: ["取消"] });
 await u33TeamEnv.run("n=2 team=" + U33_LONG_TEAM + " roles=worker-a,worker-b");
 const u33Team = askedQuestion(u33TeamEnv);
-// 2026-09-22 会诊 #68 批（U33 口径定档）：标注自己**参与**预算，所以旧文案「已裁剪至 600 码点 /
-// 12 行上限」在交付串恰好超线时**自证矛盾**，两档新文案都不再写它 —— 本条的**强度只增不减**：
-// 标注在场（**逐字**等于全档常量的产物）＋ **两个预算仍然都断言** ＋ 新增「不含那句自证矛盾的话」。
-check("U33 长团队名裁剪标注: 39 字的团队名被截且留下省略号，段落裁剪的标注（全档「（已省略 1 段自述；必备披露一字未少。）」—— 不再是那句「已裁剪至 600 码点 / 12 行上限」）同时在场，两个预算不破"
-	+ (typeof u33Team?.detail === "string" && u33Team.detail.includes(u33FullNote(1)) && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Team?.detail), nl: newlinesOf(u33Team?.detail), note: typeof u33Team?.detail === "string" && u33Team.detail.includes(u33FullNote(1)), contradictory: typeof u33Team?.detail === "string" && u33Team.detail.includes("已裁剪至") }) + "）"),
-	typeof u33Team?.detail === "string" && u33Team.detail.includes("ttttttttttttttttttt…") && !u33Team.detail.includes("t".repeat(25)) && u33Team.detail.includes(u33FullNote(1)) && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 && codePointsOf(u33Team.question) <= 120 && newlinesOf(u33Team.question) === 0);
+// 2026-09-22 会诊 #68 批（U33 口径定档）**＋ 同日裁定 A**：旧文案「已裁剪至 600 码点 / 12 行上限」
+// 在交付串恰好超线时**自证矛盾**，两档新文案都不再写它；而裁定 A 移走了框里唯一的可裁段 ⇒ 现在
+// **任何**交付串都不带段落级标注。本条按**现在真正的交付形状**写：团队名照旧被封顶（省略号在场）、
+// 两个预算照旧都断言、不含那句自证矛盾的话，且**没有**段落级标注（那件事由 U33c 的「逐字交付」
+// 一条钉住）。
+check("U33 长团队名字段封顶: 39 字的团队名被截且留下省略号，两个预算不破，且交付串里没有段落级标注（裁定 A 之后没有可裁的段）也不含那句自证矛盾的「已裁剪至 …」"
+	+ (typeof u33Team?.detail === "string" && !u33HasCropNote(u33Team.detail) && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 ? "" : "（实测：" + show({ cp: codePointsOf(u33Team?.detail), nl: newlinesOf(u33Team?.detail), note: u33HasCropNote(u33Team?.detail), contradictory: typeof u33Team?.detail === "string" && u33Team.detail.includes("已裁剪至") }) + "）"),
+	typeof u33Team?.detail === "string" && u33Team.detail.includes("ttttttttttttttttttt…") && !u33Team.detail.includes("t".repeat(25)) && !u33HasCropNote(u33Team.detail) && !u33Team.detail.includes("已裁剪至") && codePointsOf(u33Team.detail) <= 600 && newlinesOf(u33Team.detail) <= 12 && codePointsOf(u33Team.question) <= 120 && newlinesOf(u33Team.question) === 0);
 // §10.2.8.4 (b) 的逐字段封顶必须覆盖**用户可任意长的取值**：`model=` / `provider=` 由命令行给出，
 // 解析器只定形状（`TEAM_SESSION_MODEL_RE`）不定长度 ⇒ 修前它们**原样内插**进模型行，单这一句
 // 就能顶破 600 码点（而 per-field caps 存在的理由正是「**常规与已验证的极端**装得下」—— 不是
@@ -5222,73 +5235,116 @@ check("U33 长 preset= 封顶（自有上限 24，与 provider 同级）: 60 字
 const u33BothEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
 await u33BothEnv.run("n=8 team=" + U33_LONG_TEAM + " roles=w1,w2,w3,w4,w5,w6,w7,w8 task=" + "y".repeat(500));
 const u33Both = askedQuestion(u33BothEnv);
-check("U33 两者都长（团队名 + cwd + 8 会话 + 长正文）: 两个预算仍然不破，且裁剪有标注（新文案全档在场、不再有那句自证矛盾的「已裁剪至 …」）"
-	+ (codePointsOf(u33Both?.detail) <= 600 && newlinesOf(u33Both?.detail) <= 12 && typeof u33Both?.detail === "string" && u33Both.detail.includes(u33FullNote(1)) ? "" : "（实测：" + show({ cp: codePointsOf(u33Both?.detail), nl: newlinesOf(u33Both?.detail), note: typeof u33Both?.detail === "string" && u33Both.detail.includes(u33FullNote(1)) }) + "）"),
-	typeof u33Both?.detail === "string" && codePointsOf(u33Both.detail) <= 600 && newlinesOf(u33Both.detail) <= 12 && newlinesOf(u33Both.question) === 0 && codePointsOf(u33Both.question) <= 120 && u33Both.detail.includes(u33FullNote(1)) && !u33Both.detail.includes("已裁剪至"));
+check("U33 两者都长（团队名 + cwd + 8 会话 + 长正文）: 两个预算仍然不破，交付串里没有段落级标注（可裁段已整段移出）也不含那句自证矛盾的「已裁剪至 …」"
+	+ (codePointsOf(u33Both?.detail) <= 600 && newlinesOf(u33Both?.detail) <= 12 && !u33HasCropNote(u33Both?.detail) ? "" : "（实测：" + show({ cp: codePointsOf(u33Both?.detail), nl: newlinesOf(u33Both?.detail), note: u33HasCropNote(u33Both?.detail) }) + "）"),
+	typeof u33Both?.detail === "string" && codePointsOf(u33Both.detail) <= 600 && newlinesOf(u33Both.detail) <= 12 && newlinesOf(u33Both.question) === 0 && codePointsOf(u33Both.question) <= 120 && !u33HasCropNote(u33Both.detail) && !u33Both.detail.includes("已裁剪至"));
 
-// 压缩只压自述段：**必备披露**（数量 / 模型 / cwd / 成本 / 配对授权）与 §10.2.8.7 的角色指引
-// 在预算最紧的那个用例里仍一字不少 —— 这条是 U33 与 §10.2.4 / §10.2.8.7 之间的锁。
+// 必备披露与「压缩只压自述段」：**逐件点名**（新的断言 ①）。判据不是「正文里有没有东西」，而是
+// §10.2.4 的必备五件（数量 / 模型 / cwd / 成本 / 信任授予）＋ §10.2.8.7 的角色指引 ＋ 确认则（创建 /
+// 取消**两支**）＋ §10.2.8.4 (b) 的角色与 id 形状 ＋ 启动任务预览（含「共 N 字」标注）**九件各在哪一行
+// 上都在场** —— 逐件带标签，缺哪件就点名哪件。裁定 A 只收紧措辞，一件不动、一件不少。
 const u33Required = [
-	"将创建 8 个 worker 根会话",
-	"- 模型/预设：",
-	"- 工作目录（cwd）：",
-	"- 启动任务：",
-	"成本口径（保守）",
-	"信任授予：与主会话 session-self 建立 pairs 配对——双向免确认通道",
-	"绕过发送方审批与接收方 ask 两道门",
-	"确认则：创建 → followup 投递启动任务 → 登记 roster 与 pairs；取消则零创建、零 pairs。",
-	__testing.TEAM_SESSION_ROLE_GUIDANCE,
+	["数量", "将创建 8 个 worker 根会话并登记进团队"],
+	["模型", "- 模型/预设："],
+	["cwd", "cwd："],
+	["成本", "成本：8 个会话 × 至少一个完整回合（followup 驱动一次）"],
+	["信任授予", "信任授予：与主会话 session-self 建立双向免确认 pairs 配对"],
+	["角色指引", __testing.TEAM_SESSION_ROLE_GUIDANCE],
+	["确认则（两支）", "确认则：创建 → 投递启动任务 → 登记 roster 与 pairs；取消则零创建、零 pairs。"],
+	["角色与 id 形状", "team-link-<team>-<role>-<uuid8>"],
+	["id 计数", "共 8 个"],
+	["启动任务预览（含「共 N 字」）", "- 启动任务：共 500 字"],
 ];
-check("U33 压缩后必备披露一字不少: 预算最紧的用例（长团队名 + 长 cwd + 8 会话 + 长正文）里，数量 / 模型 / cwd / 成本 / 配对授权与角色指引全部在场"
-	+ (u33Required.every((token) => typeof u33Both?.detail === "string" && u33Both.detail.includes(token)) ? "" : "（缺：" + show(u33Required.filter((token) => !u33Both?.detail.includes(token))) + "）"),
-	u33Required.every((token) => typeof u33Both?.detail === "string" && u33Both.detail.includes(token)));
+/** 缺哪几件（返回**标签**，失败信息里逐件点名）。空数组 = 九件全在。 */
+const u33MissingRequired = (detail) => u33Required.filter(([, token]) => !(typeof detail === "string" && detail.includes(token))).map(([label]) => label);
+check("U33 必备披露逐件点名（数量 / 模型 / cwd / 成本 / 信任授予 / 角色指引 / 确认则两支 / 角色与 id 形状 / 启动任务预览）：预算最紧的用例（长团队名 + 长 cwd + 8 会话 + 长正文）里九件全在场"
+	+ (u33MissingRequired(u33Both?.detail).length === 0 ? "" : "（缺：" + show(u33MissingRequired(u33Both?.detail)) + "）"),
+	u33MissingRequired(u33Both?.detail).length === 0);
 
-// --- U33 标注计价：交付的是 `detail`（**含标注行**）（§10.2.8.4 (b)，2026-09-22 会诊 #68 裁定）----
-// 病灶（**结构式**，不靠某个输入的读数立论）：被弃路径的终态 `text = candidate(kept, dropped)` 在
-// **装完 body 之后**才贴上标注，**不再过 `dialogFits`** ⇒ 交付 = body ＋ 标注（旧文案 41 码点 ＋
-// 1 换行）⇒ **凡 body > 558 即溢出**，而框里那句还写着「已裁剪至 600 码点 / 12 行上限」——
-// **输出物自述与事实相反**。
-// 口径（U33 定档 = **交付 `detail`**）：交付 ≤ **max(600, 必备 body ＋ 12)**，其中 12 = 最小档
-// 标注 11 码点 ＋ 1 换行 —— 即「**标注永不是首个破约者**」：body ≤ 588 ⇒ 交付 ≤ 600；
-// body ∈ (588, 600] ⇒ 最多超 ≤ 12 码点且**必带标注**；body > 600 属**机制一**（必备块自超，
-// 设计档 §10.2.8.4 残余行）。下面三分支各一具，实测读数（本树）：
-//   (i) body 582 ⇒ 交付 594（最小档）· (ii) body 592 ⇒ 604（＝ body ＋ 12）· (iii) body 693 ⇒ 705。
-// 夹具的 「必备 body」按**行**剥离标注量出来（标注永远是被追加的最后一行，见上面的助手）。
+// --- U33c 裁定 A 的硬指标：参照夹具 ≤ 6 行且 ≤ 350 码点（2026-09-22 用户裁定 = A）---------------
+// 真机读数（用户实测）：同一个输入 `detail` 收前 **569 码点 / 10 行**（截图那次协调者 id 取满 28 码点
+// ⇒ 585），用户判「有点大，文字也太多了，导致选项被积压」⇒ 裁定 A：压掉解释性括号与 § 号、把
+// 「会话标题」自述段整段移出框体。判据就是这两条上界，外加「必备五件一件不少」（上一条逐件点名）与
+// 「标题读数在完成回报里」（DEFECT-4 ② 那一条）。
+// **夹具**：输入 `/team_session 你是新的主管会话` ＋ **12 码点**协调者 id（`session-self`，下面钉住）
+// ＋ 工作区目录名 `dsh-session-link-pro`（真机 cwd 与它同长 —— cwd 字段封顶 24 码点，**长度**逐字相同，
+// 只是可见前缀不同；这里用仓内临时目录，避免把仓外的绝对路径写进测试）。
+const U33C_WS = path.join(TEAM_TMP, "dsh-session-link-pro");
+const u33cEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: U33C_WS });
+const u33cOut = await u33cEnv.run("你是新的主管会话");
+const u33c = askedQuestion(u33cEnv);
+const u33cCp = codePointsOf(u33c?.detail);
+const u33cLines = newlinesOf(u33c?.detail) + 1;
+check(`U33c 参照夹具（/team_session 你是新的主管会话 ＋ 12 码点协调者 id）: 交付 detail **≤ 6 行且 ≤ 350 码点**，团队仍取工作区目录名、正文仍是那 8 个字（实测 ${u33cCp} 码点 / ${u33cLines} 行；改前 569 / 10）`
+	+ (u33cCp <= 350 && newlinesOf(u33c?.detail) <= 5 ? "" : "（实测：" + show({ cp: u33cCp, lines: u33cLines, detail: u33c?.detail }) + "）"),
+	codePointsOf(u33cEnv.senderAgent.id) === 12 && typeof u33c?.detail === "string" && u33cCp <= 350 && newlinesOf(u33c.detail) <= 5
+		&& u33c.detail.startsWith("将创建 1 个 worker 根会话并登记进团队 dsh-session-link-pro") && u33c.detail.includes("）：worker-1。")
+		&& u33c.detail.includes("- 启动任务：共 8 字：你是新的主管会话")
+		&& newlinesOf(u33c.question) === 0 && codePointsOf(u33c.question) <= 120
+		&& u33cOut.text.includes("零创建、零 pairs"));
+// 裁定 A 的**删除面**逐条点名（与上一条的「保留面」互为对照）：用户点名的几类废话与整段自述段在框里
+// **一处都不剩**，而正文那 8 个字仍逐字在「- 启动任务：」那一行上（「只去废话」而不是「去字」）。
+const u33cRemoved = [
+	["标题自述段", "- 会话标题："],
+	["标题段的解释", "想改随时在壳里重命名"],
+	["标题段的解释（工作区名）", "不设标题时它们会全都显示为工作区名"],
+	["§ 号（预置配对那条）", "§10.2.3"],
+	["解释性括号（两道门）", "绕过发送方审批与接收方 ask 两道门"],
+	["解释性括号（保守）", "（保守）"],
+	["教学式说明（模型解析）", "未给 model=/provider"],
+	["教学式说明（模型解析，后半句）", "两半都解析并带上宿主缺省模型选择"],
+	["cwd 的同义 gloss", "工作目录（cwd）"],
+	["未截断时重复一遍投递承诺", "完整正文会原样作为启动任务投递：你是新的主管会话"],
+];
+const u33cStillPresent = u33cRemoved.filter(([, token]) => typeof u33c?.detail === "string" && u33c.detail.includes(token)).map(([label]) => label);
+check(`U33c 裁定 A 的删除面逐条点名: 框里不再有标题自述段 / 解释性括号 / § 号 / 教学式说明（逐条列出，剩几条就红）${u33cStillPresent.length === 0 ? "" : `（还在：${show(u33cStillPresent)}）`}`,
+	typeof u33c?.detail === "string" && u33cStillPresent.length === 0 && !u33c.detail.includes("会话标题") && !u33c.detail.includes("保守"));
+
+// --- U33 预算与终态交付（§10.2.8.4 (b)）-------------------------------------------------------
+// 病灶（**结构式**，不靠某个输入的读数立论）：被弃路径的终态在**装完 body 之后**才贴上标注、
+// **不再过 `dialogFits`** ⇒ 交付 = body ＋ 标注，而框里那句还写着「已裁剪至 600 码点 / 12 行上限」——
+// **输出物自述与事实相反**。会诊 #68 定档的修法（标注计价 ＋ 两档自适应 ＋ 终态与拟合同构造）在
+// 本批**一字未动**（用户裁定：「不许动 600/12、两档标注与终态预算机制、必备块裁剪逻辑」）。
+//
+// **2026-09-22 裁定 A 之后可裁段为空**：框里唯一的 `required: false` 段（「会话标题」）整段移出 ⇒
+// `optional` 恒为空、`dropped` 恒为 0 ⇒ 交付 = 必备 body **逐字**（不裁剪、也不追加标注）。下面三条
+// 断言的就是这个新的事实面：两个中间档夹具**逐字交付且仍在 600/12 里**，机制一夹具（必备 body > 600）
+// **逐字交付且超额只由不可裁的必备块引起**（设计档 §10.2.8.4 残余行 · 第一机制，本批不做）。
+// 两档标注常量仍由**纯函数**判据咬住（它们现在没有取用点，代码与文案原样保留 —— 一旦某段自述回到框里，
+// 取用路径立刻恢复）。
 check("U33 标注档位（具名常量）: 两档都在、长度按**实际 `dropped` 位数**算 —— N=1 时全档 21 码点 / 最小档 11 码点，N=10 时各 +1，且**两档自己都不含**「已裁剪至 … 码点 / … 行上限」这句在超额交付上自证矛盾的话"
 	+ (u33CropTiers.length === 2 && codePointsOf(u33FullNote(1)) === 21 && codePointsOf(u33MinimalNote(1)) === 11 && codePointsOf(u33FullNote(10)) === 22 && codePointsOf(u33MinimalNote(10)) === 12 && !u33CropTiers.some((tier) => typeof tier === "function" && tier(1).includes("已裁剪至")) ? "" : "（实测：" + show({ tiers: u33CropTiers.length, full1: codePointsOf(u33FullNote(1)), minimal1: codePointsOf(u33MinimalNote(1)), full10: codePointsOf(u33FullNote(10)), minimal10: codePointsOf(u33MinimalNote(10)) }) + "）"),
 	u33CropTiers.length === 2 && codePointsOf(u33FullNote(1)) === 21 && codePointsOf(u33MinimalNote(1)) === 11 && codePointsOf(u33FullNote(10)) === 22 && codePointsOf(u33MinimalNote(10)) === 12 && !u33CropTiers.some((tier) => typeof tier === "function" && tier(1).includes("已裁剪至")));
 
-// (i) **装得下的最坏夹具**：必备 body ∈ (558, 588]（body ≤ 588 ⇒ body ＋ 12 ≤ 600）。**改动前必红**：
-// 旧实现给 body ＋ 41 ＋ 1 = 624 > 600。夹具守卫**同时**断言 body 落在带内 —— 否则夹具会悄悄
-// 退化成「body 很小、当然装得下」而继续假绿。这一具的 body 582 让**全档装不下**（582 ＋ 22 = 604），
-// 所以它同时是「取能装进 `dialogFits` 的**最宽**档」这条选择策略的判据（交付的是最小档）。
+// (i) **中间档夹具**（改前 body 582 ⇒ 交付 594，最小档）：裁定 A 压缩之后 body 是 **496**，交付**逐字**
+// 等于它（可裁段为空 ⇒ 不裁剪、不追加标注），两个预算仍不破。夹具守卫**同时**断言 body 落在 600 之内
+// 且交付与 body **逐字**相同 —— 否则「一字未裁」会退化成「反正没断言」而假绿。
 const u33BandLine = "n=8 team=" + U33_LONG_TEAM + " roles=a,b,c,d,e,f,g,h task=" + "z".repeat(200) + " preset=" + "p".repeat(15) + " model=" + "m".repeat(30);
 const u33BandEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
 await u33BandEnv.run(u33BandLine);
 const u33Band = askedQuestion(u33BandEnv);
 const u33BandBody = codePointsOf(u33RequiredBodyOf(u33Band?.detail));
-check("U33 (i) 装得下的最坏夹具: 必备 body ∈ (558, 588] 时**交付 `detail`（含标注行）≤ 600 且 ≤ 12 换行**，标注在场且取的是**能装进预算的最宽档**（全档 604 装不下 ⇒ 最小档）—— 标注自己**参与**预算，不是贴在装完 body 之后"
-	+ (typeof u33Band?.detail === "string" && codePointsOf(u33Band.detail) <= 600 && newlinesOf(u33Band.detail) <= 12 && u33HasCropNote(u33Band.detail) && u33Band.detail.includes(u33MinimalNote(1)) ? "" : "（实测：" + show({ bodyCp: u33BandBody, cp: codePointsOf(u33Band?.detail), nl: newlinesOf(u33Band?.detail), note: u33HasCropNote(u33Band?.detail), minimalTier: typeof u33Band?.detail === "string" && u33Band.detail.includes(u33MinimalNote(1)) }) + "）"),
-	typeof u33Band?.detail === "string" && u33BandBody > 558 && u33BandBody <= 588 && codePointsOf(u33Band.detail) <= 600 && newlinesOf(u33Band.detail) <= 12 && u33HasCropNote(u33Band.detail) && u33Band.detail.includes(u33MinimalNote(1)) && !u33Band.detail.includes("已裁剪至"));
+check("U33 (i) 中间档夹具: 交付 `detail` **逐字等于必备 body**（不裁剪、不追加标注 —— 可裁段已整段移出）且 ≤ 600 码点 / ≤ 12 换行"
+	+ (typeof u33Band?.detail === "string" && codePointsOf(u33Band.detail) <= 600 && newlinesOf(u33Band.detail) <= 12 && u33Band.detail === u33RequiredBodyOf(u33Band.detail) ? "" : "（实测：" + show({ bodyCp: u33BandBody, cp: codePointsOf(u33Band?.detail), nl: newlinesOf(u33Band?.detail), note: u33HasCropNote(u33Band?.detail) }) + "）"),
+	typeof u33Band?.detail === "string" && u33BandBody <= 600 && codePointsOf(u33Band.detail) === u33BandBody && u33Band.detail === u33RequiredBodyOf(u33Band.detail) && !u33HasCropNote(u33Band.detail) && codePointsOf(u33Band.detail) <= 600 && newlinesOf(u33Band.detail) <= 12 && !u33Band.detail.includes("已裁剪至"));
 
-// (ii) **带内夹具**：必备 body ∈ (588, 600] —— 父侧实测的那一具（39 字团队名 ＋ 8 会话 roles=a..h ＋
-// 200 字 task= ＋ 15 字 preset= ＋ 300 字 model= ＋ 长 cwd ＋ 12 字协调者 id ⇒ **body 592**）。
-// 这一档**必然**超线（600 − 588 = 12 的余量装不下 21 码点的全档）⇒ 只许超 ≤ 12 码点，且**必须**
-// 带标注，且**不得**出现「已裁剪至 600 码点」这类自证矛盾的句子。
+// (ii) **第二具中间档夹具**（改前 body 592 ⇒ 交付 634 ＝ body ＋ 全档标注，超线 34 ✗）：裁定 A 压缩之后
+// body 是 **506**，交付同样**逐字**等于它，两个预算都不破。这一具与上一具的区别只在 `model=` 的取值
+// 长度（30 vs 300 码点，都封顶到 40）⇒ 两具一起钉住「可变字段封顶 + 逐字交付」这条组合。
 const u33EdgeLine = "n=8 team=" + U33_LONG_TEAM + " roles=a,b,c,d,e,f,g,h task=" + "z".repeat(200) + " preset=" + "p".repeat(15) + " model=" + "m".repeat(300);
 const u33EdgeEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: LONG_CWD });
 await u33EdgeEnv.run(u33EdgeLine);
 const u33Edge = askedQuestion(u33EdgeEnv);
 const u33EdgeBody = codePointsOf(u33RequiredBodyOf(u33Edge?.detail));
-check("U33 (ii) 带内夹具（body ∈ (588, 600]）: 交付 ≤ **必备 body ＋ 12**（最小档 11 ＋ 1 换行）且**标注在场**、且**不含**「已裁剪至 600 码点」这类自证矛盾的句子"
-	+ (typeof u33Edge?.detail === "string" && u33EdgeBody > 588 && u33EdgeBody <= 600 && codePointsOf(u33Edge.detail) <= u33EdgeBody + 12 ? "" : "（实测：" + show({ bodyCp: u33EdgeBody, cp: codePointsOf(u33Edge?.detail), nl: newlinesOf(u33Edge?.detail), note: u33HasCropNote(u33Edge?.detail), contradictory: typeof u33Edge?.detail === "string" && u33Edge.detail.includes("已裁剪至") }) + "）"),
-	typeof u33Edge?.detail === "string" && u33EdgeBody > 588 && u33EdgeBody <= 600 && codePointsOf(u33Edge.detail) <= u33EdgeBody + 12 && newlinesOf(u33Edge.detail) <= 12 && u33HasCropNote(u33Edge.detail) && u33Edge.detail.includes(u33MinimalNote(1)) && !u33Edge.detail.includes("已裁剪至"));
+check("U33 (ii) 第二具中间档夹具: 交付 `detail` **逐字等于必备 body**（那一具改前是 body ＋ 标注 = 634 超线 ✗）且 ≤ 600 码点 / ≤ 12 换行、不含「已裁剪至 600 码点」这类自证矛盾的句子"
+	+ (typeof u33Edge?.detail === "string" && codePointsOf(u33Edge.detail) <= 600 && newlinesOf(u33Edge.detail) <= 12 && u33Edge.detail === u33RequiredBodyOf(u33Edge.detail) ? "" : "（实测：" + show({ bodyCp: u33EdgeBody, cp: codePointsOf(u33Edge?.detail), nl: newlinesOf(u33Edge?.detail), note: u33HasCropNote(u33Edge?.detail), contradictory: typeof u33Edge?.detail === "string" && u33Edge.detail.includes("已裁剪至") }) + "）"),
+	typeof u33Edge?.detail === "string" && u33EdgeBody <= 600 && codePointsOf(u33Edge.detail) === u33EdgeBody && u33Edge.detail === u33RequiredBodyOf(u33Edge.detail) && !u33HasCropNote(u33Edge.detail) && codePointsOf(u33Edge.detail) <= 600 && newlinesOf(u33Edge.detail) <= 12 && !u33Edge.detail.includes("已裁剪至"));
 
-// (iii) **机制一夹具**：必备 body > 600（父侧实测最坏 ⇒ **body 693**）：39 字团队名 ＋ 8 个 8 码点
-// 角色名（其中 3 个**已登记**，触发「（已登记，跳过）」后缀）＋ 3000 字正文 ＋ 300 字 model= ＋
-// 60 字 preset= ＋ 长 cwd ＋ **取满 28 码点**的协调者 id。必备块**永不裁剪** ⇒ 这一档必然超线，
-// 但**标注仍须在场**、且交付 ≤ body ＋ 12（标注那一半**不许**成为第二个破约者）—— 这是设计档
-// §10.2.8.4 残余行「第一机制」的如实标注，不是本批要「修好」的东西。
+// (iii) **机制一夹具**：必备 body > 600（改前 693 ⇒ 交付 705；裁定 A 压缩后 **607**，交付**逐字**等于它）。
+// 39 字团队名 ＋ 8 个 8 码点角色名（其中 3 个**已登记**，触发「（已登记，跳过）」后缀）＋ 3000 字正文 ＋
+// 300 字 model= ＋ 60 字 preset= ＋ 长 cwd ＋ **取满 28 码点**的协调者 id。必备块**永不裁剪** ⇒ 这一档
+// 仍必然超线，而**没有可裁的段**可省 ⇒ 交付就是必备 body 本身（既没有「标注成为第二个破约者」这种事，
+// 也没有静默丢字）。这是设计档 §10.2.8.4 残余行「第一机制」的如实读数，不是本批要「修好」的东西。
 const U33_MECH1_ROLES = ["aaaaaaaa", "bbbbbbbb", "cccccccc", "dddddddd", "eeeeeeee", "ffffffff", "gggggggg", "hhhhhhhh"];
 const U33_MECH1_COORD = "session-" + "c".repeat(20);
 const U33_MECH1_SEATED = U33_MECH1_ROLES.slice(0, 3);
@@ -5306,9 +5362,9 @@ const u33Mech1Env = teamSessionEnv({
 await u33Mech1Env.run("n=8 team=" + U33_LONG_TEAM + " roles=" + U33_MECH1_ROLES.join(",") + " task=" + "x".repeat(3000) + " preset=" + "p".repeat(60) + " model=" + "m".repeat(300), u33Mech1Agent);
 const u33Mech1 = askedQuestion(u33Mech1Env);
 const u33Mech1Body = codePointsOf(u33RequiredBodyOf(u33Mech1?.detail));
-check("U33 (iii) 机制一夹具（必备 body > 600）: 必备块永不裁剪 ⇒ 这一档**必然**超线，但**标注仍须在场**、且交付 ≤ **必备 body ＋ 12**（「标注永不是首个破约者」在机制一里同样成立；超额只能由不可裁的必备 body 引起）"
-	+ (typeof u33Mech1?.detail === "string" && u33Mech1Body > 600 && codePointsOf(u33Mech1.detail) <= u33Mech1Body + 12 ? "" : "（实测：" + show({ bodyCp: u33Mech1Body, cp: codePointsOf(u33Mech1?.detail), nl: newlinesOf(u33Mech1?.detail), note: u33HasCropNote(u33Mech1?.detail) }) + "）"),
-	typeof u33Mech1?.detail === "string" && u33Mech1Body > 600 && codePointsOf(u33Mech1.detail) <= u33Mech1Body + 12 && newlinesOf(u33Mech1.detail) <= 12 && u33HasCropNote(u33Mech1.detail) && u33Mech1.detail.includes(u33MinimalNote(1)) && !u33Mech1.detail.includes("已裁剪至"));
+check("U33 (iii) 机制一夹具（必备 body > 600）: 必备块永不裁剪 ⇒ 这一档**必然**超线，而交付**逐字等于必备 body**（没有可裁的段 ⇒ 不裁剪、不追加标注；超额只能由不可裁的必备块引起）"
+	+ (typeof u33Mech1?.detail === "string" && u33Mech1Body > 600 && u33Mech1.detail === u33RequiredBodyOf(u33Mech1.detail) ? "" : "（实测：" + show({ bodyCp: u33Mech1Body, cp: codePointsOf(u33Mech1?.detail), nl: newlinesOf(u33Mech1?.detail), note: u33HasCropNote(u33Mech1?.detail) }) + "）"),
+	typeof u33Mech1?.detail === "string" && u33Mech1Body > 600 && codePointsOf(u33Mech1.detail) === u33Mech1Body && u33Mech1.detail === u33RequiredBodyOf(u33Mech1.detail) && !u33HasCropNote(u33Mech1.detail) && !u33Mech1.detail.includes("已裁剪至"));
 check("U33 (iii) 机制一的成因可读: 该夹具的 8 个角色里 3 个**已登记**（「（已登记，跳过）」后缀）且必登记的必备块一字不少 —— 超额的成因是**必备块自超**，不是标注；这一条把「跳过」后缀与必备披露连带钉住"
 	+ (typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("（已登记，跳过）") && u33Mech1.detail.includes("3 个角色已登记，跳过") && u33Mech1.detail.includes("将创建 5 个 worker 根会话") && u33Mech1.detail.includes("共 8 个") ? "" : "（实测：" + show({ skipped: typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("3 个角色已登记，跳过"), creating: typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("将创建 5 个 worker 根会话") }) + "）"),
 	typeof u33Mech1?.detail === "string" && u33Mech1.detail.includes("（已登记，跳过）") && u33Mech1.detail.includes("3 个角色已登记，跳过") && u33Mech1.detail.includes("将创建 5 个 worker 根会话") && u33Mech1.detail.includes("共 8 个"));
@@ -5357,12 +5413,14 @@ check("U30 默认值第 4 条（措辞同步）: 确认框与完成回报都如�
 // 否则同一张框一面说「不投启动任务」、一面说「followup 驱动一次」，被读成「已经派活了」。
 // 判据落在**成本行本身**（从框里按行取出来再读），且**两侧互为对照**：无任务支不得出现「followup 驱动一次」，
 // 有任务支必须保留它 —— 否则「把半句抹掉」也能让无任务支变绿，那是把披露改软而不是改准。
-/** 从确认框正文里取出「成本口径（保守）」那一行（取不到 ⇒ undefined，交给断言判假而不是抛错）。 */
-const costLineOf = (text) => (typeof text === "string" ? text.split("\n").find((line) => line.startsWith("成本口径（保守）")) : undefined);
+/** 从确认框正文里取出「成本」那一行（取不到 ⇒ undefined，交给断言判假而不是抛错）。裁定 A 之后这
+ * 一行还**并入了信任授予**（同一行两件事实），所以它现在比旧文案长 —— 判据仍是「这一行按同一支写」
+ * 与「它确实**是**一行」（下面两具互为对照：无任务支 0 次驱动 / 有任务支 followup 驱动一次）。 */
+const costLineOf = (text) => (typeof text === "string" ? text.split("\n").find((line) => line.startsWith("成本：")) : undefined);
 const noTaskDetail = noTaskEnv.uq.requests[0]?.questions?.[0]?.detail;
 const noTaskCostLine = costLineOf(noTaskDetail);
 const taskCostLine = costLineOf(u30Env.uq.requests[0]?.questions?.[0]?.detail);
-check("U30 默认值第 4 条（措辞同步 · 成本行）: 「成本口径（保守）」那一行按同一支写 —— 无任务支写 0 次驱动 / 不投启动任务、**不得**再出现「followup 驱动一次」，有任务支保留原意（两侧都咬，抹掉半句不算修），两个预算仍不破"
+check("U30 默认值第 4 条（措辞同步 · 成本行）: 「成本」那一行按同一支写 —— 无任务支写 0 次驱动 / 不投启动任务、**不得**再出现「followup 驱动一次」，有任务支保留原意（两侧都咬，抹掉半句不算修），两个预算仍不破"
 	+ (noTaskCostLine === undefined || taskCostLine === undefined || noTaskCostLine.includes("followup") || noTaskCostLine.includes("0 次驱动") === false || !taskCostLine.includes("followup 驱动一次") ? "（实测：" + show({ noTaskCostLine, taskCostLine, cp: codePointsOf(noTaskDetail), nl: newlinesOf(noTaskDetail) }) + "）" : ""),
 	noTaskCostLine !== undefined && noTaskCostLine.includes("0 次驱动") && noTaskCostLine.includes("不投启动任务") && !noTaskCostLine.includes("followup") && taskCostLine !== undefined && taskCostLine.includes("followup 驱动一次") && codePointsOf(noTaskDetail) <= 600 && newlinesOf(noTaskDetail) <= 12);
 
@@ -5612,11 +5670,24 @@ const refuseRenameEnv = teamSessionEnv({ askScript: ["创建"], sessionTitleOpti
 const refuseRenameOut = await refuseRenameEnv.run("n=1 team=defect4 roles=worker-a task=验降级仍驱动"); // task= 是 2026-09-22 加的：无正文无 task= 的行不再驱动（见上文 ⚠ 说明）
 check("DEFECT-4 ② rename 抛错 ⇒ 同样只降级: 恰一行 warn/会话（点名 rename failed 与后果），会话照建照驱动、批次仍报成功（异常不许从呈现面漏出去炸掉建队）", refuseRenameEnv.creates.length === 1 && refuseRenameEnv.sessionTitle.renames.length === 0 && refuseRenameEnv.created.every((item) => item.calls.followedup.length === 1) && sessionTitleRenameWarns(refuseRenameEnv).length === 1 && sessionTitleRenameWarns(refuseRenameEnv)[0].includes("工作区名") && refuseRenameOut.kind === "success");
 // 口径说明（任务第 5 条）：确认框与回执都要说明**设了什么标题**、用户想改随时可改。
+//
+// **2026-09-22 裁定 A 把这条判据搬家（移动，不是删除，强度不降）**：那一整段「- 会话标题：…」自述
+// 段整段移出了框体，改由**完成回报**承载 ⇒ 同一读数（逐会话、取自 `rename` 的返回值）、同一句话
+// （「想改随时在壳里重命名」）与同一条解释（「不再…显示为工作区名」）现在落在 `command/done` 的完成
+// 清单里。**配对方式不变**：按每个会话的 title 读回它的 role，再要求回执行里出现「<role> → <title>」，
+// 所以「两个会话被命名成同一个常量」这种空锁照样红；另加一条**反向锁**：框体 detail 里不再有
+// 「会话标题」段（移走这件事本身是可检的，不是靠不写断言默认的）。
 const titleTextEnv = teamSessionEnv({ askScript: ["创建"] });
 const titleTextOut = await titleTextEnv.run("n=2 team=title-dialog roles=worker-a,worker-b");
 const titleTextBody = titleTextEnv.uq.requests[0]?.questions[0]?.detail ?? "";
-const titleTextApplied = sessionTitleOf(titleTextEnv).map((row) => row.title);
-check(`DEFECT-4 ② 确认框说明设了什么标题: 每个新会话逐行写出将被设成的标题（与真正交给 rename 的那一份是同一个读数），并写明「想改随时在壳里重命名」${titleTextApplied.every((title) => typeof title === "string" && titleTextBody.includes(`（标题：${title}）`)) ? "" : `（实测：${show({ titleTextApplied, titleTextBody })}）`}`, titleTextApplied.length === 2 && titleTextBody.includes("（标题：title-dialog · worker-a）") && titleTextBody.includes("（标题：title-dialog · worker-b）") && titleTextBody.includes("想改随时在壳里重命名") && titleTextBody.includes("工作区名"));
+const titleTextRows = sessionTitleOf(titleTextEnv);
+const titleTextLine = typeof titleTextOut?.text === "string" ? titleTextOut.text.split("\n").find((line) => line.startsWith("- 标题（DEFECT-4）：")) : undefined;
+const titleTextPairs = titleTextRows.map((row) => `${row.id === plannedId(titleTextEnv, "title-dialog", "worker-a") ? "worker-a" : "worker-b"} → ${row.title}`);
+check(`DEFECT-4 ② 完成回报说明设了什么标题（裁定 A：这一段已从框体移到完成回报，**强度不降**）: 每个新会话逐行写出**真正设成**的标题（与交给 rename 的那一份是同一个读数），并写明「想改随时在壳里重命名」与「不再全部显示为工作区名」${titleTextPairs.length === 2 && titleTextPairs.every((pair) => typeof titleTextLine === "string" && titleTextLine.includes(pair)) ? "" : `（实测：${show({ titleTextPairs, titleTextLine })}）`}`,
+	titleTextRows.length === 2 && typeof titleTextLine === "string" && titleTextPairs.every((pair) => titleTextLine.includes(pair))
+		&& titleTextLine.includes("worker-a → title-dialog · worker-a") && titleTextLine.includes("worker-b → title-dialog · worker-b")
+		&& titleTextLine.includes("想改随时在壳里重命名") && titleTextLine.includes("工作区名")
+		&& !titleTextBody.includes("会话标题") && !titleTextBody.includes("想改随时在壳里重命名"));
 check("DEFECT-4 ② 回执说明设了什么标题: 完成清单逐会话列出**真正设成**的标题，并说明可随时改（不再让用户自己去侧边栏发现它们全同名）", titleTextOut.kind === "success" && titleTextOut.text.includes("worker-a → title-dialog · worker-a") && titleTextOut.text.includes("worker-b → title-dialog · worker-b") && titleTextOut.text.includes("想改随时"));
 // 这条锁住「回执是**读数**而不是复述」：标题取自 `rename` 的返回值，而不是拿 team/role
 // 重算一遍。rename 抛错时回执必须如实写「未设标题」——若改成重算，它就会谎报一个标题，
@@ -5661,7 +5732,24 @@ const dialogPlan = (model, provider) => ({ team: "defect3-dialog", creating: [{ 
 const dialogNoRoute = teamSessionDialogText(dialogPlan(undefined, undefined), TEAM_WS, "session-self");
 const dialogHalfRoute = teamSessionDialogText(dialogPlan("deepseek-v4", undefined), TEAM_WS, "session-self");
 const dialogFullRoute = teamSessionDialogText(dialogPlan("deepseek-v4", "deepseek"), TEAM_WS, "session-self");
-check("裁定 2 ②: 批量确认框的模型行三种形状都如实——两侧都没给 / 只给一半（**点名缺的是哪一半**）/ 两侧都给（原样列出那一对、且不提缺省解析，因为那条路根本不问服务）；「（本会话默认）」那种被真机推翻的说法不再出现", !dialogNoRoute.includes("本会话默认") && dialogNoRoute.includes("两半都解析并带上宿主缺省模型选择") && dialogHalfRoute.includes("缺的 provider 那一半") && dialogHalfRoute.includes("model=deepseek-v4") && dialogFullRoute.includes("model=deepseek-v4（provider=deepseek）") && !dialogFullRoute.includes("宿主缺省模型选择"));
+// 裁定 A 收紧措辞之后，这条判据改成**按模型槽**读（`- 模型/预设：` 那一行），比原来读整串更严：
+// 同一行里还写着 `preset=宿主缺省`，整串级的「不含宿主缺省」断言会被它误伤，按槽读就不会。三种形状
+// 的判据面一字未撤：两侧都没给 ⇒ 只写「宿主缺省」；只给一半 ⇒ **点名缺的是哪一半**；两侧都给 ⇒
+// 原样列出那一对、且**模型槽里一个字都不提缺省解析**（那条路根本不问服务）。
+const modelSlotOf = (detail) => (typeof detail === "string" ? detail.split("\n").find((line) => line.startsWith("- 模型/预设：")) : undefined);
+/** 模型槽里**属于模型的那一段** —— 同一行还挂着 ` · preset=…`，而 preset 的缺省**本来就**写作
+ * 「宿主缺省」（DEFECT-1），所以「两侧都给时不提缺省解析」必须只在模型那一段上判。 */
+const modelValueOf = (slot) => (typeof slot === "string" ? slot.replace(/^-\s*模型\/预设：/u, "").split(" · preset=")[0] : undefined);
+const dialogNoModelSlot = modelSlotOf(dialogNoRoute);
+const dialogHalfModelSlot = modelSlotOf(dialogHalfRoute);
+const dialogFullModelSlot = modelSlotOf(dialogFullRoute);
+check("裁定 2 ②: 批量确认框的模型行三种形状都如实——两侧都没给（只写「宿主缺省」，那句被裁定 A 压掉的教学式说明不再出现）/ 只给一半（**点名缺的是哪一半**）/ 两侧都给（原样列出那一对、且模型槽里不提缺省解析，因为那条路根本不问服务）；「（本会话默认）」那种被真机推翻的说法不再出现"
+	+ (typeof dialogNoModelSlot === "string" && dialogNoModelSlot.includes("- 模型/预设：宿主缺省") && typeof dialogHalfModelSlot === "string" && dialogHalfModelSlot.includes("model=deepseek-v4（provider 取宿主缺省）") && typeof dialogFullModelSlot === "string" && dialogFullModelSlot.includes("- 模型/预设：model=deepseek-v4（provider=deepseek）") ? "" : "（实测：" + show({ noRoute: dialogNoModelSlot, halfRoute: dialogHalfModelSlot, fullRoute: dialogFullModelSlot }) + "）"),
+	!dialogNoRoute.includes("本会话默认") && !dialogNoRoute.includes("两半都解析并带上宿主缺省模型选择")
+		&& typeof dialogNoModelSlot === "string" && dialogNoModelSlot.includes("- 模型/预设：宿主缺省") && !dialogNoModelSlot.includes("本会话默认")
+		&& typeof dialogHalfModelSlot === "string" && dialogHalfModelSlot.includes("model=deepseek-v4（provider 取宿主缺省）")
+		&& typeof dialogFullModelSlot === "string" && modelValueOf(dialogFullModelSlot) === "model=deepseek-v4（provider=deepseek）" && modelValueOf(dialogFullModelSlot) === dialogFullModelSlot.replace(/^-[^：]*：/u, "").split(" · preset=")[0]
+		&& !dialogFullRoute.includes("两半都解析并带上宿主缺省模型选择") && !dialogHalfRoute.includes("两半都解析并带上宿主缺省模型选择"));
 const autoDialogBody = autoEnv.uq.requests[0]?.questions?.[0]?.question ?? "";
 check("裁定 2 ③a: 自动换届确认框的模型行不再说「本路径不指定 provider/model」（实现现在会解析并带上宿主缺省的模型选择），并点名不解析的后果（真机缺陷 #3 的 `{{model}}`）", autoDialogBody.includes("解析并带上宿主缺省模型选择") && !autoDialogBody.includes("本路径不指定 provider/model") && autoDialogBody.includes("真机缺陷 #3") && autoDialogBody.includes("{{model}}"));
 check("裁定 2 ③a 反锁: 那句已不成立的话在 lib/index.js 里**一处都不剩**（源码级：它只可能从这两处对话框文案回来）", !HANDOFF_SOURCE.includes("本路径不指定 provider/model"));
