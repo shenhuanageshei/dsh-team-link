@@ -5325,6 +5325,14 @@ check("U33 必备披露逐件点名（数量 / 模型 / cwd / 成本 / 信任授
 /** FAIL 时必须看得见读数（本文件既有惯例：红相要说清自己有多大、错在哪一格）。**声明位置在这一块**
  * 而不是靠近用它的那几组夹具：`probe` 只在**条件为假**时才被求值 ⇒ 在旧实现上它会在**很靠前**的
  * 通道 4 那几条里第一次被走到，声明放在后面就是 TDZ 崩（本批第二次踩同类坑，见 verification-log）。 */
+/** §10.2.8.9 ① 的注入缝**成对使用**（评审 round-1 🔵#7）：注入 → 跑 → **finally 还原**。
+ * 不这么做的话，一条断言在注入窗口内抛错，注入会泄漏到后面所有夹具（整轮墙钟被钉死，红相还会骗人）。 */
+const withInjectedNow = async (now, fn) => {
+	const seam = typeof __testing.teamSessionInjectNow === "function" ? __testing.teamSessionInjectNow : undefined;
+	if (seam === undefined) return fn();
+	seam(now);
+	try { return await fn(); } finally { seam(undefined); }
+};
 const probe = (label, reading) => { console.log(`     实测读数 ${label} ${show(reading)}`); return false; };
 const RELEASE_NOTES = __testing.TEAM_SESSION_RELEASE_NOTES ?? {};
 const RELEASE_DISCLOSURE = __testing.TEAM_SESSION_RELEASE_DISCLOSURE ?? "";
@@ -5356,9 +5364,7 @@ const u33cEnv = teamSessionEnv({ askScript: ["取消"], selfCwd: U33C_WS });
 // 不靠墙钟），期望逐字就是带日期的默认名。U33c 在 U35 的注入助手之前声明，所以这里直接经守卫取缝。
 const U33C_DAY = new Date(2026, 8, 22, 12, 0, 0, 0).getTime();
 const U33C_DEFAULT_TEAM = "dsh-session-link-pro-20260922";
-if (typeof __testing.teamSessionInjectNow === "function") __testing.teamSessionInjectNow(U33C_DAY);
-const u33cOut = await u33cEnv.run("你是新的主管会话");
-if (typeof __testing.teamSessionInjectNow === "function") __testing.teamSessionInjectNow(undefined);
+const u33cOut = await withInjectedNow(U33C_DAY, () => u33cEnv.run("你是新的主管会话"));
 const u33c = askedQuestion(u33cEnv);
 const u33cCp = codePointsOf(u33c?.detail);
 const u33cLines = newlinesOf(u33c?.detail) + 1;
@@ -5372,19 +5378,18 @@ check(`U33c 参照夹具（/team_session 你是新的主管会话 ＋ 12 码点�
 	+ (u33cOk ? "" : "（实测：" + show({ cp: u33cCp, lines: u33cLines, detail: u33c?.detail, question: u33c?.question, out: u33cOut.text }) + "）"),
 	u33cOk);
 // 纯函数读数（同一条 `teamSessionDialogText`，不经 handler）：参照 B（**28 码点** id —— 真机那次取满
-// 的协调者 id 长度）与**释放并认领**披露变体 E（28 码点 id ＋ 带日期团队名 ＋ 12 码点披露）。
+// 的协调者 id 长度）与**释放并认领**披露变体 E（28 码点 id ＋ 带日期团队名 ＋ 那句披露）。
+// **披露句的码点数（评审 round-1 🔵#2）**：设计档 §10.2.8.9 ② 原写「12 码点」，字面量逐字数 = **11**
+// ⇒ 判据按字面量钉 11、以 12 为口径上界（标签与注释一并对齐，见设计档勘误行）。
 // 走纯函数而不是再造两具 handler 夹具：这一条量的是**交付串的预算**，行为面（谁被释放、披露是否真
 // 出现）由下面的 U36/U37 端到端夹具咬住 —— 两面各咬自己那一面，不互相冒充。
-// **披露句的码点数**：设计档 §10.2.8.9 ② 写「**12 码点**短句 `（将释放并接管原团队）`」，可这个
-// 字面量逐字数是 **11**（（将释放并接管原团队）= 11）。判据按**字面量**钉 11，并以设计档的 12 作为
-// 上界口径（≤12 仍然成立）—— 计数笔误记在交付报告里，不靠改字面量去凑数字。
 const U33C_ID28 = "team-link-night-shift-coo-12";
 const u33cPlan = (team) => teamSessionPlan({ ...readTeamSessionCommand("你是新的主管会话").value, team }, []).value;
 const u33cB = teamSessionDialogText(u33cPlan(U33C_DEFAULT_TEAM), U33C_WS, U33C_ID28, null);
 const u33cE = teamSessionDialogText(u33cPlan(U33C_DEFAULT_TEAM), U33C_WS, U33C_ID28, { reason: "archived", incumbent: "session-dead" });
 /** 披露是**折叠**进「确认则」那一行：E 必须逐字等于 B 在 pairs 之后插入披露句（差一个都不是折叠）。 */
 const u33cFolded = u33cB.replace("登记 roster 与 pairs；取消则", "登记 roster 与 pairs" + RELEASE_DISCLOSURE + "；取消则");
-check("U33c 参照 B（28 码点 id）与释放披露变体 E（28 码点 id ＋ 带日期团队名 ＋ 12 码点披露）: 两具都 ≤6 行且 ≤390 码点、披露句逐字在场且**恰 12 码点**、披露之外的正文与 B 逐字同一（折叠进「确认则」一行，不是新起一段 —— 新起一段会破「≤6 行」）"
+check("U33c 参照 B（28 码点 id）与释放披露变体 E（28 码点 id ＋ 带日期团队名 ＋ 那句披露）: 两具都 ≤6 行且 ≤390 码点、披露句逐字在场且**恰 11 码点**（设计档原写 12，勘误见 §10.2.8.9 ②）、披露之外的正文与 B 逐字同一（折叠进「确认则」一行，不是新起一段 —— 新起一段会破「≤6 行」）"
 	+ (codePointsOf(u33cB) <= U33C_MAX_POINTS && codePointsOf(u33cE) <= U33C_MAX_POINTS && newlinesOf(u33cB) <= 5 && newlinesOf(u33cE) <= 5 && u33cE === u33cFolded ? "" : "（实测：" + show({ id28: codePointsOf(U33C_ID28), cpB: codePointsOf(u33cB), nlB: newlinesOf(u33cB), cpE: codePointsOf(u33cE), nlE: newlinesOf(u33cE), disclosure: codePointsOf(RELEASE_DISCLOSURE), folded: u33cE === u33cFolded }) + "）"),
 	codePointsOf(U33C_ID28) === 28 && codePointsOf(u33cB) <= U33C_MAX_POINTS && newlinesOf(u33cB) <= 5 && codePointsOf(u33cE) <= U33C_MAX_POINTS && newlinesOf(u33cE) <= 5 && codePointsOf(RELEASE_DISCLOSURE) === 11 && u33cE.includes(RELEASE_DISCLOSURE) && u33cE === u33cFolded);
 // 裁定 A 的**删除面**逐条点名（与上一条的「保留面」互为对照）：用户点名的几类废话与整段自述段在框里
@@ -5485,7 +5490,8 @@ const u30Parsed = readTeamSessionCommand(U30_BODY);
 check("U30 文法: /team_session 后面直接写正文即成立 —— roles 为空、正文整段进 task（这就是方案 A 的核心语义：正文 = 启动任务，与 task= 同一个槽）", u30Parsed.error === undefined && u30Parsed.value.roles === undefined && u30Parsed.value.n === undefined && u30Parsed.value.team === undefined && u30Parsed.value.task === U30_BODY && u30Parsed.value.bare.length === 0);
 // §10.2.8.9 ①（U35）：默认名带日期。夹具**注入「当天」**（teamSessionInjectNow 缝 / 显式 now），
 // 不靠墙钟；缝在旧实现上不存在 ⇒ 经守卫取用，缺缝时断言自己红、不把套件打崩（Y7 纪律）。
-const u35InjectNow = (now) => { if (typeof __testing.teamSessionInjectNow === "function") __testing.teamSessionInjectNow(now); };
+// 注入**一律走** withInjectedNow（见上）：这里不再留一个「手动 inject / 手动还原」的助手 ——
+// 那种写法正是评审 round-1 🔵#7 指出的泄漏面。
 /** 本地时区某天正午的时间戳 —— 注入用的「当天」。 */
 const u35Noon = (year, month, day) => new Date(year, month - 1, day, 12, 0, 0, 0).getTime();
 const U35_DAY1 = u35Noon(2026, 9, 22);
@@ -5494,9 +5500,7 @@ const U35_STAMP1 = "20260922";
 const U35_STAMP2 = "20260923";
 const U30_DEFAULT_TEAM = path.basename(TEAM_WS) + "-" + U35_STAMP1;
 const u30Env = teamSessionEnv({ askScript: ["创建"] });
-u35InjectNow(U35_DAY1);
-const u30Out = await u30Env.run(U30_BODY);
-u35InjectNow(undefined);
+const u30Out = await withInjectedNow(U35_DAY1, () => u30Env.run(U30_BODY));
 check("U30 默认值: 裸正文那条行建出**恰 1 个** worker-1，team 取调用会话工作区目录名＋当天日期（§10.2.8.9 ①：<basename>-YYYYMMDD，注入的「当天」）、n 省略即 1", u30Out.kind === "success" && u30Env.creates.length === 1 && u30Env.creates[0].sessionId.startsWith("team-link-" + U30_DEFAULT_TEAM + "-worker-1-") && u30Env.store().length === 1 && u30Env.store()[0].name === U30_DEFAULT_TEAM && u30Env.store()[0].roles.map((entry) => entry.role).sort().join(",") === "coordinator,worker-1");
 check("U30 默认值: 目录名不合 [a-z0-9-]+ 时回退 default-<日期> —— 用户没有**敲**这个值，所以不为一个目录名拒绝整条命令（而它是 team 缺省值的唯一可能失败处；三支都注入「当天」，不靠墙钟）", typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(path.join(TEAM_TMP, "工作 区"), U35_DAY1) === "default-" + U35_STAMP1 && __testing.teamSessionDefaultTeam(TEAM_WS, U35_DAY1) === U30_DEFAULT_TEAM && __testing.teamSessionDefaultTeam("relative/dir", U35_DAY1) === "dir-" + U35_STAMP1);
 
@@ -5505,18 +5509,14 @@ check("U35 格式: team 省略 ⇒ <basename(cwd)>-YYYYMMDD（注入「当天」
 check("U35 同日幂等（纯函数，注入「当天」不靠墙钟）: 同一本地日内两个相距 23:59:59 的时刻 ⇒ **逐字同一**默认名（同一天怎么发都是同一个团队）；跨过午夜 00:00:00 ⇒ 名字变（自然成新团队）", typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(TEAM_WS, new Date(2026, 8, 22, 0, 0, 0, 0).getTime()) === __testing.teamSessionDefaultTeam(TEAM_WS, new Date(2026, 8, 22, 23, 59, 59, 999).getTime()) && __testing.teamSessionDefaultTeam(TEAM_WS, new Date(2026, 8, 23, 0, 0, 0, 0).getTime()) !== __testing.teamSessionDefaultTeam(TEAM_WS, new Date(2026, 8, 22, 23, 59, 59, 999).getTime()));
 // 命令级三连：同日两条 ⇒ 同一团队且第二条零创建（§10.2.6 幂等一字不动）；注入次日 ⇒ 新团队。
 const u35Env = teamSessionEnv({ askScript: ["创建", "创建"] });
-u35InjectNow(U35_DAY1);
-const u35Day1First = await u35Env.run("同日第一条：默认名要带日期");
-const u35Day1Second = await u35Env.run("同日第二条：还该指向同一个团队");
+const [u35Day1First, u35Day1Second] = await withInjectedNow(U35_DAY1, async () => [await u35Env.run("同日第一条：默认名要带日期"), await u35Env.run("同日第二条：还该指向同一个团队")]);
 // 这条必须**在注入次日之前**读 store/creates/requests：它断言的是「同日两条之后」那一刻的状态
 // （§10.2.6 命令级幂等），放在跨日那条之后读就会看见跨日命令新建的第二个团队 —— 夹具读态的时点错位，
 // 不是被测行为的红。
 check("U35 同日幂等（命令级，注入「当天」）: 同日两条同参命令 ⇒ store 里**恰一个**团队 <basename>-20260922、第二条零创建零对话框（默认名带日期之后 §10.2.6 的幂等一字未动）"
 	+ (u35Day1First.kind === "success" && u35Day1Second.kind === "success" && u35Day1Second.text.includes("无需创建") && u35Env.uq.requests.length === 1 && u35Env.store().length === 1 && u35Env.store()[0].name === U30_DEFAULT_TEAM && u35Env.creates.length === 1 ? "" : "（实测：" + show({ firstKind: u35Day1First.kind, secondKind: u35Day1Second.kind, secondText: u35Day1Second.text, requests: u35Env.uq.requests.length, store: u35Env.store().map((row) => row.name), creates: u35Env.creates.length }) + "）"),
 	u35Day1First.kind === "success" && u35Day1Second.kind === "success" && u35Day1Second.text.includes("无需创建") && u35Env.uq.requests.length === 1 && u35Env.store().length === 1 && u35Env.store()[0].name === U30_DEFAULT_TEAM && u35Env.creates.length === 1);
-u35InjectNow(U35_DAY2);
-const u35Day2 = await u35Env.run("跨日再发同一行：这是新团队");
-u35InjectNow(undefined);
+const u35Day2 = await withInjectedNow(U35_DAY2, () => u35Env.run("跨日再发同一行：这是新团队"));
 check("U35 跨日 ⇒ 新团队（命令级，注入「当天」= 2026-09-23）: 同一条行解析到 <basename>-20260923、store 变成**两个**团队，而第一天那行原样还在 —— 跨日不是「换名覆盖」，是自然另起一队", u35Day2.kind === "success" && u35Env.store().length === 2 && u35Env.store().map((row) => row.name).join(",") === U30_DEFAULT_TEAM + "," + path.basename(TEAM_WS) + "-" + U35_STAMP2 && u35Env.creates.length === 2);
 // 孤立后果（§10.2.8.9 ①，审计 #3，必须显式声明）：无日期的既有团队仍有效，但默认名永不再解析到它、无迁移。
 const u35LegacyEnv = teamSessionEnv({
@@ -5525,9 +5525,7 @@ const u35LegacyEnv = teamSessionEnv({
 		{ role: "coordinator", current: "session-other", pending: null, history: [{ session: "session-other", from: 1_700_000_000_000, until: null }] },
 	] })],
 });
-u35InjectNow(U35_DAY1);
-const u35LegacyOut = await u35LegacyEnv.run("默认名不再落到无日期的旧团队上");
-u35InjectNow(undefined);
+const u35LegacyOut = await withInjectedNow(U35_DAY1, () => u35LegacyEnv.run("默认名不再落到无日期的旧团队上"));
 check("U35 孤立后果声明: 无日期的既有团队（<basename>）**仍完全有效但无迁移** —— 默认名（<basename>-20260922）不再解析到它：同 cwd 的命令建出**第二个**团队，旧那行的现任与角色一字未动（默认名永不再指向它们）"
 	+ (typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(TEAM_WS, U35_DAY1) !== path.basename(TEAM_WS) && u35LegacyOut.kind === "success" && u35LegacyEnv.store().length === 2 && u35LegacyEnv.store()[1].name === U30_DEFAULT_TEAM && u35LegacyEnv.store()[0].name === path.basename(TEAM_WS) && u35LegacyEnv.store()[0].roles[0]?.current === "session-other" && u35LegacyEnv.store()[0].roles.length === 1 && u35LegacyEnv.store()[0].roles[0].role === "coordinator" && u35LegacyEnv.store()[0].roles[0].current === "session-other" ? "" : "（实测：" + show({ kind: u35LegacyOut.kind, text: u35LegacyOut.text, store: u35LegacyEnv.store() }) + "）"),
 	typeof __testing.teamSessionDefaultTeam === "function" && __testing.teamSessionDefaultTeam(TEAM_WS, U35_DAY1) !== path.basename(TEAM_WS) && u35LegacyOut.kind === "success" && u35LegacyEnv.store().length === 2 && u35LegacyEnv.store()[1].name === U30_DEFAULT_TEAM && u35LegacyEnv.store()[0].name === path.basename(TEAM_WS) && u35LegacyEnv.store()[0].roles[0]?.current === "session-other" && u35LegacyEnv.store()[0].roles.length === 1 && u35LegacyEnv.store()[0].roles[0].role === "coordinator" && u35LegacyEnv.store()[0].roles[0].current === "session-other");
@@ -5746,6 +5744,19 @@ check("U36 (h) 触发释放的框体: detail ≤6 行且 ≤390 码点、那句�
 	+ (typeof relHConfirmLine === "string" && relHConfirmLine.includes(RELEASE_DISCLOSURE) ? "" : "（实测：" + show({ cp: codePointsOf(relHDetail), lines: newlinesOf(relHDetail) + 1, confirm: relHConfirmLine }) + "）"),
 	typeof relHDetail === "string" && codePointsOf(relHDetail) <= U33C_MAX_POINTS && newlinesOf(relHDetail) <= 5 && typeof relHConfirmLine === "string" && relHConfirmLine.includes(RELEASE_DISCLOSURE) && relHConfirmLine.endsWith("；取消则零创建、零 pairs。") && !u30Env.uq.requests[0].questions[0].detail.includes(RELEASE_DISCLOSURE));
 
+// --- §10.2.8.9 ② 的**空批角**（评审 round-1 🟡#1）：证据已确证，但本次没有要建/登记的角色 --------
+// 病灶：`release` 这时已经确证，而命令直接走「无需创建」那一支 —— 不说的话，用户会以为接管完成了，
+// 实际现任仍是那个失联旧任。判据：**零写入**（没释放、没认领、没动 pairs）＋ **两处都说明白**
+// （命令输出与调用方回执），并给出可执行的下一步。
+const relEmptyEnv = releaseEnvOf({ archived: [GONE_COORD] });
+const relEmptyOut = await relEmptyEnv.run("n=1 team=night-shift roles=coordinator");
+const relEmptyReceipt = receiptTextOr(relEmptyEnv);
+check("U36 空批角: 现任已确证失联、但本次**没有任何要建/登记的角色** ⇒ 仍然**零写入**（未释放未认领、roster 一字未动、pairs 零条），而**命令输出与回执都必须说出这件事**（不许静默丢弃：那会被读成「接管完成」）"
+	+ (typeof relEmptyOut.text === "string" && relEmptyOut.text.includes("未释放、未认领") && typeof relEmptyReceipt === "string" ? "" : probe("U36 空批角", { out: relEmptyOut.text, receipt: relEmptyReceipt })),
+	relEmptyOut.kind === "success" && relEmptyEnv.uq.requests.length === 0 && relEmptyEnv.creates.length === 0 && relEmptyEnv.pairs().length === 0 && coordOf(relEmptyEnv).current === GONE_COORD && relEmptyEnv.store()[0].roles.length === 1
+	&& relEmptyOut.text.includes("未释放、未认领") && relEmptyOut.text.includes(__testing.TEAM_SESSION_RELEASE_NOTES.archived) && relEmptyOut.text.includes("新角色")
+	&& typeof relEmptyReceipt === "string" && relEmptyReceipt.includes("未释放未认领") && codePointsOf(relEmptyReceipt) <= RECEIPT_MAX);
+
 // --- 变异基线（每条都是「把这一行改坏 ⇒ 这一条当场变红」）------------------------
 // 变异 1（fail-safe 乙 ⇒ 「读不到就释放」）：把 (d) 的 unknown 分支改成放行 ⇒ (d) 那两条当场变红。
 //   证据是一具**服务在、getter 抛错**的团队：那条路上现任是死是活**未知**，放行等于拿「读不到」
@@ -5775,7 +5786,10 @@ const relTocOut = await relTocEnv.run("n=1 team=night-shift roles=worker-a task=
 check("U37 变异基线 3（写时复检 / TOCTOU）: 现任在确认框打开期间**复活** ⇒ 落笔前复检发现 ⇒ 中止且**零 roster 写入**（未释放、未认领、未登记新角色）、**pairs 也不写**（授权基础没了），报告点名原因与出路；已创建的会话照 §10.2.5 保留"
 	+ (relTocOut.text.includes("释放并认领中止（§10.2.8.9 ② 写时复检）") && relTocOut.text.includes("已复活") ? "" : "（实测：" + show({ out: relTocOut.text }) + "）"),
 	(() => {
-		const ok = relTocOut.kind === "error" && relTocOut.text.includes("释放并认领中止（§10.2.8.9 ② 写时复检）") && relTocOut.text.includes("已复活") && relTocEnv.store()[0].roles.length === 1 && coordOf(relTocEnv).current === GONE_COORD && relTocEnv.pairs().length === 0 && relTocEnv.creates.length === 1 && relTocOut.text.includes("未建立（§10.2.8.9 ② 写时复检中止");
+		const tocReceipt = receiptTextOr(relTocEnv);
+		const ok = relTocOut.kind === "error" && relTocOut.text.includes("释放并认领中止（§10.2.8.9 ② 写时复检）") && relTocOut.text.includes("已复活") && relTocEnv.store()[0].roles.length === 1 && coordOf(relTocEnv).current === GONE_COORD && relTocEnv.pairs().length === 0 && relTocEnv.creates.length === 1 && relTocOut.text.includes("未建立（§10.2.8.9 ② 写时复检中止")
+			// 评审 round-1 🔵#5：回执也要点名这一步，不能只说「批量建队未全部成功」。
+			&& typeof tocReceipt === "string" && tocReceipt.includes("释放并认领中止（现任复活 / 证据变化）");
 		return ok || probe("U37 变异 3", { kind: relTocOut.kind, pairs: relTocEnv.pairs(), roles: relTocEnv.store()[0].roles, creates: relTocEnv.creates.length, out: relTocOut.text });
 	})());
 
