@@ -1134,5 +1134,13 @@ cd $d; node host-half.test.mjs; node client-half.test.mjs
 
 **round-3**（只验上表 3 行，不猎新问题）见本文件末尾的续记（如有）。处置后读数：绿相 `994 (failed: 0)`。
 
+### 评审 round-3（`advisor-dsh-23`）—— 收敛
+
+**VERDICT: PASS**：**9 行逐条核实为 Fixed**（round-1 的 🟡#1 ＋ 🔵#2–#7、round-2 的 🔵#8/#9），**无 🔴、无 must-fix 🟡、无新增发现**（round-3 按纪律只验上表，不猎新问题）⇒ **收敛循环结束**（round-1 PASS → round-2 PASS + 2 新 🔵 → round-3 PASS）。
+
+尾部的 `[host-verified] 0/13 citations match current file state` **仍是同一假警报**：我又抽 3 条逐字核对（`lib/index.js:6090` 的 `emptyBatchNote` · `:5972` 的回执 `note` 支 · `host-half.test.mjs:5759` —— 即 **#8 修好后的 `RELEASE_NOTES.archived`**），**全部对上**。两轮合计 `0/29`，成因已记于上一节（裸相对路径按会话工作区解析）。
+
+**收敛后的最终读数**：绿相 `994 (failed: 0)` / `269 (failed: 0)` · 红相（新测试 ＋ `348385a:lib/index.js`）`994 (failed: 33)` · 变异 A `994 (failed: 1)` · B `994 (failed: 2)`（含那条**既有计时器偶发红**）· C `994 (failed: 1)`。
+
 6. **`README.md` 的两处计数已同批更新**（徽章 `966 → 994`、「当前读数」`966 → 994`）—— 本仓「计数与列表同改」：本批**新增了 23 条断言**，因此这两处**必须**动（与上一批「没有变化 ⇒ 没有编辑」相对）。另在「十、测试」下加了一段**用法变化**（空会话里发命令会有回执把会话显出来 ＋ 代价）。
 
