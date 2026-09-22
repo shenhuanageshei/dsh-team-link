@@ -4,7 +4,7 @@
 >
 > 原名 `dsh-session-link-pro`（0.2.4 及之前），**GitHub 仓库已于 2026-09-18 改名为 `dsh-team-link`**（旧地址由 GitHub 自动重定向）。历史会话日志里的旧工具名 `session_link_pro_*` 与消息 id 前缀 `slp-` 保持原样——它们是取证链，不做回写。
 
-[![tests](https://img.shields.io/badge/tests-994%20%2B%20269%20assertions-brightgreen)](#十测试)
+[![tests](https://img.shields.io/badge/tests-995%20%2B%20269%20assertions-brightgreen)](#十测试)
 [![version](https://img.shields.io/badge/version-0.3.8-blue)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
@@ -860,7 +860,7 @@ DSH 默认装配均有。
 
 ## 十、测试
 
-**当前读数（实跑时点，一律取套件自报的那两行）**：`node host-half.test.mjs` → **994**（failed: 0）；`node client-half.test.mjs` → **269**（failed: 0）。
+**当前读数（实跑时点，一律取套件自报的那两行）**：`node host-half.test.mjs` → **995**（failed: 0）；`node client-half.test.mjs` → **269**（failed: 0）。
 
 > **§10.2.8.10 之后的一条用法变化（值得先知道）**：`/team_session` **结算后会给调用方会话投一条短回执**（**成功 / 失败 / 取消三态都算**，一行、≤120 码点）。收益是**在空会话里发命令也能把那个会话从侧边栏「显出来」**——此前它没有回合 ⇒ 隐身；**无任务**建出的 worker 也不再隐身（改投一具「最小唤醒」待命通知）。**代价如实**：每条命令多一个调用方模型回合（**连取消也算一个**），回执是真实消息，调用方上下文会**永久增长**一条 user ＋ 一条 assistant。
 

@@ -5392,6 +5392,25 @@ const u33cFolded = u33cB.replace("登记 roster 与 pairs；取消则", "登记 
 check("U33c 参照 B（28 码点 id）与释放披露变体 E（28 码点 id ＋ 带日期团队名 ＋ 那句披露）: 两具都 ≤6 行且 ≤390 码点、披露句逐字在场且**恰 11 码点**（设计档原写 12，勘误见 §10.2.8.9 ②）、披露之外的正文与 B 逐字同一（折叠进「确认则」一行，不是新起一段 —— 新起一段会破「≤6 行」）"
 	+ (codePointsOf(u33cB) <= U33C_MAX_POINTS && codePointsOf(u33cE) <= U33C_MAX_POINTS && newlinesOf(u33cB) <= 5 && newlinesOf(u33cE) <= 5 && u33cE === u33cFolded ? "" : "（实测：" + show({ id28: codePointsOf(U33C_ID28), cpB: codePointsOf(u33cB), nlB: newlinesOf(u33cB), cpE: codePointsOf(u33cE), nlE: newlinesOf(u33cE), disclosure: codePointsOf(RELEASE_DISCLOSURE), folded: u33cE === u33cFolded }) + "）"),
 	codePointsOf(U33C_ID28) === 28 && codePointsOf(u33cB) <= U33C_MAX_POINTS && newlinesOf(u33cB) <= 5 && codePointsOf(u33cE) <= U33C_MAX_POINTS && newlinesOf(u33cE) <= 5 && codePointsOf(RELEASE_DISCLOSURE) === 11 && u33cE.includes(RELEASE_DISCLOSURE) && u33cE === u33cFolded);
+// 参照 F/G/H/I（**无任务形态** —— 设计档 §10.2.8.10 🟡#7 明确要求「补一具「无任务形态」的框体读数」；
+// 2026-09-22 **真机复验**时才发现这一形态先前根本没有夹具，而真机那次命令恰好落在它上面 ⇒ 实测
+// **399 码点 > 390**。修法不是放宽判据，而是压掉同一张框里的**重复文案**（「- 启动任务：」与
+// 「确认则」两行的括号都写「未给正文/task=」，−18）⇒ 现在 381 ≤ 390。判据（390 / 6 行）一字未动。）
+const u33cNoTaskPlan = teamSessionPlan({ ...readTeamSessionCommand("n=1 roles=b1").value, team: U33C_DEFAULT_TEAM }, []).value;
+const u33cNoTask = (id, release) => teamSessionDialogText(u33cNoTaskPlan, U33C_WS, id, release);
+/** 真机会话 id 的形状（**44 码点**：session- 前缀 ＋ 36 字符 uuid）—— 设计档当初记的「真机 28 码点」
+ * 是错的，而正确性不受影响：id 字段封顶 28 ⇒ 44 与 28 两具**等长**（只是截断的位置不同）。 */
+const U33C_ID44 = "session-" + "a".repeat(36);
+const u33cF = u33cNoTask("session-self", null);
+const u33cG = u33cNoTask(U33C_ID28, null);
+const u33cH = u33cNoTask(U33C_ID44, null);
+const u33cI = u33cNoTask(U33C_ID44, { reason: "gone", incumbent: "session-rm-ghost-20260922" });
+check("U33c 无任务形态（参照 F/G/H/I）: 12 码点 id **354** · 28 码点 id **370** · **真机形状 44 码点 id 也被 id 字段封顶 28 ⇒ 与 28 码点那一具等长**（370）· 同一具 ＋ 释放披露 **381**（真机那一具就是它）⇒ 四具全部 ≤390 码点且 ≤6 行，且披露的边际成本恰好等于那句披露的码点数"
+	+ (codePointsOf(u33cI) === codePointsOf(u33cG) + codePointsOf(RELEASE_DISCLOSURE) && codePointsOf(U33C_ID44) === 44 ? "" : probe("U33c 无任务形态", { id44: codePointsOf(U33C_ID44), F: codePointsOf(u33cF), G: codePointsOf(u33cG), H: codePointsOf(u33cH), I: codePointsOf(u33cI), linesI: newlinesOf(u33cI) + 1 })),
+	[codePointsOf(u33cF), codePointsOf(u33cG), codePointsOf(u33cH), codePointsOf(u33cI)].every((n) => n <= U33C_MAX_POINTS) && [u33cF, u33cG, u33cH, u33cI].every((text) => newlinesOf(text) <= 5)
+	&& codePointsOf(U33C_ID44) === 44 && codePointsOf(u33cH) === codePointsOf(u33cG) && codePointsOf(u33cI) === codePointsOf(u33cG) + codePointsOf(RELEASE_DISCLOSURE)
+	&& !u33cH.includes("a".repeat(28)) && u33cH.includes("（未给正文/task=）") && u33cI.includes(RELEASE_DISCLOSURE) && !u33cG.includes(RELEASE_DISCLOSURE));
+
 // 裁定 A 的**删除面**逐条点名（与上一条的「保留面」互为对照）：用户点名的几类废话与整段自述段在框里
 // **一处都不剩**，而正文那 8 个字仍逐字在「- 启动任务：」那一行上（「只去废话」而不是「去字」）。
 const u33cRemoved = [
@@ -5564,9 +5583,12 @@ check("U30 默认值第 4 条（反转）: `team=t n=2`（既无正文也无 tas
 check("U30 默认值第 4 条（反转 · 唤醒文本三件逐件点名）: ①「本次命令未给任务」②「你已被创建为团队 t 的角色 worker-N」（每个会话说自己那个角色）③「请等待主会话派活」；且**不编任务**（没有「- 任务：」那一行、也不要求它做任何事）"
 	+ (noTaskKickoffs.length === 2 && noTaskKickoffs[0].includes("角色 worker-1") && noTaskKickoffs[1].includes("角色 worker-2") ? "" : "（实测：" + show({ kickoffs: noTaskKickoffs }) + "）"),
 	noTaskKickoffs.length === 2 && noTaskKickoffs.every((text) => text.includes("本次命令未给任务") && text.includes("请等待主会话派活") && text.includes("不含任何任务内容") && !text.includes("- 任务：") && !text.includes("请明确回报")) && noTaskKickoffs[0].includes("角色 worker-1") && noTaskKickoffs[1].includes("角色 worker-2"));
-check("U30 默认值第 4 条（反转 · 措辞同步）: 确认框与完成回报都按**反转后**的那一支写 —— 框里写「投最小唤醒 / 唤醒不含任务」、回报里逐行写「已投最小唤醒（本次未给任务）」，两处都不再出现「不投启动任务」"
-	+ (typeof noTaskEnv.uq.requests[0]?.questions?.[0]?.detail === "string" && noTaskEnv.uq.requests[0].questions[0].detail.includes("- 启动任务：（未给正文/task=，改投最小唤醒）") && noTaskOut.text.includes("已创建 + 已投最小唤醒（本次未给任务）") ? "" : "（实测：" + show({ detail: noTaskEnv.uq.requests[0]?.questions?.[0]?.detail, report: noTaskOut.text }) + "）"),
-	typeof noTaskEnv.uq.requests[0]?.questions?.[0]?.detail === "string" && noTaskEnv.uq.requests[0].questions[0].detail.includes("- 启动任务：（未给正文/task=，改投最小唤醒）") && noTaskEnv.uq.requests[0].questions[0].detail.includes("确认则：创建 → 投最小唤醒 → 登记 roster 与 pairs（未给正文/task=，唤醒不含任务）；取消则零创建、零 pairs。") && (noTaskOut.text.match(/已创建 \+ 已投最小唤醒（本次未给任务）/gu) ?? []).length === 2 && !noTaskOut.text.includes("不投启动任务") && !noTaskOut.text.includes("已投递启动任务"));
+// **2026-09-22 真机复验后的文案压缩**（见 docs/verification-log.md 的「真机复验」一节）：「- 启动任务：」
+// 的括号与「确认则」的括号**都**写了「未给正文/task=」，而「改投最小唤醒 / 唤醒不含任务」在两行里
+// 各说一遍 —— 真机那具无任务框实测 399 码点、超 390，压掉重复（−18）后 381。判据未动。
+check("U30 默认值第 4 条（反转 · 措辞同步）: 确认框与完成回报都按**反转后**的那一支写 —— 框里「- 启动任务：（未给正文/task=）」＋「确认则：…投最小唤醒…（唤醒不含任务）」，回报里逐行写「已投最小唤醒（本次未给任务）」，两处都不再出现「不投启动任务」，同一件事也不在两行里重复说"
+	+ (typeof noTaskEnv.uq.requests[0]?.questions?.[0]?.detail === "string" && noTaskEnv.uq.requests[0].questions[0].detail.includes("- 启动任务：（未给正文/task=）") && noTaskOut.text.includes("已创建 + 已投最小唤醒（本次未给任务）") ? "" : "（实测：" + show({ detail: noTaskEnv.uq.requests[0]?.questions?.[0]?.detail, report: noTaskOut.text }) + "）"),
+	typeof noTaskEnv.uq.requests[0]?.questions?.[0]?.detail === "string" && noTaskEnv.uq.requests[0].questions[0].detail.includes("- 启动任务：（未给正文/task=）") && noTaskEnv.uq.requests[0].questions[0].detail.includes("确认则：创建 → 投最小唤醒 → 登记 roster 与 pairs（唤醒不含任务）；取消则零创建、零 pairs。") && (noTaskOut.text.match(/已创建 \+ 已投最小唤醒（本次未给任务）/gu) ?? []).length === 2 && !noTaskOut.text.includes("不投启动任务") && !noTaskOut.text.includes("已投递启动任务"));
 // 同支纪律（§10.2.8.2 默认值第 4 条下的补条，2026-09-22 第 2 轮评审 🟡#1）：**成本行不得与同一张框
 // 的另一行自相矛盾** —— 那时无任务支写「不投启动任务」、成本行却无条件写「followup 驱动一次」。
 // §10.2.8.10 ① 之后这条纪律换了一种**更强**的满足方式：回执把两支的模型回合数都变成 **N＋1**，
