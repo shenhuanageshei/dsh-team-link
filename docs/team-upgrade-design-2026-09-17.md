@@ -251,7 +251,7 @@ teams:
 - **retire 语义**（评审 #1 补）：仅由现任协调者会话或用户发起；效果 = 该角色 current 置空（vacant）+ history 追加带 note 的退役记录。retire 本身不动 pairs（它不携带信任授予）；但提供可选「顺带清理」：单个用户对话框列出全部指向退役会话的 pairs/trustedSenders/rememberTargets（复用 §3.6.1 原则 3 的对称撤销代码），勾选后清理。不清理也无安全洞（pairs 照旧过门），只是死数据堆积——选择权留给用户。
 - 写权限：policy.writer === "coordinator" 时仅 coordinator.current 会话可写（exec.agent.id 校验）；任何会话可读。settings UI 永远可改（用户是超级写者）。
 - set-role 副作用：若被替换会话存在 pairs，不自动迁移——迁移只发生在 rotation 流程（§3.6），避免绕过换届令牌。
-- **创建即认领（bootstrap，§9.2 落地）**：`upsert-team` 在**创建**路径把调用会话播种为 coordinator 现任（`roles: [{ role: "coordinator", current: caller, ... }]`）。理由：创建路径本就不过 `writerGate`，此刻无在任者可侵犯；否则会产生「团队已存在但 coordinator 空缺 ⇒ 所有会话路径写不进」的死锁（工具路径与设置 UI 路径同时不可用，2026-09-18 实测）。`writerGate` / `retireGate` 既有语义不变——**手写**的空缺行仍然全拒。
+- **创建即认领（bootstrap，§9.2 落地）**：`upsert-team` 在**创建**路径把调用会话播种为 coordinator 现任（`roles: [{ role: "coordinator", current: caller, ... }]`）。理由：创建路径本就不过 `writerGate`，此刻无在任者可侵犯；否则会产生「团队已存在但 coordinator 空缺 ⇒ 所有会话路径写不进」的死锁（工具路径与设置 UI 路径同时不可用，2026-09-18 实测）。`writerGate` / `retireGate` 既有语义不变——**手写**的空缺行仍然全拒。 **窄放宽（2026-09-22 用户裁定，见 `collab-enhancements-design-2026-09-19.md` §10.2.8.9 ②）**：当团队的**现任** coordinator 会话**已归档**（`ctx.get("workspaceRegistry").archivedSessionIds`，宿主公开面）**或已不存在**（`sessionQuery.filterSessions([{kind:"id"}])` 返回空）时，**允许**把该团队名「释放并认领」：现行 coordinator 写入版本史（`until=now`，备注 `released: coordinator archived|gone`）→ `current := null` → 调用会话认领为现任。**边界（不得越过）**：① 只看**现任**，换届/退役换下的旧任归档**不**触发；② **只有确证** archived 或 gone 才触发，读数拿不到/抛错 ⇒ **unknown ⇒ 照旧拒绝**；③ 宿主无 `workspaceRegistry` ⇒ 降级为只按 gone；④ 落笔前 **TOCTOU 复检**（现任复活 ⇒ 中止零写）；⑤ `policy.writer` 取值与「gate 不得放宽成 any」**不变**；⑥ 空缺但**无**归档/gone 证据的团队**照旧拒绝**。 **（2026-09-22 R2 🟡#4 措辞收窄）**：上句的「拿不到」**只**指「服务**已提供但** getter 抛错 / 形状不对 ⇒ unknown ⇒ 拒绝」；「**服务未提供 ⇒ 跳过归档信号、只按 gone**」是**另一情形**（见下 ③），两者**互斥、措辞不得互相包含**。
 
 #### 3.3.3 黑板（team/ 目录约定）
 
@@ -482,13 +482,13 @@ sequenceDiagram
 | U1 | verdict 五态判定表（ok/goal-disarmed/silent-idle/long-running/dead，含 paused/blocked→ok 展示、goals 服务缺失降级） | §3.1 |
 | U2 | patrol 四态策略：观察者 running/armed-active→不 tick；目标 armed-active→不 tick；goal-disarmed→立即 tick 且载荷含诊断与 resume 回路文案；paused/blocked→不 tick；silent-idle→tick 恰一次（fake timers）；**观察者代理不存在→不 tick、信号面标 dead、注册保留至 TTL**（评审 #8 补） | §3.2/§3.7 |
 | U3 | tick 消息 source 三成员合规 + 正文与注册参数无关（常量化；goal-disarmed 载荷仅状态字段插值） | §3.2.3/V10 |
-| U4 | roster 写权限：非协调者会话 set-role 拒绝；upsert-team 幂等 | §3.3 |
+| U4 | roster 写权限：非协调者会话 set-role 拒绝（**2026-09-22 限定**：**除**现任确证 archived/gone 的窄放宽 —— 见 §3.3.2 末条）；upsert-team 幂等 | §3.3 |
 | U5 | resolveTargets：通配仅协调者；fan-out 每目标独立过门（unpaired+无确认服务→逐目标 fail-closed，不因批量放宽） | §3.4/V8 |
 | U6 | rotate/claim：错令牌/过期令牌/跨 team-role-successor 绑定不匹配→拒绝；非 pending.session 发起→拒绝；claim 幂等（重试不重复迁移）；团队外与未勾选 pairs 不迁移；退役者持有的 pairs/trustedSenders/rememberTargets 对称吊销；provisional TTL 到点回退 | §3.6 |
 | U7 | 信封 banner：meta 枚举校验、超长 ref 截断、banner 首行格式 | §3.4 |
 | U8 | 既有全部用例不回归（深链/导出/双门/配对/wellFormed） | 回归红线 |
 | U9 | settings 时序回归锁（§9.1）：**先跑 apply、之后才提供 settings** → store 最终挂到 settings 且写入落在 stub 的命名空间；同时断言挂载成功留一行 info（修复前此用例必红） | §9.1 |
-| U10 | 建队自举（§9.2）：创建路径 → `coordinator.current` = 创建者，且该会话随后 `set-role` 成功；团队已存在时 `roles` 不变（幂等，非现任无法借此劫持）；**手写空缺行**（设置 UI 产出）时仍返回既有的「空缺→设置 UI」提示（U4 语义保留） | §9.2 |
+| U10 | 建队自举（§9.2）：创建路径 → `coordinator.current` = 创建者，且该会话随后 `set-role` 成功；团队已存在时 `roles` 不变（幂等，非现任无法借此劫持）；**手写空缺行**（设置 UI 产出）时仍返回既有的「空缺→设置 UI」提示（U4 语义保留） | §9.2 |（**2026-09-22 限定**：**除**「现任确证 archived/gone」这一条窄放宽外 —— 见 §3.3.2 末条与 `collab-enhancements-design-2026-09-19.md` §10.2.8.9 ②；该放宽只认**宿主侧确证**，且 `policy.writer` 取值与「不得放宽成 any」不变）
 | U11 | 降级红线（§9.1.3）：settings 彻底缺失时全功能仍可用（内存引擎）且**有且仅有一行** warn；goals 缺失仍渲染 `?` | §9.1 / §5.3 |
 
 ### 5.2 集成验收（双/多会话手工演练脚本，每项写明期望）
@@ -711,7 +711,7 @@ function createPolicyStore(ctx) {
 ### 9.3 边界与防偏离（增补，接 §4）
 
 - **禁止第二次静默回退**：任何服务获取失败必须留一行 warn；U11 以断言锁死。
-- **自举不得放宽任何既有门**：创建者认领只在**创建**路径发生；已存在团队的 upsert 与 `set-role` 仍过 `writerGate`（U10 断言）。
+- **自举不得放宽任何既有门**：创建者认领只在**创建**路径发生；已存在团队的 upsert 与 `set-role` 仍过 `writerGate`（U10 断言）。（**2026-09-22 补**：另有一条**窄放宽**——现任 coordinator 会话确证「已归档 / 已不存在」时允许释放并认领团队名；它**不碰**创建路径与 bootstrap，边界见 §3.3.2 末条）
 - 不引入 `installSection`、不改 §3 既有机制、不改 source 三成员与双门投递语义、不改任何 schema。
 
 ### 9.4 验收增量的落点
