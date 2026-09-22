@@ -5316,6 +5316,22 @@ check("U33 必备披露逐件点名（数量 / 模型 / cwd / 成本 / 信任授
 	+ (u33MissingRequired(u33Both?.detail).length === 0 ? "" : "（缺：" + show(u33MissingRequired(u33Both?.detail)) + "）"),
 	u33MissingRequired(u33Both?.detail).length === 0);
 
+// --- 本批新可测面的**受守卫读取**（Y7 纪律：先取值，再判类型）------------------------------
+// 本仓的 Y7 纪律写在这一条上：**一个还没实现的可测面被直接调用，会让整跑崩在那一行、连
+// `assertion total` 都不打印** —— 那样红相就说不清自己有多大（本批真踩过一次：新测试在旧实现上
+// 崩在 `receiptTexts(env)[0].includes(...)`，见 docs/verification-log.md 的「红相」一节）。
+// 所以本批所有**新增**的可测面都在这里统一取一次：旧实现上它们是 `undefined`，取值退化成中性量，
+// 断言**自己变红**而不是把套件打崩。
+/** FAIL 时必须看得见读数（本文件既有惯例：红相要说清自己有多大、错在哪一格）。**声明位置在这一块**
+ * 而不是靠近用它的那几组夹具：`probe` 只在**条件为假**时才被求值 ⇒ 在旧实现上它会在**很靠前**的
+ * 通道 4 那几条里第一次被走到，声明放在后面就是 TDZ 崩（本批第二次踩同类坑，见 verification-log）。 */
+const probe = (label, reading) => { console.log(`     实测读数 ${label} ${show(reading)}`); return false; };
+const RELEASE_NOTES = __testing.TEAM_SESSION_RELEASE_NOTES ?? {};
+const RELEASE_DISCLOSURE = __testing.TEAM_SESSION_RELEASE_DISCLOSURE ?? "";
+const RECEIPT_MAX = typeof __testing.TEAM_SESSION_RECEIPT_MAX_POINTS === "number" ? __testing.TEAM_SESSION_RECEIPT_MAX_POINTS : 0;
+const ROLE_RECORD = typeof __testing.roleRecord === "function" ? __testing.roleRecord : (fields) => ({ ...fields });
+const NORMALIZE_TEAMS = typeof __testing.normalizeTeams === "function" ? __testing.normalizeTeams : (list) => (Array.isArray(list) ? list : []);
+
 // --- U33c 裁定 A 的硬指标：参照夹具 ≤ 6 行且 ≤ **390** 码点（2026-09-22 用户裁定 = A）---------------
 // 真机读数（用户实测）：同一个输入 `detail` 收前 **569 码点 / 10 行**（截图那次协调者 id 取满 28 码点
 // ⇒ 585），用户判「有点大，文字也太多了，导致选项被积压」⇒ 裁定 A：压掉解释性括号与 § 号、把
@@ -5367,10 +5383,10 @@ const u33cPlan = (team) => teamSessionPlan({ ...readTeamSessionCommand("你是�
 const u33cB = teamSessionDialogText(u33cPlan(U33C_DEFAULT_TEAM), U33C_WS, U33C_ID28, null);
 const u33cE = teamSessionDialogText(u33cPlan(U33C_DEFAULT_TEAM), U33C_WS, U33C_ID28, { reason: "archived", incumbent: "session-dead" });
 /** 披露是**折叠**进「确认则」那一行：E 必须逐字等于 B 在 pairs 之后插入披露句（差一个都不是折叠）。 */
-const u33cFolded = u33cB.replace("登记 roster 与 pairs；取消则", "登记 roster 与 pairs" + __testing.TEAM_SESSION_RELEASE_DISCLOSURE + "；取消则");
+const u33cFolded = u33cB.replace("登记 roster 与 pairs；取消则", "登记 roster 与 pairs" + RELEASE_DISCLOSURE + "；取消则");
 check("U33c 参照 B（28 码点 id）与释放披露变体 E（28 码点 id ＋ 带日期团队名 ＋ 12 码点披露）: 两具都 ≤6 行且 ≤390 码点、披露句逐字在场且**恰 12 码点**、披露之外的正文与 B 逐字同一（折叠进「确认则」一行，不是新起一段 —— 新起一段会破「≤6 行」）"
-	+ (codePointsOf(u33cB) <= U33C_MAX_POINTS && codePointsOf(u33cE) <= U33C_MAX_POINTS && newlinesOf(u33cB) <= 5 && newlinesOf(u33cE) <= 5 && u33cE === u33cFolded ? "" : "（实测：" + show({ id28: codePointsOf(U33C_ID28), cpB: codePointsOf(u33cB), nlB: newlinesOf(u33cB), cpE: codePointsOf(u33cE), nlE: newlinesOf(u33cE), disclosure: codePointsOf(__testing.TEAM_SESSION_RELEASE_DISCLOSURE), folded: u33cE === u33cFolded }) + "）"),
-	codePointsOf(U33C_ID28) === 28 && codePointsOf(u33cB) <= U33C_MAX_POINTS && newlinesOf(u33cB) <= 5 && codePointsOf(u33cE) <= U33C_MAX_POINTS && newlinesOf(u33cE) <= 5 && codePointsOf(__testing.TEAM_SESSION_RELEASE_DISCLOSURE) === 11 && u33cE.includes(__testing.TEAM_SESSION_RELEASE_DISCLOSURE) && u33cE === u33cFolded);
+	+ (codePointsOf(u33cB) <= U33C_MAX_POINTS && codePointsOf(u33cE) <= U33C_MAX_POINTS && newlinesOf(u33cB) <= 5 && newlinesOf(u33cE) <= 5 && u33cE === u33cFolded ? "" : "（实测：" + show({ id28: codePointsOf(U33C_ID28), cpB: codePointsOf(u33cB), nlB: newlinesOf(u33cB), cpE: codePointsOf(u33cE), nlE: newlinesOf(u33cE), disclosure: codePointsOf(RELEASE_DISCLOSURE), folded: u33cE === u33cFolded }) + "）"),
+	codePointsOf(U33C_ID28) === 28 && codePointsOf(u33cB) <= U33C_MAX_POINTS && newlinesOf(u33cB) <= 5 && codePointsOf(u33cE) <= U33C_MAX_POINTS && newlinesOf(u33cE) <= 5 && codePointsOf(RELEASE_DISCLOSURE) === 11 && u33cE.includes(RELEASE_DISCLOSURE) && u33cE === u33cFolded);
 // 裁定 A 的**删除面**逐条点名（与上一条的「保留面」互为对照）：用户点名的几类废话与整段自述段在框里
 // **一处都不剩**，而正文那 8 个字仍逐字在「- 启动任务：」那一行上（「只去废话」而不是「去字」）。
 const u33cRemoved = [
@@ -5606,36 +5622,41 @@ const rcOkEnv = teamSessionEnv({ askScript: ["创建"] });
 const rcOkOut = await rcOkEnv.run("n=1 team=night-shift roles=worker-a task=做接口");
 const rcOkText = receiptTexts(rcOkEnv)[0];
 check("U32 通道 4（成功）: 结算后**恰一次** followup 投给调用方会话（这就是「空会话里发命令也能把会话显出来」那一半），信封仍是那条唯一的三成员 relay（senderSessionId = 调用方自己），回执一行、≤120 码点、含团队名与新建数"
-	+ (receiptEnvelopeOk(rcOkEnv) && typeof rcOkText === "string" && codePointsOf(rcOkText) <= __testing.TEAM_SESSION_RECEIPT_MAX_POINTS && rcOkText.includes("完成：团队 night-shift") && rcOkText.includes("新建 1 个") ? "" : "（实测：" + show({ texts: receiptTexts(rcOkEnv), source: rcOkEnv.senderCalls.followedup[0]?.source, cp: codePointsOf(rcOkText) }) + "）"),
-	rcOkOut.kind === "success" && receiptEnvelopeOk(rcOkEnv) && typeof rcOkText === "string" && codePointsOf(rcOkText) <= __testing.TEAM_SESSION_RECEIPT_MAX_POINTS && newlinesOf(rcOkText) === 0 && rcOkText.includes("完成：团队 night-shift") && rcOkText.includes("新建 1 个"));
+	+ (receiptEnvelopeOk(rcOkEnv) && typeof rcOkText === "string" && codePointsOf(rcOkText) <= RECEIPT_MAX && rcOkText.includes("完成：团队 night-shift") && rcOkText.includes("新建 1 个") ? "" : "（实测：" + show({ texts: receiptTexts(rcOkEnv), source: rcOkEnv.senderCalls.followedup[0]?.source, cp: codePointsOf(rcOkText) }) + "）"),
+	rcOkOut.kind === "success" && receiptEnvelopeOk(rcOkEnv) && typeof rcOkText === "string" && codePointsOf(rcOkText) <= RECEIPT_MAX && newlinesOf(rcOkText) === 0 && rcOkText.includes("完成：团队 night-shift") && rcOkText.includes("新建 1 个"));
 const rcWakeEnv = teamSessionEnv({ askScript: ["创建"] });
 await rcWakeEnv.run("n=2 team=night-shift roles=worker-a,worker-b");
+/** 一条回执文本，或 `undefined`（**不经下标** —— 旧实现上第二条命令根本不投回执，`[0].includes` 会把
+ * 整个套件打崩；这一处正是本批踩到的那个 Y7 坑）。 */
+const receiptTextOr = (env) => { const texts = receiptTexts(env); return typeof texts[0] === "string" ? texts[0] : undefined; };
+const rcWakeText = receiptTextOr(rcWakeEnv);
 check("U32 通道 4（无任务形态）: 回执写出「其中最小唤醒 M 个」，而 M 读的是**真正投出去的那几具**（同一批结果行，不另算一遍）——有任务那一支不写这个括号（M=0 时不冒充唤醒）"
-	+ (receiptTexts(rcWakeEnv)[0].includes("新建 2 个（其中最小唤醒 2 个）") && !rcOkText.includes("最小唤醒") ? "" : "（实测：" + show({ wake: receiptTexts(rcWakeEnv)[0], withTask: rcOkText }) + "）"),
-	receiptTexts(rcWakeEnv)[0].includes("新建 2 个（其中最小唤醒 2 个）") && !rcOkText.includes("最小唤醒"));
+	+ (typeof rcWakeText === "string" && rcWakeText.includes("新建 2 个（其中最小唤醒 2 个）") && typeof rcOkText === "string" && !rcOkText.includes("最小唤醒") ? "" : probe("U32 通道 4（无任务形态）", { wake: rcWakeText, withTask: rcOkText })),
+	typeof rcWakeText === "string" && rcWakeText.includes("新建 2 个（其中最小唤醒 2 个）") && typeof rcOkText === "string" && !rcOkText.includes("最小唤醒"));
 const rcCancelEnv = teamSessionEnv({ askScript: ["取消"] });
 await rcCancelEnv.run("n=1 team=night-shift roles=worker-a task=做接口");
+const rcCancelText = receiptTextOr(rcCancelEnv);
 check("U32 通道 4（取消）: 取消也算一次结算 ⇒ 照样一条回执（代价如实：连取消也花调用方一个模型回合），文本写明零创建零 pairs 与团队名"
-	+ (receiptEnvelopeOk(rcCancelEnv) && receiptTexts(rcCancelEnv)[0].includes("已取消：团队 night-shift（零创建、零 pairs）") ? "" : "（实测：" + show({ texts: receiptTexts(rcCancelEnv) }) + "）"),
-	receiptEnvelopeOk(rcCancelEnv) && receiptTexts(rcCancelEnv)[0].includes("已取消：团队 night-shift（零创建、零 pairs）") && rcCancelEnv.creates.length === 0);
+	+ (typeof rcCancelText === "string" && rcCancelText.includes("已取消：团队 night-shift（零创建、零 pairs）") ? "" : probe("U32 通道 4（取消）", { texts: receiptTexts(rcCancelEnv) })),
+	receiptEnvelopeOk(rcCancelEnv) && typeof rcCancelText === "string" && rcCancelText.includes("已取消：团队 night-shift（零创建、零 pairs）") && rcCancelEnv.creates.length === 0);
 const rcPreParseEnv = teamSessionEnv({ askScript: ["创建"] });
 const rcPreParseOut = await rcPreParseEnv.run("n=abc 帮我做 X");
+const rcPreParseText = receiptTextOr(rcPreParseEnv);
 check("U32 通道 4（解析前失败）: 团队名**尚未解析** ⇒ 回执里不许硬塞一个（「团队 …」会把解析器的失败说成团队的问题），只有「失败：<原因，含出路>」那一支"
-	+ (receiptEnvelopeOk(rcPreParseEnv) && !receiptTexts(rcPreParseEnv)[0].includes("团队") ? "" : "（实测：" + show({ texts: receiptTexts(rcPreParseEnv), out: rcPreParseOut.text }) + "）"),
-	rcPreParseOut.kind === "error" && receiptEnvelopeOk(rcPreParseEnv) && receiptTexts(rcPreParseEnv)[0].startsWith("/team_session 失败：") && !receiptTexts(rcPreParseEnv)[0].includes("团队") && receiptTexts(rcPreParseEnv)[0].includes("原因与出路见本回合命令输出"));
+	+ (typeof rcPreParseText === "string" && !rcPreParseText.includes("团队") ? "" : probe("U32 通道 4（解析前失败）", { texts: receiptTexts(rcPreParseEnv), out: rcPreParseOut.text })),
+	rcPreParseOut.kind === "error" && receiptEnvelopeOk(rcPreParseEnv) && typeof rcPreParseText === "string" && rcPreParseText.startsWith("/team_session 失败：") && !rcPreParseText.includes("团队") && rcPreParseText.includes("原因与出路见本回合命令输出"));
 const rcFailEnv = teamSessionEnv({ askScript: ["创建"], failCreateAt: 0 });
 const rcFailOut = await rcFailEnv.run("n=1 team=night-shift roles=worker-a task=做接口");
+const rcFailText = receiptTextOr(rcFailEnv);
 check("U32 通道 4（解析后失败）: 团队名**已解析** ⇒ 回执带上它（同一根判据的另一半），失败态含「原因与出路见本回合命令输出」（回执有界、出路不因截断而丢）"
-	+ (receiptEnvelopeOk(rcFailEnv) && receiptTexts(rcFailEnv)[0].startsWith("/team_session 失败：团队 night-shift，") ? "" : "（实测：" + show({ texts: receiptTexts(rcFailEnv), kind: rcFailOut.kind }) + "）"),
-	rcFailOut.kind === "error" && receiptEnvelopeOk(rcFailEnv) && receiptTexts(rcFailEnv)[0].startsWith("/team_session 失败：团队 night-shift，") && receiptTexts(rcFailEnv)[0].includes("原因与出路见本回合命令输出") && codePointsOf(receiptTexts(rcFailEnv)[0]) <= __testing.TEAM_SESSION_RECEIPT_MAX_POINTS);
+	+ (typeof rcFailText === "string" && rcFailText.startsWith("/team_session 失败：团队 night-shift，") ? "" : probe("U32 通道 4（解析后失败）", { texts: receiptTexts(rcFailEnv), kind: rcFailOut.kind })),
+	rcFailOut.kind === "error" && receiptEnvelopeOk(rcFailEnv) && typeof rcFailText === "string" && rcFailText.startsWith("/team_session 失败：团队 night-shift，") && rcFailText.includes("原因与出路见本回合命令输出") && codePointsOf(rcFailText) <= RECEIPT_MAX);
 check("U32 通道 4（无新日志事件）: 回执是一条普通的跨会话消息（同一构造、同一信封），整个 ① 面没有引入任何新的日志事件类型", rcOkEnv.actionLog.every((entry) => entry === "create" || entry === "followup"));
 
 // --- U36 / U37（§10.2.8.9 ②）：现任失联 ⇒ 释放并认领（对 writerGate 的一次窄放宽）-----
 /** 一具「带失联现任的既有团队」夹具：现任 id、归档名单、归档读数的形状、服务是否提供、会话库里
  * 有没有它、有没有活动代理，各由参数给 —— 三条读数（归档 / 存在 / 活性）各自成轴，夹具才能把
  * 甲（服务缺席）/ 乙（服务在但读不到）/ 丙（确证）三档分开造出来，也才能造出 TOCTOU 那一具。 */
-/** FAIL 时必须看得见读数（本文件既有惯例：红相要说清自己有多大、错在哪一格）。 */
-const probe = (label, reading) => { console.log(`     实测读数 ${label} ${show(reading)}`); return false; };
 const GONE_COORD = "session-gone-coord";
 const releaseEnvOf = ({ current = GONE_COORD, archived = [], archiveUnreadable = "none", omitWorkspaceRegistry = false, sessions = [], extraAgents = [], roles, writer = "coordinator", askScript = ["创建"] } = {}) => teamSessionEnv({
 	sessions,
@@ -5652,20 +5673,20 @@ const closedTenureOf = (env, sessionId) => coordOf(env).history.find((record) =>
 const relAEnv = releaseEnvOf({ archived: [GONE_COORD] });
 const relAOut = await relAEnv.run("n=1 team=night-shift roles=worker-a task=做接口");
 check("U36 (a) 现任**已归档** ⇒ 释放并认领: 同一道用户命令里 current 变成调用会话、那一段任期被收口（until=now）并写明「released: coordinator archived」、建队照样成功"
-	+ (closedTenureOf(relAEnv, GONE_COORD)?.note !== __testing.TEAM_SESSION_RELEASE_NOTES.archived ? "（实测：" + show({ coord: coordOf(relAEnv), out: relAOut.text }) + "）" : ""),
-	relAOut.kind === "success" && relAEnv.creates.length === 1 && coordOf(relAEnv).current === "session-self" && typeof closedTenureOf(relAEnv, GONE_COORD)?.until === "number" && closedTenureOf(relAEnv, GONE_COORD)?.note === __testing.TEAM_SESSION_RELEASE_NOTES.archived && coordOf(relAEnv).history.at(-1).session === "session-self" && coordOf(relAEnv).history.at(-1).until === null);
+	+ (closedTenureOf(relAEnv, GONE_COORD)?.note !== RELEASE_NOTES.archived ? "（实测：" + show({ coord: coordOf(relAEnv), out: relAOut.text }) + "）" : ""),
+	relAOut.kind === "success" && relAEnv.creates.length === 1 && coordOf(relAEnv).current === "session-self" && typeof closedTenureOf(relAEnv, GONE_COORD)?.until === "number" && closedTenureOf(relAEnv, GONE_COORD)?.note === RELEASE_NOTES.archived && coordOf(relAEnv).history.at(-1).session === "session-self" && coordOf(relAEnv).history.at(-1).until === null);
 check("U36 (a) 边界⑤: policy.writer **仍是 coordinator** —— 放宽的是这一处证据，不是 gate 本身（绝不许降级成 any）",
 	relAEnv.store()[0].policy.writer === "coordinator" && relAEnv.store()[0].roles[0].role === "coordinator");
 check("U36 (a) 出席与留痕: 释放发生在**必经确认框**的那条路上（框先开、人先确认），报告如实点名「释放并接管原团队」与理由，pairs 照常只给本次真正建出来的 worker"
-	+ (relAEnv.uq.requests.length === 1 && relAOut.text.includes("按 §10.2.8.9 ② 释放并接管原团队") && relAOut.text.includes(__testing.TEAM_SESSION_RELEASE_NOTES.archived) && relAEnv.pairs().length === 1 && relAEnv.pairs()[0].a === "session-self" ? "" : probe("U36 (a)", { asks: relAEnv.uq.requests.length, pairs: relAEnv.pairs(), rosterLine: relAOut.text.split("\n").find((line) => line.startsWith("- roster：")) })),
-	relAEnv.uq.requests.length === 1 && relAOut.text.includes("按 §10.2.8.9 ② 释放并接管原团队") && relAOut.text.includes(__testing.TEAM_SESSION_RELEASE_NOTES.archived) && relAEnv.pairs().length === 1 && relAEnv.pairs()[0].a === "session-self");
+	+ (relAEnv.uq.requests.length === 1 && relAOut.text.includes("按 §10.2.8.9 ② 释放并接管原团队") && relAOut.text.includes(RELEASE_NOTES.archived) && relAEnv.pairs().length === 1 && relAEnv.pairs()[0].a === "session-self" ? "" : probe("U36 (a)", { asks: relAEnv.uq.requests.length, pairs: relAEnv.pairs(), rosterLine: relAOut.text.split("\n").find((line) => line.startsWith("- roster：")) })),
+	relAEnv.uq.requests.length === 1 && relAOut.text.includes("按 §10.2.8.9 ② 释放并接管原团队") && relAOut.text.includes(RELEASE_NOTES.archived) && relAEnv.pairs().length === 1 && relAEnv.pairs()[0].a === "session-self");
 
 // (b) 现任**已不存在**（两条读数都不是「已归档」，而会话库里没有它）⇒ 同一条路，理由 gone。
 const relBEnv = releaseEnvOf({});
 const relBOut = await relBEnv.run("n=1 team=night-shift roles=worker-a");
 check("U36 (b) 现任**已不存在** ⇒ 同一条路（reason=gone）: 释放照发生，版本史写「released: coordinator gone」——两种证据**各自**能独立放行，且措辞不混（archived 与 gone 是两条不同的证据）"
-	+ (relBOut.kind === "success" && coordOf(relBEnv).current === "session-self" && closedTenureOf(relBEnv, GONE_COORD)?.note === __testing.TEAM_SESSION_RELEASE_NOTES.gone && relBOut.text.includes(__testing.TEAM_SESSION_RELEASE_NOTES.gone) && !relBOut.text.includes(__testing.TEAM_SESSION_RELEASE_NOTES.archived) ? "" : probe("U36 (b)", { kind: relBOut.kind, coord: coordOf(relBEnv), out: relBOut.text })),
-	relBOut.kind === "success" && coordOf(relBEnv).current === "session-self" && closedTenureOf(relBEnv, GONE_COORD)?.note === __testing.TEAM_SESSION_RELEASE_NOTES.gone && relBOut.text.includes(__testing.TEAM_SESSION_RELEASE_NOTES.gone) && !relBOut.text.includes(__testing.TEAM_SESSION_RELEASE_NOTES.archived));
+	+ (relBOut.kind === "success" && coordOf(relBEnv).current === "session-self" && closedTenureOf(relBEnv, GONE_COORD)?.note === RELEASE_NOTES.gone && relBOut.text.includes(RELEASE_NOTES.gone) && !relBOut.text.includes(RELEASE_NOTES.archived) ? "" : probe("U36 (b)", { kind: relBOut.kind, coord: coordOf(relBEnv), out: relBOut.text })),
+	relBOut.kind === "success" && coordOf(relBEnv).current === "session-self" && closedTenureOf(relBEnv, GONE_COORD)?.note === RELEASE_NOTES.gone && relBOut.text.includes(RELEASE_NOTES.gone) && !relBOut.text.includes(RELEASE_NOTES.archived));
 
 // (c) 现任**存活**（有活动代理）⇒ 照旧拒绝，既有文案不变，零弹框零写入。
 const relCEnv = releaseEnvOf({ current: "session-target" });
@@ -5695,21 +5716,21 @@ check("U37 (甲) 服务**未提供** ＋ 现任只归档（会话仍在）⇒ **
 const relFEnv = releaseEnvOf({ omitWorkspaceRegistry: true });
 const relFOut = await relFEnv.run("n=1 team=night-shift roles=worker-a task=做接口");
 check("U37 (甲) 服务**未提供** ＋ 现任 gone ⇒ **释放成立**：版本史写 gone 那一句、current 换成调用会话、建队成功、pairs 只给本次建出来的 worker",
-	relFOut.kind === "success" && coordOf(relFEnv).current === "session-self" && closedTenureOf(relFEnv, GONE_COORD)?.note === __testing.TEAM_SESSION_RELEASE_NOTES.gone && relFEnv.creates.length === 1 && relFEnv.pairs().length === 1);
+	relFOut.kind === "success" && coordOf(relFEnv).current === "session-self" && closedTenureOf(relFEnv, GONE_COORD)?.note === RELEASE_NOTES.gone && relFEnv.creates.length === 1 && relFEnv.pairs().length === 1);
 
 // (g) 保留既有角色（用户裁定 a「保留历史」的**唯一断言面**）：其它角色条目逐字不变。
 const relGEnv = releaseEnvOf({
 	archived: [GONE_COORD],
 	roles: [
 		// 用**规范形状**种（roleRecord）⇒ 断言量的才是「谁动了谁的账」，而不是「读时归一化补了字段」。
-		__testing.roleRecord({ role: "coordinator", current: GONE_COORD, history: [{ session: GONE_COORD, from: 1_700_000_000_000, until: null }] }),
-		__testing.roleRecord({ role: "worker-a", current: "session-worker-a", pending: { session: "session-worker-b", token: "tok-1", role: "worker-a" }, rotationAt: 1_700_000_200_000, history: [{ session: "session-worker-a", from: 1_700_000_100_000, until: null }] }),
+		ROLE_RECORD({ role: "coordinator", current: GONE_COORD, history: [{ session: GONE_COORD, from: 1_700_000_000_000, until: null }] }),
+		ROLE_RECORD({ role: "worker-a", current: "session-worker-a", pending: { session: "session-worker-b", token: "tok-1", role: "worker-a" }, rotationAt: 1_700_000_200_000, history: [{ session: "session-worker-a", from: 1_700_000_100_000, until: null }] }),
 	],
 });
 /** 「逐字未动」的对照读数是**插件读到的那一行**（`normalizeTeams` 就是 `policy.get()` 用的那把尺），
  * 而不是种进 settings 的原始字面量 —— 否则量到的是「读时归一化补字段」（pending 的 team/expiresAt/
  * createdAt 就是归一化补的），不是「谁动了谁的账」。 */
-const relGBefore = structuredClone(__testing.normalizeTeams(relGEnv.store())[0].roles[1]);
+const relGBefore = structuredClone(NORMALIZE_TEAMS(relGEnv.store())[0].roles[1]);
 await relGEnv.run("n=1 team=night-shift roles=worker-b task=做接口");
 check("U36 (g) 保留既有角色与历史: 释放认领之后**其它角色条目逐字未动**（含 pending / rotationAt / 自己的版本史），coordinator 也只是历史里**多出一条**（旧任收口 + 新人开段）；本次批量新建的 worker-b 照常登记为**第三条**角色（释放不改建队语义）"
 	+ (JSON.stringify(relGBefore) !== JSON.stringify(relGEnv.store()[0].roles[1]) ? "（实测：" + show({ before: relGBefore, after: relGEnv.store()[0].roles[1] }) + "）" : ""),
@@ -5722,8 +5743,8 @@ check("U36 (g) 保留既有角色与历史: 释放认领之后**其它角色条�
 const relHDetail = relAEnv.uq.requests[0]?.questions?.[0]?.detail;
 const relHConfirmLine = typeof relHDetail === "string" ? relHDetail.split("\n").find((line) => line.startsWith("确认则：")) : undefined;
 check("U36 (h) 触发释放的框体: detail ≤6 行且 ≤390 码点、那句披露（字面量 11 码点）**折在「确认则」那一行**里（不是新起一段——新起一段会破 ≤6 行），且披露只在**既有团队被释放**时才出现（新建团队那一具里没有它）"
-	+ (typeof relHConfirmLine === "string" && relHConfirmLine.includes(__testing.TEAM_SESSION_RELEASE_DISCLOSURE) ? "" : "（实测：" + show({ cp: codePointsOf(relHDetail), lines: newlinesOf(relHDetail) + 1, confirm: relHConfirmLine }) + "）"),
-	typeof relHDetail === "string" && codePointsOf(relHDetail) <= U33C_MAX_POINTS && newlinesOf(relHDetail) <= 5 && typeof relHConfirmLine === "string" && relHConfirmLine.includes(__testing.TEAM_SESSION_RELEASE_DISCLOSURE) && relHConfirmLine.endsWith("；取消则零创建、零 pairs。") && !u30Env.uq.requests[0].questions[0].detail.includes(__testing.TEAM_SESSION_RELEASE_DISCLOSURE));
+	+ (typeof relHConfirmLine === "string" && relHConfirmLine.includes(RELEASE_DISCLOSURE) ? "" : "（实测：" + show({ cp: codePointsOf(relHDetail), lines: newlinesOf(relHDetail) + 1, confirm: relHConfirmLine }) + "）"),
+	typeof relHDetail === "string" && codePointsOf(relHDetail) <= U33C_MAX_POINTS && newlinesOf(relHDetail) <= 5 && typeof relHConfirmLine === "string" && relHConfirmLine.includes(RELEASE_DISCLOSURE) && relHConfirmLine.endsWith("；取消则零创建、零 pairs。") && !u30Env.uq.requests[0].questions[0].detail.includes(RELEASE_DISCLOSURE));
 
 // --- 变异基线（每条都是「把这一行改坏 ⇒ 这一条当场变红」）------------------------
 // 变异 1（fail-safe 乙 ⇒ 「读不到就释放」）：把 (d) 的 unknown 分支改成放行 ⇒ (d) 那两条当场变红。
@@ -5763,7 +5784,7 @@ const relToolEnv = teamEnv({ teams: [teamRow({ current: GONE_COORD, name: "night
 const relToolOut = await relToolEnv.tool("team_link_roster").execute({ action: "upsert-team", team: "night-shift" }, execFor(relToolEnv.senderAgent));
 check("U36 第二个触发面（upsert-team）: 模型可发起、**没有确认框**的那条路上，只要确证现任已归档就照放行 —— 一次释放并认领，报告点名理由与「既有角色逐字未动」；没有人类点击可依靠，靠的只有证据门"
 	+ (typeof relToolOut === "string" && relToolOut.includes("释放并接管") && coordOf(relToolEnv).current === "session-self" ? "" : "（实测：" + show({ out: relToolOut, coord: coordOf(relToolEnv) }) + "）"),
-	typeof relToolOut === "string" && relToolOut.includes("释放并接管") && relToolOut.includes(__testing.TEAM_SESSION_RELEASE_NOTES.archived) && coordOf(relToolEnv).current === "session-self" && relToolEnv.store()[0].policy.writer === "coordinator");
+	typeof relToolOut === "string" && relToolOut.includes("释放并接管") && relToolOut.includes(RELEASE_NOTES.archived) && coordOf(relToolEnv).current === "session-self" && relToolEnv.store()[0].policy.writer === "coordinator");
 const relToolRefuseEnv = teamEnv({ sessions: [{ header: { id: GONE_COORD, createdAt: 1, cwd: TEAM_WS }, live: false, persisted: true }], omitWorkspaceRegistry: true, teams: [teamRow({ current: GONE_COORD, name: "night-shift" })] });
 const relToolRefuseOut = await relToolRefuseEnv.tool("team_link_roster").execute({ action: "upsert-team", team: "night-shift" }, execFor(relToolRefuseEnv.senderAgent));
 check("U36 第二个触发面的边界: 服务**未提供**（甲）＋ 会话仍在（只归档）⇒ 工具路径也照旧拒绝（证据门没有按钮可以绕过），零写入、角色行一字未动",
