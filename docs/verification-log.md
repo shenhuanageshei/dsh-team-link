@@ -1264,7 +1264,7 @@ node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
 
 - `README.md`：tests 徽章 `1046 → 1057`、「当前读数」`1046 → 1057`、Agent Teams 对照表里的稳定性一格（附本批**实测红相**）；
 - `CHANGELOG.md`：同一条目的「怎么验证」补齐 62 条断言的拆分、两套件实测读数与红相两次读数；
-- `team-ledger-and-mode-design-2026-09-26.md`：§7 第 1 步与 §9 状态行附实测读数；§1 / §4 的 `conflicted` 口径改成与已实施一致的措辞；§9.3.4 rule 2 补两条子情形定义。**提交哈希仍留「待父会话提交后回填」**（本轮的 coder 不碰 git 历史）。
+- `team-ledger-and-mode-design-2026-09-26.md`：§7 第 1 步与 §9 状态行附实测读数；§1 / §4 的 `conflicted` 口径改成与已实施一致的措辞；§9.3.4 rule 2 补两条子情形定义。**提交哈希 `12f0874`（2026-09-27 由父会话回填）**（本轮的 coder 不碰 git 历史）。
 
 ---
 
@@ -1346,7 +1346,7 @@ node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
 - `CHANGELOG.md`：新条目（修了什么 → 为什么 → 怎么验证 → 同批同步的面），含 60 条断言的拆分、两套件实测读数与红相 55 条的逐条交代；
 - `host-half.test.mjs`：A 批 60 条断言 ＋ 三个 Y7-safe 调用器 ＋ `mkdir` 进导入 ＋ 既有的「工具计数同改锁」`9 → 10`；
 - `docs/observability-batch-design-2026-09-26.md`：状态行与 §8 假设表回填实测结论；
-- `docs/team-ledger-and-mode-design-2026-09-26.md`：§7 的**步 2 / 步 4 标 ✅ 已实施**、**步 6 标「收件视图 ＋ 派生回执 均 ✅」**，三条各加指向本批设计档的链接。**提交哈希留「待父会话提交后回填」**（本轮 coder 不碰 git 历史）。
+- `docs/team-ledger-and-mode-design-2026-09-26.md`：§7 的**步 2 / 步 4 标 ✅ 已实施**、**步 6 标「收件视图 ＋ 派生回执 均 ✅」**，三条各加指向本批设计档的链接。**提交哈希 `12f0874`（2026-09-27 由父会话回填）**（本轮 coder 不碰 git 历史）。
 
 ## 分歧审计修复轮 `DIVERGENCE(12)`（2026-09-27；当次实测 `1127 (failed: 0)` / `269 (failed: 0)`，基线 `1117 (failed: 0)` / `269 (failed: 0)`）
 
@@ -1514,7 +1514,7 @@ node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
 - `README.md`：tests 徽章 / 稳定性格 / §十「当前读数」**三处读数** `1127 → 1168`；roster 动词表补 `set-mode`、工具一览两行（roster / status）；**新增「团队形态（多会话档 ↔ agent-team 档）」一节**（两档白话 ＋ 三句要紧的话 ＋ 能力矩阵 ＋ 怎么切怎么看 ＋ 红线）；状态卡表补 ⑦ 行；设置键表与两处 yaml 样例补两个字段；设计文档索引加本档一行 ＋ 修正 A 批那行的「六段」表述；
 - `CHANGELOG.md`：新增「形态批（B 批）」条目（修了什么 → 为什么 → 明确不做 → 怎么验证 → 同批同步的面）；
 - `docs/team-mode-batch-design-2026-09-26.md`：状态行改「✅ 已实施」＋ 实测读数；§8 假设 A1–A4 回填实测结论；
-- `docs/team-ledger-and-mode-design-2026-09-26.md`：§7 步 3 / 5 标 ✅ 已实施 ＋ 指向本档的链接；状态行同步。**提交哈希留「待父会话提交后回填」**（本轮 coder 不碰 git 历史）；
+- `docs/team-ledger-and-mode-design-2026-09-26.md`：§7 步 3 / 5 标 ✅ 已实施 ＋ 指向本档的链接；状态行同步。**提交哈希 `12f0874`（2026-09-27 由父会话回填）**（本轮 coder 不碰 git 历史）；
 - `docs/observability-batch-design-2026-09-26.md`：§7 第 6 条改标「状态卡形态段由 B 批实施」。
 
 ---
@@ -1595,7 +1595,7 @@ node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
 - **本轮未运行任何破坏性命令**（无 `git rebase` / `reset --hard` / `clean -f` / `push --force`）；**未碰部署面**（`profile/profiles/web/...` 与用户目录里的插件副本）；**未碰 `docs/observability-batch-design-2026-09-26.md`**。
 - **工作树零新增残留**：本轮的套件运行由脚本自己在 teardown 里清掉 `<repo>/.test-tmp-team`（含本轮新增的 `mode/*`、`mirror-ws`、`multi-ws`、`noboard-ws`、`readfail-ws` 夹具目录）；本轮**没有产生任何临时文件 / 探针 / 备份**（红相是「先写断言、在同一棵树里跑」得到的，不需要换实现、不需要隔离夹具目录）。
 - `git status --short` 的八个 `M` 与本轮开始时**逐条相同**（`lib/index.js` · `host-half.test.mjs` · `README.md` · `CHANGELOG.md` · `docs/verification-log.md` · `docs/team-mode-batch-design-2026-09-26.md` · `docs/team-ledger-and-mode-design-2026-09-26.md` · `docs/observability-batch-design-2026-09-26.md` 的修改早于本轮、属上一轮 `DIVERGENCE(12)`）；根目录下那些 `.log` 与被忽略的 `.test-tmp-r7pre/` 都是**更早轮次**留下的（`.gitignore` 已覆盖），本轮既不产生也不清理它们。
-- **提交哈希留「待父会话回填」**（本仓纪律：coder 不碰 git 历史）。
+- **提交哈希 `12f0874`（2026-09-27 由父会话回填）**（本仓纪律：coder 不碰 git 历史）。
 
 ### 同批同步的面
 
@@ -1667,7 +1667,7 @@ node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
 
 - **本轮未运行任何破坏性命令**（无 `git rebase` / `reset --hard` / `clean -f` / `push --force`）；**未碰部署面**（`profile/profiles/web/...` 与用户目录 `C:\Users\magic\.dsh-plugins\dsh-team-link`）；**未碰 `docs/observability-batch-design-2026-09-26.md`**。
 - **工作树零新增残留**：本轮没有产生任何临时文件 / 探针 / 备份（红相是「先写断言、在同一棵树里跑」得到的，不换实现、不隔离夹具目录），套件运行由它自己的 teardown 清掉 `<repo>/.test-tmp-team`。`git status --short` 只列本轮允许的 8 个 `M`；根目录下那些 `.log` 与被忽略的 `.test-tmp-r7pre/` 是**更早轮次**留下的（`.gitignore` 已覆盖），本轮既不产生也不清理它们。
-- **提交哈希留「待父会话回填」**（本仓纪律：coder 不碰 git 历史）。
+- **提交哈希 `12f0874`（2026-09-27 由父会话回填）**（本仓纪律：coder 不碰 git 历史）。
 
 ### 同批同步的面
 
