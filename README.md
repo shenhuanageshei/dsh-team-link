@@ -4,7 +4,7 @@
 >
 > 原名 `dsh-session-link-pro`（0.2.4 及之前），**GitHub 仓库已于 2026-09-18 改名为 `dsh-team-link`**（旧地址由 GitHub 自动重定向）。历史会话日志里的旧工具名 `session_link_pro_*` 与消息 id 前缀 `slp-` 保持原样——它们是取证链，不做回写。
 
-[![tests](https://img.shields.io/badge/tests-1127%20%2B%20269%20assertions-brightgreen)](#十测试)
+[![tests](https://img.shields.io/badge/tests-1193%20%2B%20269%20assertions-brightgreen)](#十测试)
 [![version](https://img.shields.io/badge/version-0.3.10-blue)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
@@ -23,7 +23,7 @@ DSH 0.1.7-rc 系列起随包提供**实验性的 Agent Teams**（`@deepseek-ai/d
 | 人在环 | Lead 即授权者 | 唯一的新授权点是**人类点击**（fail-closed） |
 | 换人 / 换届 | 没有这个概念：持久状态要有人重开 Lead 会话才回放得动 | `revive` / `reappoint` 两个封闭动词 + 令牌换届 + 信任迁移 |
 | 工作跟踪 | 有共享任务板（CAS revision · 依赖 · 写作用域） | **只追加**的任务台账 `tasks.md`（记「谁声称了什么」，读面的「最后主张 / 未消解存疑」是派生读数、**绝不自动裁决**；§9 第一批已实施） |
-| 稳定性 | 实验原型，不承诺稳定性，schema 可自由变更 | 1127 + 269 条断言 + 变异验证（红相必红：本批新判据打在**修复前**的实现上**实测红 8 条**，读数见 [`docs/verification-log.md`](docs/verification-log.md)） |
+| 稳定性 | 实验原型，不承诺稳定性，schema 可自由变更 | 1193 + 269 条断言 + 变异验证（红相必红：形态批 41 条新判据打在**实施前**的实现上**实测红 33 条**；分歧修复轮 `DIVERGENCE(8)` 的 16 条新判据（＋ 3 条改写）打在**本轮修复前**的实现上**实测红 13 条**（首跑打印的 14 条里有一条是夹具假红，已归因；另 6 条为覆盖缺口类、本就绿，如实标负相）；收尾修复轮（R1–R6）的 9 条新判据（＋ 1 条改写）打在**本轮修复前**的实现上**实测红 8 条**（另 2 条为覆盖缺口类 / 反向锁，如实标 ★ 负相）—— 读数见 [`docs/verification-log.md`](docs/verification-log.md)） |
 
 **我们不可被替代的四件事**：跨进程 / 跨团队 root 的协调 · 平级会话之间的信任（双门、配对、对称吊销）· **身份的生死与任何一个会话解耦**（换届换人、退役留痕、家谱可查）· 人在环的授权点。内置那套**更擅长**的则是同一间办公室里的快速分工（子代理随叫随到、任务板可改状态、状态变更零 token）。
 
@@ -47,6 +47,7 @@ DSH 0.1.7-rc 系列起随包提供**实验性的 Agent Teams**（`@deepseek-ai/d
 - [二、会话可视：列表 / 深链 / 导出](#二会话可视列表--深链--导出)
 - [三、跨会话看门狗](#三跨会话看门狗)
 - [团队状态卡（只读）](#团队状态卡只读)
+- [团队形态（多会话档 ↔ agent-team 档）](#团队形态多会话档--agent-team-档)
 - [四、团队：roster 与黑板](#四团队roster-与黑板)
 - [五、团队换届 rotation](#五团队换届-rotation)
 - [六、策略配置](#六策略配置)
@@ -295,8 +296,8 @@ sequenceDiagram
 | `team_link_export` | 任意会话全量导出 md + JSON |
 | `team_link_send` | 跨会话投递（单目标或 `targets` 广播 ≤8）；`meta` 信封；返回带 busy 预判；**发送方自己那一行渲染成卡片**（§10.1 A/D） |
 | `team_link_watch` | 给自己注册跨会话看门狗（register / list / clear） |
-| `team_link_status` | 只读**团队状态卡**：一次一屏（角色在位/空缺 · 换届 pending（token 掩码）· 看门狗 · 会话面 · 活性（有界 12 行）· 台账尾）＋ 反面预警注记；**零写入**、零额外读 |
-| `team_link_roster` | 团队身份注册表（get / upsert-team / set-role / retire） |
+| `team_link_status` | 只读**团队状态卡**：一次一屏（角色在位/空缺 · 换届 pending（token 掩码）· 看门狗 · 会话面 · 活性（有界 12 行）· 台账尾 · **形态（⑦，B 批追加）**）＋ 反面预警注记；**零写入**、零额外读 |
+| `team_link_roster` | 团队身份注册表（get / upsert-team / set-role / retire / **set-mode**）：`get` 附**形态段**（形态 + Lead + 成员名册投影 + 完整能力矩阵 + 诊断行），`set-mode` 切**团队形态**（见[团队形态](#团队形态多会话档--agent-team-档)） |
 | `team_link_team_read` | 一次读齐 roster + decisions 末 20 条 + discipline 全文 + tasks 末 20 条与派生视图 + **收件视图**（谁对 `t-<n>` 说过什么）与**派生回执**（我发出去之后对方动了没有：✅ / ⚠ / 未读）+ 三个 baseHash；目标面**只在 `readIds` 点名时才读** |
 | `team_link_team_append` | 写黑板三件套：`decisions` 只追加 / `discipline` 整文件替换（乐观锁）/ `tasks` 只追加（`kind` 闭集，`plan` 分配 `t-<n>`，`kind`/`task` 误用一律拒绝） |
 | `team_link_rotate` | 两阶段换届（prepare / claim），一次性令牌 + 域限定迁移；`successor:"auto"` = 插件自建继任者 + 写交接文档 + followup 投递（§11.2） |
@@ -638,6 +639,7 @@ flowchart TD
 | ④ 会话面 | 同工作区其他会话的 id / 代理状态 / 创建时间 / provisional 配对标记 | 注册表读，**不读日志** |
 | ⑤ 活性 | 与 `team_link_list_sessions` **同一顺序读前 12 行**（`PREVIEW_SESSIONS`）：verdict / 代理 / goal / 静默 / 时间戳；超出窗口的行**如实标未读** | 一次有界并行 surface 读（≤12） |
 | ⑥ 台账尾 | 每个团队的 `tasks.md` 末尾 `tasksTail` 条（默认 **5**、上限 **20**，超出**拒绝**）与 baseHash | 每团队一次文件读 |
+| ⑦ **形态**（B 批追加） | 每个团队一行形态 + Lead；成员名册**投影**（读时现算；不可读时**如实标注**并点名原因）；**完整能力矩阵**（事实源 = 父档 §2.3）+ 那句结论；**形态诊断行**（除自己外没有其他可达会话时只提示、绝不自动切档） | 宿主投影读（一次 `ctx.get("agentTeams")` 调用，零日志）＋本卡已读到的会话面 |
 
 | 参数 | 语义 | 边界 |
 | --- | --- | --- |
@@ -647,6 +649,55 @@ flowchart TD
 **反面预警注记（§4.2，会诊提出）**：窗口内**一条消息都没有**、而台账同期**新增了行** ⇒ 说明大家可能已经**停止说话、只写行**（互核正在死亡的前导指标）。判据写死：锚 `T0` = 本读窗内**最旧**的一条 surface 消息时间戳；`N` = `T0` 之后、本读窗内的消息条数；`M` = `T0` 之后 `tasks.md` 的新增行数；**只有 `N == 0 且 M > 0` 才打注记**，否则不打。两个计数都取自**已经读到**的东西 ⇒ **零额外读**。**三种情形逐条写死**（设计 §4.2，三态各有断言）：**① 读窗为空**（本工作区没有其他会话）⇒ **整段不打印**（连段标题都不出现）；**② 读窗非空、但窗内没有一条带时间戳的 surface 消息**（锚取不到）⇒ 打一句 `（反面预警注记无法计算：本读窗内没有带时间戳的 surface 消息——不猜。）`，**诚实优于沉默**，台账里有多少行都不改这个结论；**③ 锚取到** ⇒ 按上面那条唯一判据判 触发 / 不触发。**聚合口径**：省略 `team` 时 `M` = **所示各团队** `tasks.md` 同期新增行数的**和**（单团队时就是那一家）——读面上它只是一个数，**不逐团队拆分**。**它是读数，不是裁决**：只陈述计数，不下「互核已死」的结论。
 
 **诚实声明**：⑤ 段只读前 12 行会话（与列表工具同一条预算、同一种标注），第 13 行起的活性**未判定**；调用方没有会话身份时卡照出，「当前会话」处写 `（当前会话未知）`——**不编造身份**。
+
+---
+
+（**⑦ 形态**由形态批追加：卡尾一段给出每个团队的形态 + Lead、宿主成员名册**投影**、**完整能力矩阵**与「单会话兜底档」那句结论，必要时附**形态诊断行**——见下一节。）
+
+---
+
+## 团队形态（多会话档 ↔ agent-team 档）
+
+形态**不是功能开关，是通道选择**（设计档 [§4.1](docs/team-mode-batch-design-2026-09-26.md)，来源是[《台账 + 形态设计》§2.3](docs/team-ledger-and-mode-design-2026-09-26.md)）：
+
+- **多会话档**（`sessions`，默认）：平级会话之间，靠本插件的**跨会话身份与信任层**（投递 / 配对 / 换届 / 黑板）；
+- **agent-team 档**：一个会话**内部**的子代理团队（宿主 Agent Teams）。**本插件在这一档下只做名册与指路**，**不代理**宿主的派活 / 任务板（那是宿主的属地）。
+
+**三句要紧的话**：
+
+1. **人说了算**：人在对话里说一声 → 模型发起 → **弹一次确认框** → 人点一下才落笔（并往 `decisions.md` 记一行形态史）。**没有自动切档**；
+2. **切了就换通道，不换人**：**信任不自动迁移**（旧的配对必须人重新批准，切回来也一样）；切档**不改投任何在飞消息、也不建桥**——要跨形态说话，由模型自己用对应形态的手段说；
+3. **宿主没开就报错指路，绝不悄悄退回多会话档**——「悄悄降级」正是本仓最反对的那类事故。
+
+### 两档各能用什么（**能力矩阵**，事实源 = 父档 §2.3）
+
+| 能力 | 多会话档 | agent-team 档 |
+| --- | --- | --- |
+| 跨会话投递（`team_link_send`） | ✅ 主用途 | ❌ 成员是子代理，不是可投递目标 |
+| 双门批准 / 配对 | ✅ | ❌ 用不上（宿主那套没有独立信任模型） |
+| 换届（`rotate`）/ 恢复（`recover`） | ✅ | ❌ 没有可换届的会话；Lead 会话没了团队就散了 |
+| 看门狗（`watch`） | ✅ | ❌ teammate 不是根代理，盯不了 |
+| 黑板（decisions / discipline / tasks） | ✅ | ⚠️ 仍可用，但只有 Lead 一方读写 |
+| roster 身份 / 版本史 | ✅ | ⚠️ 只记「本团队是 agent-team 档 + Lead 是谁」 |
+| 团队状态卡（只读） | ✅ | ⚠️ 成员部分读宿主投影（2026-09-27 已核：本部署已挂载该服务 ⇒ 探针 available=true） |
+| 会话深链 / 导出 | ✅ | ✅ 与形态无关 |
+
+**结论**：agent-team 档应叫「**单会话兜底档**」，不是「另一种平等的形态」。**多会话不可用**时才切过去，切过去就等于放弃跨会话的全部能力。
+
+### 怎么切、怎么看（`team_link_roster`）
+
+| 面 | 行为 |
+| --- | --- |
+| 切档 | `team_link_roster action=set-mode`：`mode`（闭集 `sessions` / `agent-team`，闭集外**拒绝并列出两个值**）+ `leadSessionId?`（**省略 ⇒ 默认取调用方自己的会话 id**，并在确认框正文里明示，人可见即可否决；**显式空串 ⇒ 拒绝**；非空须过**形状** `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` 与**在场校验**（能在本次会话列表快照里找到）两道） |
+| **双重门**（缺一即 fail-closed、**零写入**） | ① **writer gate 原样**（`policy.writer=coordinator` 时只有现任协调者可写；空缺 ⇒ 会话路径拒绝，**设置 UI 仍是兜底**）；② **人类确认框**：无确认服务 / 超时（3 分钟）/ 取消 ⇒ 拒绝且零写入 |
+| **宿主探测只对「切到 agent-team」这一向** | 探测不到 ⇒ **拒绝 + 指路怎么开 + 零写入**（**绝不**把 agent-team 请求当多会话执行）；切**回** `sessions` 不探测（回默认档永远可用）。探测面是宿主服务 `agentTeams`（`ctx.get`，**可选服务**：缺席只影响这一项能力）。**同一判据只探一次**：切到 agent-team 时探过的那一次**直接复用**为确认框正文里的成员名册投影。**只报现象、不替宿主下结论**：拒绝文案说的是「服务 `agentTeams` **当前不可见**（可能未装载该组合包，**也可能尚未激活完成**）」—— `ctx.get` 只返回**已激活**的 provider，一个尚未完成初始化的服务也会走到这一支，所以这里不断言「profile 没装载」 |
+| 落笔 | settings 的 `teams` 行写入 `mode` / `leadSessionId`（**只改本团队行的这两个键**；`teams` 是**整份数组回写**，所以其余团队行若缺这两个键会被**补默认值**（`sessions` / 空串）、**已有值一个字不被覆盖** —— 与既有 `upsert-team` 同形，语义无变化。信任 `pairs`/`trustedSenders`/`rememberTargets` **一行不写**）+ `decisions.md` 追加**恰好一行**形态史（`形态 → agent-team（Lead=<id>）` 或 `形态 → sessions`）+ best-effort 重写 `roster.md` 镜像（与设置变更同一事务；镜像与形态史**同源** —— 都取写时复检后的那一行，确认框期间设置变了也不会「账写旧路径、镜像写新路径」） |
+| 幂等 | 同档同 Lead **且账上已有这一档的形态史行** ⇒ 「已是该档」，**不弹框、不写 settings、零写入**（**首次声明也算一行**：形态史记的是「**声明过这一档**」，不是「档位发生变化」—— 所以从未切换过、第一次收到默认档声明的团队也会**补记一行**，返回体如实标「补记」）；账上**缺**那一行（上一次 settings 写成功而 `decisions.md` 写失败）⇒ **补记恰好一行**再返回 —— 否则「补上路径后重发本次切换以补记」那条指路不可执行；账读不出来或没有 workspace ⇒ **不补记**并如实说明（fail-closed，不猜） |
+| 切走前的提示（**提示式，不阻断**） | 确认框正文列出「**不会迁移的三件事**」：① 信任（配对 / 白名单 / 记忆目标 —— 都要人重新批准）② 成员名册（agent-team 的成员不会变成会话）③ 任务归属（宿主的任务板不跟随；台账仍是本插件的账）；并列出**当前 teammate（可读则列，不可读如实说）**，加一句「请确认它们的结论已落到黑板或文件」。**不逐成员推断有没有交卷** |
+| 看形态 | `team_link_roster action=get` 的**形态段**与状态卡第 **⑦ 段**：形态 + Lead + 成员名册**投影**（读时现算，**一行不落 settings**；来源文案：可读时写 `来源：宿主 agentTeams 投影（本部署可读）`；不可读时**按分支**取首行 —— 只有**服务缺席**才说 `成员名册不可读（本部署未提供该投影）—— 仍可读 Lead 与形态`，其余四条分支（缺方法 / 无会话身份 / 调用方非成员 / 读取抛错）用中性首行 `成员名册不可读 —— 仍可读 Lead 与形态（哪一条读不到，见下一行的原因）`，真正的原因由紧随的`（不可读原因：…）`行点名）+ **完整能力矩阵** + 那句结论 |
+| **形态诊断行** | 本工作区**除自己外没有其他可达会话** ⇒ 读面附一行「⚠ 多会话通道看起来不可用（列表里没有其他会话）—— 你可以让协调者切到 agent-team 档（team_link_roster action=set-mode）（只提示：本插件绝不自动切档…）」。**只提示，绝不自动切**；**没有会话身份时不判** —— 判据是 `null`（不判、不猜，与「列表读不到」同一处置），而不是拿一个猜出来的工作区当结论 |
+
+**红线（形态批 §5）**：**只读宿主**（不 spawn / 不派活 / 不改宿主任务状态）· **不悄悄降级**（写路径刺眼报错、读路径如实降级，**两条路不许混用**）· **信任不自动迁移** · **双重门 fail-closed** · **指针不拷贝**（只存 Lead 会话 id）· **切档永远由人触发**。**明确不做**：不代理宿主派活 / 不读子代理日志（交卷只做提示式）/ 不自动切档 / 不做跨形态改投。
 
 ---
 
@@ -662,6 +713,8 @@ teams:
     createdAt: 1700000000000
     workspace: D:/work/night         # 首次创建团队时从该会话的 agentCwd 捕获，之后不再改写
     policy: { writer: coordinator }  # coordinator | any
+    mode: sessions                   # 形态（B 批）：sessions（默认，多会话档）| agent-team（单会话兜底档）；闭集外的值读时降级为 sessions 并留痕
+    leadSessionId: ""                # 仅 agent-team 档有意义：Lead 指针（空串 ⇒ 读面标「Lead 未知」）；成员名册一行都不落这里
     roles:
       - role: coordinator            # 约定角色名；自定义角色（reviewer 等）由 set-role 按需创建
         current: session-abc         # 现任；null = 空缺
@@ -676,6 +729,7 @@ teams:
 | `upsert-team` | 创建（默认 `policy.writer=coordinator`、workspace 取调用会话的 `agentCwd`，并把**调用会话播种为该团队 coordinator 现任**——**创建即认领**）或幂等更新 | 已存在的团队过写权限门；重复调用**不重置 roles / 版本史 / createdAt**，也不会再播种一次 |
 | `set-role` | `current` 替换 + 版本史追加：旧任那条记 `until=now`（带 note），新任那条以 `until: null` 打开；角色不存在则本次指定即创建。指定的会话**正是某个在飞换届 pending 的继任者**时，该令牌当场作废（身份已由本次显式变更，claim 会报「没有 pending」） | 过写权限门；**不迁移 pairs**——信任迁移是 rotation 的专属动作 |
 | `retire` | `current` 置空（vacant）+ 版本史记退役（`until=now`，带 note）。退役本身不动信任数据，随后弹**一个**确认对话框列出所有仍指向该会话的 `pairs` / `trustedSenders` / `rememberTargets`，选「清理」才删除 | **仅现任协调者会话**或用户发起（与 `policy.writer` 无关） |
+| `set-mode` | 切**团队形态**（`sessions` / `agent-team`）：`mode`（闭集，闭集外拒绝并列出两个值）+ `leadSessionId?`（省略 ⇒ 默认取调用方自己的会话 id 并在确认框正文里明示；显式空串拒绝；非空过形状 + 在场两道校验）。**宿主探测只对「切到 agent-team」这一向**（探测不到 ⇒ 拒绝 + 指路 + 零写入 + **补一行设置 UI 的兜底路**）；**双重门**：writer gate 原样 + 人类确认框（无服务 / 超时 / 取消 ⇒ 拒绝且零写入）；落笔后 `decisions.md` 追加**恰好一行**形态史 ＋ best-effort 重写 `roster.md` 镜像；同档同 Lead **且账上已有该行** ⇒ 「已是该档」（不弹框、不写 settings、零写入），账上缺该行 ⇒ **补记一行**再返回（**任一档都可执行**的补记路径）。**信任一行不写**、**成员名册一行不落 settings** | 过写权限门（与 `set-role` 同一道） |
 
 #### 写权限与「创建即认领」
 
@@ -698,6 +752,8 @@ team-link:
       createdAt: 1700000000000
       workspace: D:/work/night
       policy: { writer: coordinator }
+      mode: sessions                 # 形态：sessions（默认）/ agent-team；闭集外的值读时降级为 sessions 并留痕
+      leadSessionId: ""              # 仅 agent-team 档有意义（Lead 指针；空串 = 读面标「Lead 未知」）
       roles:
         - role: coordinator
           current: session-abc         # 现任会话 id；null = 空缺（会话路径会全拒）
@@ -1007,7 +1063,7 @@ rotationBackup:                 # prepare 时全量快照（撤销依据，永�
 | `rememberTargets` | `string[]` | 发送方免确认的目标会话 |
 | `pairs` | `{a, b, createdAt, provisional, expiresAt}[]` | 双向免确认配对通道。`provisional: true` = 由换届在无人值守路径上临时授予，`expiresAt` 到期未获批准即自动删除并回退为正常过门；正常配对 `provisional: false`、`expiresAt: 0` |
 | `watchdogs` | `{id, team, watcherSession, targets, silentMinutes, intervalMinutes, expiresAt, createdAt}[]` | 跨会话看门狗注册（到点自动清理；手改时缺字段的条目会被丢弃，不会让整个命名空间失效） |
-| `teams` | `{name, createdAt, workspace, policy:{writer}, roles:[{role, current, pending, rotationAt, provisional, rotationStatus, history}], rotationBackup}[]` | 团队 roster 与换届记账。`name` 必须 `[a-z0-9-]+`（它是黑板目录的路径段）；`workspace` 是团队首次创建时捕获的会话工作目录、也是黑板根；手改时非法团队名/无名角色会被丢弃 |
+| `teams` | `{name, createdAt, workspace, policy:{writer}, roles:[{role, current, pending, rotationAt, provisional, rotationStatus, history}], rotationBackup, mode, leadSessionId}[]` | 团队 roster 与换届记账。`mode` 是**形态**（`sessions` 默认 / `agent-team`，闭集外的值读时降级为 `sessions` 并在读面留痕）；`leadSessionId` 是 agent-team 档的 **Lead 指针**（空串 = 未指定，读面标「Lead 未知」；**成员名册一行都不落 settings**）。`name` 必须 `[a-z0-9-]+`（它是黑板目录的路径段）；`workspace` 是团队首次创建时捕获的会话工作目录、也是黑板根；手改时非法团队名/无名角色会被丢弃 |
 
 ---
 
@@ -1092,6 +1148,7 @@ dev_install_package { dir: "<你的目录>/dsh-team-link", profile: "web" }
 | `connection` | 导出下载路由的**平台信任栅栏**（Host/Origin + 浏览器鉴权；`requestRejection`） | **晚挂**取用，且与 `webServer` **成对齐备**才注册路由：缺任一 ⇒ **不注册路由**（绝不注册一条无门路由）+ 一行 warn（点名缺的是哪一个）；导出工具照常 |
 | `agentPresets` | §10.2.2 创建会话时的 preset 解析与挂载（**每个**新建会话都必须有 persona-prefix 组装源） | 创建时 `ctx.get` 取用；缺席 ⇒ **每个新建会话一行 warn**、会话照建（缺了组成源它可能跑不起来，DEFECT-1） |
 | `workspaceRegistry` | §10.2.2 模板的另一半：建/取工作区 + 把新建会话**挂进**它（侧边栏按工作区分组，没有这份归属就列不出该会话） | 创建时 `ctx.get` 取用；缺席 ⇒ **每个新建会话一行 warn**（点名「未挂进工作区，可能不会出现在侧边栏」）、会话照建照驱动，只是不出现工作区归属（DEFECT-2） |
+| `agentTeams` | §4.2 / §4.3 的**团队形态**：成员名册**投影**（读面）与「切到 agent-team」的**能力探测**（写路径）—— **只读宿主**：只调 `tryMembership(agent)` / `listMembers(agent)`，任何宿主写方法都不调用 | `ctx.get` 取用（**不在** `inject` 数组里，模块级 `inject` 恒 4 项）；服务缺席 ⇒ 读面**如实标注**「成员名册不可读（本部署未提供该投影）—— 仍可读 Lead 与形态」并照给能力矩阵（服务在场而读不到的四条分支走**中性首行** + 原因行，见[团队形态](#团队形态多会话档--agent-team-档)一节）；写路径切**到** agent-team **拒绝 + 指路怎么开（通用表述：按**当前活动 profile** 的 `dsh.profile.bundles` 自查）+ 设置 UI 兜底路 + 零写入**（切**回** sessions 不探测） |
 
 DSH 默认装配均有。
 
@@ -1103,7 +1160,7 @@ DSH 默认装配均有。
 
 ## 十、测试
 
-**当前读数（实跑时点，一律取套件自报的那两行）**：`node host-half.test.mjs` → **1127**（failed: 0）；`node client-half.test.mjs` → **269**（failed: 0）。
+**当前读数（实跑时点，一律取套件自报的那两行）**：`node host-half.test.mjs` → **1193**（failed: 0）；`node client-half.test.mjs` → **269**（failed: 0）。
 
 > **§10.2.8.10 之后的一条用法变化（值得先知道）**：`/team_session` **结算后会给调用方会话投一条短回执**（**成功 / 失败 / 取消三态都算**，一行、≤120 码点）。收益是**在空会话里发命令也能把那个会话从侧边栏「显出来」**——此前它没有回合 ⇒ 隐身；**无任务**建出的 worker 也不再隐身（改投一具「最小唤醒」待命通知）。**代价如实**：每条命令多一个调用方模型回合（**连取消也算一个**），回执是真实消息，调用方上下文会**永久增长**一条 user ＋ 一条 assistant。
 
@@ -1125,8 +1182,9 @@ node client-half.test.mjs   # 浏览器半边：卡片渲染 / 降级路径 / �
 | [`docs/collab-enhancements-design-2026-09-19.md`](docs/collab-enhancements-design-2026-09-19.md) | **协作增强设计**：§10 ① 发送方可见性 **A+D**（已实施，U13–U15 见上）/ ② `/team_session` 自动建队（**已实现**，U16–U19 见上；**2026-09-21 真机缺陷修订见其 §10.2.8 —— 输入文法 ＋ 失败可见性 ＋ 确认框边界三条，判据 U30–U34，已落码（2026-09-22，commit `ee7c48a`）**）/ §11 ③a 自动换届主路径（**已实现**，U20–U24 / U28 见上）/ §11.9 ③b 团队恢复工具 `team_link_recover`（**已实现**，0.3.8 随 ③ 一批落地；0.3.9 批次 2 又把 `revive` 的角色面放开到任意角色、给 `reappoint` 加了常驻的「自建继任者」候选）。**发布与验证状态**：①（发送方可见性）0.3.8 已发布并经真机验证（§12.1）；② ③ 的宿主半边要等 DSH 重启窗口；H1/H3/H4 的结论见该档 §12。会诊 #37 纪要见 `docs/consult-minutes/2026-09-19-consult-37-minutes.md`，会诊 #43（§11.9 的裁定）见 `docs/consult-minutes/2026-09-20-consult-43-minutes.md` |
 | [`docs/hardening-and-recovery-design-2026-09-21.md`](docs/hardening-and-recovery-design-2026-09-21.md) | **加固与恢复设计（v1，0.3.9）**：① 导出路由接入平台信任栅栏 · ② 恢复能力加宽（`revive` 角色面 / `reappoint` 自建继任者）· ③ 侧栏「会话工具」入口（§4.3 是本入口 UI/交互的唯一事实源）· ④ 深链聚焦修复（§4.4）；含 §5 红线 B1–B9、§6 判据 U1–U14、§9 假设与待验项、§11 分批。会诊 #62 纪要见 `docs/consult-minutes/2026-09-21-consult-62-minutes.md` |
 | [`docs/comparison-agent-teams-2026-09-26.md`](docs/comparison-agent-teams-2026-09-26.md) | **对比（事实核对，不是设计）**：本插件 vs DSH 内置 Agent Teams 的 14 项逐项对照、三条结构性差异、双方优势、两套共存时的边界；出处分 `[实测]` / `[README]` / `[会诊]` 三级，§9 是**未复核**的源码级线索 |
-| [`docs/observability-batch-design-2026-09-26.md`](docs/observability-batch-design-2026-09-26.md) | **可观测批（A 批，2026-09-26）**：读窗扩展（`readIds` 点名读 / `offset` 分页 + 按工具分账的成本不变量 + 末尾「未读 Y 行 + 怎么读」提示）· 只读**团队状态卡** `team_link_status`（六段 + 反面预警注记）· 台账**收件视图** + **派生回执**；判据 U1–U14，§3 的成本模型与 §8 的假设 A1–A5 逐条实测，读数见 [`docs/verification-log.md`](docs/verification-log.md) |
-| [`docs/team-ledger-and-mode-design-2026-09-26.md`](docs/team-ledger-and-mode-design-2026-09-26.md) | **「台账 + 形态」设计（2026-09-26 已拍板 · 第 1 步「只追加台账 `tasks.md`」已实施，判据 U1–U18；第 2 / 4 / 6 步已随「可观测批（A 批）」一并实施；第 3 步（形态开关）与第 5 步（teammate 交卷提示）待实施）**：只追加台账 `tasks.md` + `meta.ref` 映射（把「账」搬出上下文、把「事」留在上下文）+ 团队形态开关（多会话 ↔ agent team 单会话兜底档）+ 只读团队状态卡 + 四条纪律约定；含 §6 拍板结论与 §7 实施顺序 |
+| [`docs/observability-batch-design-2026-09-26.md`](docs/observability-batch-design-2026-09-26.md) | **可观测批（A 批，2026-09-26）**：读窗扩展（`readIds` 点名读 / `offset` 分页 + 按工具分账的成本不变量 + 末尾「未读 Y 行 + 怎么读」提示）· 只读**团队状态卡** `team_link_status`（六段 + 反面预警注记；**第 ⑦ 段「形态」由形态批追加**）· 台账**收件视图** + **派生回执**；判据 U1–U14，§3 的成本模型与 §8 的假设 A1–A5 逐条实测，读数见 [`docs/verification-log.md`](docs/verification-log.md) |
+| [`docs/team-ledger-and-mode-design-2026-09-26.md`](docs/team-ledger-and-mode-design-2026-09-26.md) | **「台账 + 形态」设计（2026-09-26 已拍板 · 第 1 步「只追加台账 `tasks.md`」已实施，判据 U1–U18；第 2 / 4 / 6 步已随「可观测批（A 批）」一并实施；**第 3 步（形态开关）与第 5 步（teammate 交卷提示）已随「形态批（B 批）」实施**）**：只追加台账 `tasks.md` + `meta.ref` 映射（把「账」搬出上下文、把「事」留在上下文）+ 团队形态开关（多会话 ↔ agent team 单会话兜底档）+ 只读团队状态卡 + 四条纪律约定；含 §6 拍板结论与 §7 实施顺序 |
+| [`docs/team-mode-batch-design-2026-09-26.md`](docs/team-mode-batch-design-2026-09-26.md) | **形态批（B 批，2026-09-26）**：团队**形态**字段（`mode` / `leadSessionId`，只落在 settings）· `team_link_roster action=set-mode`（**第五个封闭动词**：宿主探测 + 双重门 + Lead 校验与默认 + decisions 恰好一行 + 幂等）· 读面**形态段**（形态 + Lead + 成员名册投影 + 完整能力矩阵 + 形态诊断行；roster get 与状态卡 ⑦ 段同源）· **teammate 交卷提示**（提示式、不阻断）；判据 U1–U14 + U11b，§8 的假设 A1–A4 逐条实测，读数见 [`docs/verification-log.md`](docs/verification-log.md) |
 | [`docs/team-upgrade-research-2026-09-17.md`](docs/team-upgrade-research-2026-09-17.md) | 调研：一次 16+ 小时真实多会话联调的复盘，与升级提案（**其 §5 已被设计取代**，以设计文档为准） |
 | [`docs/consult-minutes/`](docs/consult-minutes/) | 多模型会诊纪要（含裁定层：逐条采纳/不采纳与理由、分歧父侧裁定、教训、不可验清单） |
 | [`docs/verification-log.md`](docs/verification-log.md) | **验证账本**（证据，不是说明书）：0.3.1 → 0.3.10（未发布） 逐轮的红相/绿相读数、审计变异矩阵、以及每次真机验证的原始取证（含 0.3.7 那次「静默失效一整天」的完整调试历程） |

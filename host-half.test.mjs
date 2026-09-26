@@ -5094,7 +5094,7 @@ const u10RolesAfterHandover = JSON.stringify(teamStore(u10Env)[0].roles);
 const u10Idempotent = await u10Roster.execute({ action: "upsert-team", team: "night-shift" }, execFor(u10Env.targetAgent));
 check("U10: upsert-team on an existing team is still idempotent — roles/version history byte-identical, no re-seed for the new incumbent", u10Idempotent.includes("已存在") && u10Idempotent.includes("幂等") && JSON.stringify(teamStore(u10Env)[0].roles) === u10RolesAfterHandover);
 const u10ExtraArg = await rejects(u10Roster, { action: "upsert-team", team: "day-shift", coordinator: "session-target" }, execFor(u10Env.senderAgent));
-check("U10: the tool surface has no `coordinator` parameter (§9.2.2 不新增 API 面), and an undeclared id cannot seed the role — the seed is always the calling session", Object.keys(u10Roster.parameters.properties).sort().join(",") === "action,note,role,session,team" && teamStore(u10Env).find((team) => team.name === "day-shift")?.roles[0].current === "session-self" && !String(u10ExtraArg).includes("session-target"));
+check("U10: the tool surface has no `coordinator` parameter (§9.2.2 不新增 API 面；B 批只加了 set-mode 自己的两个参数 mode / leadSessionId), and an undeclared id cannot seed the role — the seed is always the calling session", Object.keys(u10Roster.parameters.properties).sort().join(",") === "action,leadSessionId,mode,note,role,session,team" && teamStore(u10Env).find((team) => team.name === "day-shift")?.roles[0].current === "session-self" && !String(u10ExtraArg).includes("session-target"));
 check("U10: a HAND-WRITTEN vacant row (settings UI) still answers 「空缺 → 设置 UI」 for set-role and for upsert-team — writerGate is untouched", vacantSetRole.includes("当前空缺") && vacantSetRole.includes("设置 UI") && vacantUpsert.includes("当前空缺"));
 const u10VacantRetire = await vacantRoster.execute({ action: "retire", team: "night-shift", role: "coordinator" }, execFor(vacantEnv.senderAgent));
 check("U10: ... and retire on that vacant row is refused the same way — retireGate is untouched", u10VacantRetire.includes("当前空缺") && u10VacantRetire.includes("设置 UI"));
@@ -7431,6 +7431,604 @@ check("U6 三类拒绝一律**零读**（拒绝发生在任何 surface 读之前
 const rwCounts = [rwEnv.query.surfaceReads.slice(0, rwMarks[0]).length, rwPageReads.length, rwNamedReads.length];
 check("U7 成本不变量（按工具分账 · list_sessions 三路径 ≤ 12，stub 计数逐一断言）: 默认 12 / offset 2 / 点名 12，逐条 ≤ PREVIEW_SESSIONS=12", rwCounts.every((count) => Number.isInteger(count) && count <= 12) && rwCounts[0] === 12 && rwCounts[1] === 2 && rwCounts[2] === 12);
 
+
+// ===========================================================================
+// B 批（形态批）· 阶段 1：形态字段 + normalizeTeams 降级 + 读面形态段（只读）
+// 设计档 docs/team-mode-batch-design-2026-09-26.md §4.1 / §4.3，判据 U1 / U11。
+// ===========================================================================
+
+const MD_TMP = path.join(TEAM_TMP, "mode");
+const MD_WS = path.join(MD_TMP, "ws");
+const MD_LEAD = "session-md-lead";
+const MD_MEMBERS = [
+	{ id: MD_LEAD, name: "lead", role: "lead", status: "running", diagnostics: [] },
+	{ id: "session-md-coder", name: "coder", role: "teammate", status: "inactive", model: "m", diagnostics: [] },
+];
+/** §4.3 的结论句（与插件里的常量逐字相同的那半句；断言按它切出矩阵区域）。 */
+const MD_CONCLUSION = "结论：agent-team 档应叫「单会话兜底档」";
+/** D7① 逐行锁：能力矩阵的**八行原文**（事实源 = 父档 §2.3 的表；D4 起第 7 行是**已核**口径
+ * —— 2026-09-27 真机实测「宿主 agentTeams 服务已挂载」，旧的「未复核」限定词已作废）。
+ * 改这条锁 = 改事实源，两处必须同改。 */
+const MD_MATRIX_ROWS = [
+	"| 跨会话投递（team_link_send） | ✅ 主用途 | ❌ 成员是子代理，不是可投递目标 |",
+	"| 双门批准 / 配对 | ✅ | ❌ 用不上（宿主那套没有独立信任模型） |",
+	"| 换届（rotate）/ 恢复（recover） | ✅ | ❌ 没有可换届的会话；Lead 会话没了团队就散了 |",
+	"| 看门狗（watch） | ✅ | ❌ teammate 不是根代理，盯不了 |",
+	"| 黑板（decisions / discipline / tasks） | ✅ | ⚠️ 仍可用，但只有 Lead 一方读写 |",
+	"| roster 身份 / 版本史 | ✅ | ⚠️ 只记「本团队是 agent-team 档 + Lead 是谁」 |",
+	"| 团队状态卡（只读） | ✅ | ⚠️ 成员部分读宿主投影（2026-09-27 已核：本部署已挂载该服务 ⇒ 探针 available=true） |",
+	"| 会话深链 / 导出 | ✅ | ✅ 与形态无关 |",
+];
+
+/** 宿主 `agentTeams` 替身：**只给两个读方法**，其余方法调用即抛错并记账 ——
+ * 「只读宿主」（红线 1）因此由**行为**钉住，而不是靠注释。形状按实测的宿主读面
+ * （`tryMembership(agent)` / `listMembers(agent)`，两者都以**活动代理本人**为凭据）。 */
+function makeAgentTeams({ members = MD_MEMBERS, isMember = true, listThrows = false } = {}) {
+	const calls = { tryMembership: 0, listMembers: 0, writes: [] };
+	const service = {
+		tryMembership(agent) { calls.tryMembership += 1; return isMember ? { root: agent, id: "team-md", role: "lead", name: "lead" } : undefined; },
+		// 两条**不同**的失败形状各由一条断言钉住（D2②）：`isMember:false` ⇒ tryMembership 返回
+		// undefined（调用方不在宿主团队里，读面根本走不到 listMembers）；`listThrows:true` ⇒ 读面两个
+		// 方法都在、凭据也认，但 listMembers 自己抛错（**读取抛错**档）。
+		listMembers(agent) { calls.listMembers += 1; if (listThrows) throw new Error("宿主 listMembers 读取抛错"); if (!isMember) throw new Error("not a team member"); return members; },
+	};
+	for (const name of ["spawnTeammate", "sendMessage", "createTask", "getTask", "listTasks", "updateTask", "waitForChange", "interrupt"]) {
+		service[name] = () => { calls.writes.push(name); throw new Error(`宿主写调用 ${name} 被禁止（红线 1：只读宿主）`); };
+	}
+	return { service, calls };
+}
+
+/** Y7-safe invoker（本仓既有纪律）: 旧实现没有 `set-mode` 这个动词，`defineTool`
+ * 会在**参数 schema** 上直接拒绝（抛错，不是返回字符串）—— 收成一段文本，让新判据在旧实现上
+ * 报 FAIL 而不是把整轮打崩。 */
+async function rosterCall(env, args, exec = undefined) {
+	const tool = env.tool("team_link_roster");
+	if (tool === undefined) return "【roster 工具未注册】";
+	try { return String(await tool.execute(args, exec ?? execFor(env.senderAgent))); }
+	catch (error) { return `【参数被拒：${String(error?.message ?? error)}】`; }
+}
+
+// --- U1: 形态默认 + 闭集外降级留痕 -------------------------------------------
+// 四条行：① 老 settings 行（**没有** mode / leadSessionId 两个键）② 闭集外的值
+// ③ 正常的 agent-team 行 ④ agent-team 但 Lead 为空。
+const mdLegacyRow = teamRow({ name: "legacy-team", workspace: MD_WS });
+const mdBadRow = { ...teamRow({ name: "bad-mode-team", workspace: MD_WS }), mode: "agentTeam" };
+const mdHostRow = { ...teamRow({ name: "host-team", workspace: MD_WS }), mode: "agent-team", leadSessionId: MD_LEAD };
+const mdNoLeadRow = { ...teamRow({ name: "nolead-team", workspace: MD_WS }), mode: "agent-team", leadSessionId: "" };
+const mdAgentTeams = makeAgentTeams();
+const mdEnv = teamEnv({
+	teams: [mdLegacyRow, mdBadRow, mdHostRow, mdNoLeadRow],
+	sessions: [{ header: { id: MD_LEAD, createdAt: 1000, cwd: MD_WS }, live: true, persisted: true }],
+	extraAgents: [{ id: MD_LEAD, status: "running" }],
+	selfCwd: MD_WS,
+});
+mdEnv.ctx.provide("agentTeams", mdAgentTeams.service);
+const mdRawBefore = JSON.stringify(mdEnv.ns.data.teams);
+const mdGet = await rosterCall(mdEnv, { action: "get" }, execFor(mdEnv.senderAgent));
+const mdDetail = await rosterCall(mdEnv, { action: "get", team: "host-team" }, execFor(mdEnv.senderAgent));
+/** 同一个夹具、**不提供**宿主投影：§4.3 的第二种文案与红线 2 的读路径降级。 */
+const mdNoHostEnv = teamEnv({
+	teams: [mdLegacyRow, mdBadRow, mdHostRow, mdNoLeadRow],
+	sessions: [{ header: { id: MD_LEAD, createdAt: 1000, cwd: MD_WS }, live: true, persisted: true }],
+	extraAgents: [{ id: MD_LEAD, status: "running" }],
+	selfCwd: MD_WS,
+});
+const mdNoHostGet = await rosterCall(mdNoHostEnv, { action: "get" }, execFor(mdNoHostEnv.senderAgent));
+
+check("B/U1 形态默认（零迁移）: 老 settings 行（连模式字段都没有）读出来是 sessions，且**读取本身不改 settings**——盘上那一行仍然没有 mode / leadSessionId 两个键，整份 teams 逐字节不变",
+	mdGet.includes("- legacy-team：形态=sessions") && JSON.stringify(mdEnv.ns.data.teams) === mdRawBefore && mdEnv.ns.data.teams[0].mode === undefined && mdEnv.ns.data.teams[0].leadSessionId === undefined);
+check("B/U1 闭集外降级 + 留痕: mode=「agentTeam」（闭集外）落 sessions，并在读面上留一行点名**原值**与**闭集**，而 settings 里的原值不被改写",
+	mdGet.includes("- bad-mode-team：形态=sessions") && mdGet.includes("形态降级留痕") && mdGet.includes("agentTeam") && mdGet.includes("闭集 sessions / agent-team") && mdEnv.ns.data.teams[1].mode === "agentTeam");
+check("B/U1 纯函数: normalizeTeams 自己就完成降级——闭集外 ⇒ sessions（并留痕）；空串 / 非字符串 ⇒ sessions（= 未写，不记降级）；合法 agent-team 与 Lead 指针原样保留",
+	__testing.normalizeTeams([{ name: "a-team", mode: "agentTeam" }, { name: "b-team", mode: "" }, { name: "c-team", mode: 7 }, { name: "d-team", mode: "agent-team", leadSessionId: "session-x" }]).map((team) => team.mode + "/" + team.leadSessionId).join(",") === "sessions/,sessions/,sessions/,agent-team/session-x");
+check("B/U11 形态 + Lead: agent-team 行显示它的 Lead 指针；Lead 为空时如实标「未知」**不编造**",
+	mdGet.includes("- host-team：形态=agent-team · Lead=" + MD_LEAD) && mdGet.includes("- nolead-team：形态=agent-team · Lead 未知"));
+check("B/U11 名册可读（文案一）: 宿主 agentTeams 投影在场时如实标来源，并逐行给出成员（Lead / teammate + 状态）——且投影是**读时现算**（settings 里零成员字段）",
+	mdGet.includes("来源：宿主 agentTeams 投影（本部署可读）") && mdGet.includes("- lead（Lead，running）") && mdGet.includes("- coder（teammate，inactive") && mdAgentTeams.calls.listMembers >= 1 && JSON.stringify(mdEnv.ns.data.teams).includes("session-md-coder") === false);
+// D7①: 这条锁原先只钉「4 个 ❌ ＋ 3 个 ⚠️ ＋ 其中两行原文」，其余六行的**文本漂移不会红**
+// —— 一条真盲区。现在逐行锁八行原文（含表头恰 9 行、行数不多不少），任何一行的字面改动都红。
+check("B/U11 完整能力矩阵（D7① 逐行锁八行原文）: 矩阵区恰 9 行（表头 ＋ 八行），八行逐字与父档 §2.3 相同、顺序一致、一行不多一行不少（含第 7 行的**已核**口径），四件 ❌ / 三件 ⚠️ / 一件与形态无关，并给出「单会话兜底档」那句结论",
+	(() => {
+		const start = mdGet.indexOf("| 能力 | 多会话档 | agent-team 档 |");
+		const end = mdGet.indexOf(MD_CONCLUSION);
+		if (start === -1 || end === -1 || end < start) return false;
+		const matrix = mdGet.slice(start, end);
+		const rows = matrix.split(/\r?\n/u).filter((line) => line.startsWith("| ") && line.endsWith(" |"));
+		const body = rows.filter((line) => line !== "| 能力 | 多会话档 | agent-team 档 |");
+		return rows.length === 9 && body.length === 8 && body.every((line, index) => line === MD_MATRIX_ROWS[index])
+			&& (matrix.match(/❌/gu) ?? []).length === 4 && (matrix.match(/⚠️/gu) ?? []).length === 3
+			&& mdGet.includes("多会话不可用时才切，切过去就等于放弃跨会话的全部能力。");
+	})());
+check("B/U11 名册不可读（文案二）: 宿主没有该投影时如实标不可读**并点名原因**，而形态 + Lead + 能力矩阵照旧可读（红线 2 的读路径降级，不是拒绝）",
+	mdNoHostGet.includes("成员名册不可读（本部署未提供该投影）—— 仍可读 Lead 与形态") && mdNoHostGet.includes("不可读原因") && mdNoHostGet.includes("- host-team：形态=agent-team · Lead=" + MD_LEAD) && mdNoHostGet.includes("| 能力 | 多会话档 | agent-team 档 |"));
+check("B/U11 聚合与点名: 省略 team 时形态段覆盖**每一个**团队（一行一个），点名 team 时给同一套形态段与结论",
+	["legacy-team", "bad-mode-team", "host-team", "nolead-team"].every((name) => mdGet.includes("- " + name + "：形态=")) && mdDetail.includes(MD_CONCLUSION) && mdDetail.includes("- host-team：形态=agent-team · Lead=" + MD_LEAD));
+check("B/U11 只读宿主: 形态段对宿主**零写调用**（替身里每个写方法一被调用就抛错并记账），同时投影确实被读了（否则这条只是「什么都没发生」）",
+	mdAgentTeams.calls.writes.length === 0 && mdAgentTeams.calls.tryMembership >= 1 && mdAgentTeams.calls.listMembers >= 1);
+check("B/U11 零回归锁: 读面既有内容一字未少（注册表头行 / 角色现任行 / 详情块 / 黑板根 / 读数戳）——本批只**追加**形态段",
+	mdDetail.includes("团队注册表（共 4 个团队）") && mdDetail.includes("角色 coordinator：现任 session-self") && mdDetail.includes("团队 host-team 详情：") && mdDetail.includes("黑板目录：") && /（读数 \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}，>2min 作废）/u.test(mdDetail));
+
+
+
+// ===========================================================================
+// B 批（形态批）· 阶段 2：set-mode 第五动词（宿主探测 · 双重门 · Lead 校验与默认 ·
+// decisions 一行 · 幂等 · fail-closed）
+// 设计档 docs/team-mode-batch-design-2026-09-26.md §4.2 / §4.4，判据 U2–U7 / U10 / U11b。
+// ===========================================================================
+
+const SM_WS = path.join(MD_TMP, "sm-ws");
+const SM_TEAM = "sm-team";
+const SM_OTHER = "session-sm-other";
+const smBoard = path.join(SM_WS, "team", SM_TEAM);
+const smDecisions = path.join(smBoard, "decisions.md");
+const SM_TRUST_PAIRS = [{ a: "session-self", b: SM_OTHER, createdAt: 1 }];
+const SM_TRUST_SENDERS = ["session-self"];
+const SM_TRUST_TARGETS = [SM_OTHER];
+
+/** 切档夹具：一条团队行（形态可指定）、一个**可读**的宿主投影替身、一份非空的信任数据
+ * （U10 的对照物：切档**一行都不许写**它）。 */
+function modeSetEnv({ mode = undefined, lead = undefined, askScript = ["切换"], omitUserQuestions = false, agentTeams = makeAgentTeams(), current = "session-self", writer = "coordinator", workspace = SM_WS } = {}) {
+	const row = { ...teamRow({ name: SM_TEAM, workspace, current, writer }), ...(mode === undefined ? {} : { mode }), ...(lead === undefined ? {} : { leadSessionId: lead }) };
+	const env = teamEnv({
+		teams: [row],
+		askScript,
+		omitUserQuestions,
+		selfCwd: SM_WS,
+		sessions: [{ header: { id: SM_OTHER, createdAt: 1000, cwd: SM_WS }, live: true, persisted: true }],
+		extraAgents: [{ id: SM_OTHER, status: "idle" }],
+	});
+	env.ns.data.pairs = structuredClone(SM_TRUST_PAIRS);
+	env.ns.data.trustedSenders = [...SM_TRUST_SENDERS];
+	env.ns.data.rememberTargets = [...SM_TRUST_TARGETS];
+	if (agentTeams !== undefined && agentTeams !== null) env.ctx.provide("agentTeams", agentTeams.service);
+	env.agentTeams = agentTeams;
+	env.row = () => env.ns.data.teams[0];
+	env.trust = () => JSON.stringify([env.ns.data.pairs ?? [], env.ns.data.trustedSenders ?? [], env.ns.data.rememberTargets ?? []]);
+	return env;
+}
+/** decisions.md 的当前内容（不存在 = 空串），用于「恰好一行」与「零新增」两类断言。 */
+const smDecisionsText = async () => {
+	try { return await readFile(smDecisions, "utf8"); } catch { return ""; }
+};
+
+// --- U2: 正常路径（确认框选「切换」⇒ 落笔 + decisions 恰好一行）---------------
+const smOk = modeSetEnv();
+const smTrustBefore = smOk.trust();
+const smOkDecBefore = await smDecisionsText();
+const smOkOut = await rosterCall(smOk, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(smOk.senderAgent));
+const smOkDecisions = await smDecisionsText();
+check("B/U2 落笔: 确认框答「切换」后 settings 的 teams 行写入 mode=agent-team 与 Lead（**省略 leadSessionId ⇒ 默认取调用方自己的会话 id**）",
+	smOk.row().mode === "agent-team" && smOk.row().leadSessionId === "session-self" && smOkOut.includes("已切换形态：团队 " + SM_TEAM + " —— sessions → agent-team（Lead=session-self）"));
+check("B/U2 形态史恰好一行: decisions.md 新增**恰一行**（旧内容逐字节是它的前缀），正文逐字是「形态 → agent-team（Lead=<id>）」",
+	smOkDecBefore === "" && smOkDecisions.startsWith(smOkDecBefore) && (smOkDecisions.match(/\n$/u) ?? []).length === 1
+		&& smOkDecisions.slice(smOkDecBefore.length).split(/\r?\n/u).filter((line) => line !== "").length === 1
+		&& /^1 \| \d{4}-\d{2}-\d{2}T[\d:.]+Z \| session-self \| 形态 → agent-team（Lead=session-self）$/u.test(smOkDecisions.slice(smOkDecBefore.length).trim()));
+check("B/U2 确认框正文: 明示「省略即默认取本次调用会话」＋ 三件不迁移（信任 / 成员名册 / 任务归属）＋ 当前 teammate 行 ＋「不阻断」那句（§4.4 提示式）",
+	(() => {
+		const ask = smOk.uq.requests[0];
+		if (ask === undefined) return false;
+		const body = String(ask.questions[0].question);
+		return body.includes("默认取本次调用会话自己") && body.includes("切换后不会迁移：") && body.includes("① 信任") && body.includes("② 成员名册") && body.includes("③ 任务归属")
+			&& body.includes("当前 teammate（若可读）：lead（Lead，running）") && body.includes("请确认它们的结论已落到黑板或文件 —— 本提示不阻断切换。")
+			&& ask.questions[0].options.map((option) => option.label).join(",") === "切换,取消";
+	})());
+check("B/U2 返回体: 附新档的能力矩阵与那句结论（人不必再去读一次设计档）",
+	smOkOut.includes("能力矩阵（新档 agent-team") && smOkOut.includes("| 跨会话投递（team_link_send） | ✅ 主用途 | ❌ 成员是子代理，不是可投递目标 |") && smOkOut.includes(MD_CONCLUSION));
+
+// --- U3: 无确认服务 ⇒ fail-closed（零写入）------------------------------------
+const smNoUq = modeSetEnv({ omitUserQuestions: true });
+const smNoUqBefore = JSON.stringify(smNoUq.ns.data.teams);
+const smNoUqDecBefore = await smDecisionsText();
+const smNoUqOut = await rosterCall(smNoUq, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(smNoUq.senderAgent));
+check("B/U3 无确认服务 ⇒ fail-closed 且**零写入**（settings 逐字节不变 + decisions.md 零新增 + 零弹框）",
+	smNoUqOut.includes("确认服务（userQuestions）不可用") && smNoUqOut.includes("fail-closed") && smNoUqOut.includes("本次零写入")
+		&& JSON.stringify(smNoUq.ns.data.teams) === smNoUqBefore && smNoUq.row().mode === undefined && (await smDecisionsText()) === smNoUqDecBefore);
+
+// --- U4: 取消 / 超时 ⇒ 零写入 -------------------------------------------------
+const smCancel = modeSetEnv({ askScript: ["取消"] });
+const smCancelBefore = JSON.stringify(smCancel.ns.data.teams);
+const smCancelDecBefore = await smDecisionsText();
+const smCancelOut = await rosterCall(smCancel, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(smCancel.senderAgent));
+check("B/U4 取消: 确认框答「取消」⇒ 拒绝且**零写入**（settings / decisions 都不动，形态仍是 sessions）",
+	smCancelOut.includes("切换未执行") && smCancelOut.includes("取消") && smCancelOut.includes("本次零写入") && JSON.stringify(smCancel.ns.data.teams) === smCancelBefore && smCancel.row().mode === undefined && (await smDecisionsText()) === smCancelDecBefore);
+
+const smTimeout = modeSetEnv({ askScript: [] });
+smTimeout.uq.script.push((request) => new Promise((_resolve, reject) => {
+	request.signal.addEventListener("abort", () => reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORTED" })));
+}));
+const smTimeoutBefore = JSON.stringify(smTimeout.ns.data.teams);
+const smTimeoutDecBefore = await smDecisionsText();
+const realSetTimeoutSm = globalThis.setTimeout;
+let smTimeoutOut;
+globalThis.setTimeout = (fn, ms, ...rest) => {
+	if (!(typeof ms === "number" && ms >= 60000)) return realSetTimeoutSm(fn, ms, ...rest);
+	const timer = realSetTimeoutSm(fn, 0, ...rest);
+	timer.unref = () => timer;
+	return timer;
+};
+try {
+	smTimeoutOut = await rosterCall(smTimeout, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(smTimeout.senderAgent));
+} finally {
+	globalThis.setTimeout = realSetTimeoutSm;
+}
+check("B/U4 超时: 确认框 3 分钟未获应答（计时器到点）⇒ 拒绝且**零写入**，并如实说明是超时",
+	smTimeoutOut.includes("切换未执行") && smTimeoutOut.includes("分钟内未获应答（超时；无人在场）") && smTimeoutOut.includes("本次零写入")
+		&& JSON.stringify(smTimeout.ns.data.teams) === smTimeoutBefore && smTimeout.row().mode === undefined && (await smDecisionsText()) === smTimeoutDecBefore);
+
+// --- U5: writer gate（双重门的第一道，原样不动）-------------------------------
+const smForeign = modeSetEnv();
+const smForeignBefore = JSON.stringify(smForeign.ns.data.teams);
+const smForeignDecBefore = await smDecisionsText();
+const smForeignOut = await rosterCall(smForeign, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(smForeign.targetAgent));
+check("B/U5 writer gate: 非现任协调者调用 ⇒ 沿用既有拒绝文案（同一个门），且**零写入**、零弹框",
+	smForeignOut.includes("只有现任协调者会话 session-self 可写") && JSON.stringify(smForeign.ns.data.teams) === smForeignBefore && smForeign.uq.requests.length === 0 && (await smDecisionsText()) === smForeignDecBefore);
+const smVacant = modeSetEnv({ current: null });
+const smVacantOut = await rosterCall(smVacant, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(smVacant.senderAgent));
+check("B/U5 writer gate: 现任空缺 ⇒ 会话路径一律拒绝（设置 UI 仍是兜底），且零写入",
+	smVacantOut.includes("当前空缺") && smVacantOut.includes("设置 UI") && smVacant.row().mode === undefined && smVacant.uq.requests.length === 0);
+
+// --- U6（D8 放宽后）: 幂等 = 同档同 Lead **且账上已有这一档的形态史行** ------------
+// 判据由「同档同 Lead」放宽成「同档同 Lead ＋ 账上那一行在不在」：账上**在** ⇒ 零写幂等；
+// 账上**缺** ⇒ 补记一行再返回（否则 US6「每次切换留一行」会被幂等分支永久破坏，
+// 而 decisions 写失败时给出的指路「重发本次切换以补记」也就不可执行 —— 那正是 D8）。
+const smIdem = modeSetEnv({ mode: "agent-team", lead: "session-self" });
+const smIdemBefore = JSON.stringify(smIdem.ns.data.teams);
+const smIdemDecBefore = await smDecisionsText();
+const smIdemOut = await rosterCall(smIdem, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(smIdem.senderAgent));
+check("B/U6 幂等（agent-team，账上已有该行）: 同档同 Lead 且 decisions.md 里已有这一档的行（U2 那次真切换写的）⇒ 返回「已是该档」，**不弹框**（确认服务零请求）、**零写入**（settings 与 decisions 都逐字节不变）",
+	smIdemDecBefore.includes("形态 → agent-team（Lead=session-self）") && smIdemOut.includes("已是该档") && smIdem.uq.requests.length === 0 && JSON.stringify(smIdem.ns.data.teams) === smIdemBefore && (await smDecisionsText()) === smIdemDecBefore);
+const smIdemSessions = modeSetEnv();
+const smIdemSessionsBefore = JSON.stringify(smIdemSessions.ns.data.teams);
+const smIdemSessionsDecBefore = await smDecisionsText();
+const smIdemSessionsOut = await rosterCall(smIdemSessions, { action: "set-mode", team: SM_TEAM, mode: "sessions" }, execFor(smIdemSessions.senderAgent));
+const smIdemSessionsDecAfter = await smDecisionsText();
+check("B/U6 幂等（sessions，账上缺该行 ⇒ 补记）: 本来就是多会话档、settings 一个字没写、也不弹框；账上没有「形态 → sessions」这一行 ⇒ 按 D8 **补记恰好一行**，且返回体如实说明这是补记",
+	smIdemSessionsDecBefore.includes("形态 → agent-team（Lead=session-self）") && !smIdemSessionsDecBefore.includes("形态 → sessions")
+		&& smIdemSessionsOut.includes("已是该档") && smIdemSessionsOut.includes("形态史补记") && smIdemSessions.uq.requests.length === 0
+		&& JSON.stringify(smIdemSessions.ns.data.teams) === smIdemSessionsBefore
+		&& smIdemSessionsDecAfter.startsWith(smIdemSessionsDecBefore) && smIdemSessionsDecAfter.slice(smIdemSessionsDecBefore.length).split(/\r?\n/u).filter((line) => line !== "").length === 1
+		&& / 形态 → sessions$/u.test(smIdemSessionsDecAfter.trim()));
+const smIdemAgain = await rosterCall(smIdemSessions, { action: "set-mode", team: SM_TEAM, mode: "sessions" }, execFor(smIdemSessions.senderAgent));
+check("B/U6 幂等（补记之后）: 账上已有这一行 ⇒ 再发一次仍为零写幂等（decisions 逐字节不变、settings 不变、不弹框）——「已有该行」才是零写的那一支",
+	smIdemAgain.includes("已是该档") && smIdemAgain.includes("已有") && smIdemSessions.uq.requests.length === 0
+		&& JSON.stringify(smIdemSessions.ns.data.teams) === smIdemSessionsBefore && (await smDecisionsText()) === smIdemSessionsDecAfter);
+
+// --- U7: 参数边界（闭集 / 显式空串 / 形状 / 在场 / 误用）------------------------
+const smBadMode = modeSetEnv();
+const smBadModeBefore = JSON.stringify(smBadMode.ns.data.teams);
+const smBadModeOut = await rosterCall(smBadMode, { action: "set-mode", team: SM_TEAM, mode: "agentTeam" }, execFor(smBadMode.senderAgent));
+check("B/U7 闭集: mode 非法 ⇒ 拒绝并**列出两个值**（拒绝对话框都不弹），零写入",
+	smBadModeOut.includes("切换失败") && smBadModeOut.includes("闭集") && smBadModeOut.includes("sessions / agent-team") && smBadModeOut.includes("agentTeam") && smBadMode.uq.requests.length === 0 && JSON.stringify(smBadMode.ns.data.teams) === smBadModeBefore);
+const smEmptyLead = modeSetEnv();
+const smEmptyLeadOut = await rosterCall(smEmptyLead, { action: "set-mode", team: SM_TEAM, mode: "agent-team", leadSessionId: "" }, execFor(smEmptyLead.senderAgent));
+check("B/U7 显式空串: leadSessionId: \"\" ⇒ 拒绝（agent-team 档没有 Lead 就没有意义），零写入、零弹框",
+	smEmptyLeadOut.includes("切换失败") && smEmptyLeadOut.includes("显式空串") && smEmptyLead.uq.requests.length === 0 && smEmptyLead.row().mode === undefined);
+const smShapeLead = modeSetEnv();
+const smShapeLeadOut = await rosterCall(smShapeLead, { action: "set-mode", team: SM_TEAM, mode: "agent-team", leadSessionId: "-bad id!" }, execFor(smShapeLead.senderAgent));
+check("B/U7 形状: leadSessionId 不符合 ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ⇒ 拒绝并回显收到的值，零写入、零弹框",
+	smShapeLeadOut.includes("切换失败") && smShapeLeadOut.includes("形状非法") && smShapeLeadOut.includes("-bad id!") && smShapeLead.uq.requests.length === 0 && smShapeLead.row().mode === undefined);
+const smGoneLead = modeSetEnv();
+const smGoneLeadOut = await rosterCall(smGoneLead, { action: "set-mode", team: SM_TEAM, mode: "agent-team", leadSessionId: "session-typo-1" }, execFor(smGoneLead.senderAgent));
+check("B/U7 在场校验: leadSessionId 形状合法但**不在本次会话列表快照**里 ⇒ 拒绝并指路先复制正确的 id（防转录错位），零写入",
+	smGoneLeadOut.includes("切换失败") && smGoneLeadOut.includes("session-typo-1") && smGoneLeadOut.includes("team_link_list_sessions") && smGoneLeadOut.includes("转录错位") && smGoneLead.uq.requests.length === 0 && smGoneLead.row().mode === undefined);
+const smMisuse = modeSetEnv();
+const smMisuseOut = await rosterCall(smMisuse, { action: "set-mode", team: SM_TEAM, mode: "sessions", leadSessionId: SM_OTHER }, execFor(smMisuse.senderAgent));
+check("B/U7 参数误用: mode=sessions 同时给 leadSessionId ⇒ 拒绝（多会话档没有 Lead 这个角色，参数不许静默生效），零写入",
+	smMisuseOut.includes("切换失败") && smMisuseOut.includes("只对 agent-team 档生效") && smMisuse.uq.requests.length === 0 && smMisuse.row().mode === undefined);
+
+// --- U10: 信任一行不动 --------------------------------------------------------
+check("B/U10 信任不动: 切档前后 pairs / trustedSenders / rememberTargets **逐字节不变**（红线 3：信任不自动迁移）",
+	smOk.trust() === smTrustBefore && (smOk.ns.data.pairs ?? []).length === 1 && smOk.ns.data.trustedSenders.length === 1 && smOk.ns.data.rememberTargets.length === 1);
+
+// --- U11b: 写路径探测（宿主不可用 ⇒ 刺眼拒绝；切回来不探测）--------------------
+// `agentTeams: null` = **不提供**宿主投影（参数默认值只在 undefined 时生效，所以这里必须显式传 null）。
+const smNoHost = modeSetEnv({ agentTeams: null });
+const smNoHostBefore = JSON.stringify(smNoHost.ns.data.teams);
+const smNoHostDecBefore = await smDecisionsText();
+const smNoHostOut = await rosterCall(smNoHost, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(smNoHost.senderAgent));
+check("B/U11b 写路径刺眼报错: 宿主 Agent Teams 不可用 ⇒ 切**到** agent-team 被拒绝 + **指路怎么开** + 零写入 + 零弹框（绝不把 agent-team 请求当多会话执行）",
+	smNoHostOut.includes("切换被拒绝") && smNoHostOut.includes("agentTeams") && smNoHostOut.includes("@deepseek-ai/dsh-experimental-agent-team-profile") && smNoHostOut.includes("dsh.profile.bundles") && smNoHostOut.includes("零写入")
+		&& JSON.stringify(smNoHost.ns.data.teams) === smNoHostBefore && smNoHost.uq.requests.length === 0 && (await smDecisionsText()) === smNoHostDecBefore);
+const smBack = modeSetEnv({ mode: "agent-team", lead: "session-self", askScript: ["切换"] });
+const smBackOut = await rosterCall(smBack, { action: "set-mode", team: SM_TEAM, mode: "sessions" }, execFor(smBack.senderAgent));
+check("B/U11b 切回不探测: 切**回** sessions **不探测**宿主（回默认档永远可用）⇒ 照常成功、Lead 指针清空、decisions 记一行",
+	smBackOut.includes("已切换形态：团队 " + SM_TEAM + " —— agent-team → sessions") && smBack.row().mode === "sessions" && smBack.row().leadSessionId === "" && /形态 → sessions$/mu.test((await smDecisionsText()).trim()));
+
+// --- 宣传面=实现面: 第五个动词进了工具面 --------------------------------------
+const smTool = mdEnv.tool("team_link_roster");
+check("B/宣传面=实现面: roster 的 action 闭集与描述都写上了第五个动词 set-mode，且参数面给出 mode / leadSessionId",
+	smTool.parameters.properties.action.enum.join(",") === "get,upsert-team,set-role,retire,set-mode" && smTool.description.includes("set-mode") && smTool.parameters.properties.mode !== undefined && smTool.parameters.properties.leadSessionId !== undefined);
+
+
+
+// ===========================================================================
+// B 批（形态批）· 阶段 3：状态卡形态段（U13）· 不悄悄降级（U8）· 只读宿主（U9）·
+// 形态诊断行（U14）· 既有动词与 rotate/recover 零回归（U12）
+// 设计档 §4.3 / §5 红线 1–2 / §5 红线 6，判据 U8 / U9 / U12 / U13 / U14。
+// ===========================================================================
+
+/** 某个工作区/团队自己的 decisions.md（新夹具各自一份，免得拿别人的账当自己的空档）。 */
+const decTextOf = async (ws, team) => {
+	try { return await readFile(path.join(ws, "team", team, "decisions.md"), "utf8"); } catch { return ""; }
+};
+
+// --- U8: 不悄悄降级（宿主不可用 ⇒ 刺眼报错 + 指路；且没有任何多会话路径被执行）---
+check("B/U8 不悄悄降级: 拒绝文案点名缺的是宿主 Agent Teams 能力、给出开启路径，且**没有任何多会话路径被执行**——零投递、零建会话、零弹框、形态仍是 sessions（红线 2：绝不把 agent-team 请求当多会话执行）",
+	smNoHostOut.includes("切换被拒绝") && smNoHostOut.includes("Agent Teams") && smNoHostOut.includes("dsh.profile.bundles")
+		&& !smNoHostOut.includes("已切换形态")
+		&& smNoHost.senderCalls.injected.length === 0 && smNoHost.senderCalls.steered.length === 0 && smNoHost.senderCalls.followedup.length === 0
+		&& smNoHost.creates.length === 0 && smNoHost.uq.requests.length === 0 && smNoHost.ns.data.teams[0].mode === undefined);
+
+// --- U9: 只读宿主（set-mode 全流程对宿主零写调用）-----------------------------
+check("B/U9 只读宿主（成功路径）: 整条切档路径对宿主**零写调用**（替身里每个写方法一被调用就抛错并记账），只碰了投影的两个**读**面",
+	smOk.agentTeams.calls.writes.length === 0 && smOk.agentTeams.calls.tryMembership >= 1 && smOk.agentTeams.calls.listMembers >= 1);
+check("B/U9 只读宿主（拒绝路径）: 被 writer gate 拒绝的那次同样零写调用（门在探测与弹框之前就拦下了）",
+	smForeign.agentTeams.calls.writes.length === 0 && smForeign.agentTeams.calls.listMembers === 0 && smForeign.agentTeams.calls.tryMembership === 0
+		&& smVacant.agentTeams.calls.writes.length === 0);
+
+// --- U13: 状态卡显示形态段 ----------------------------------------------------
+const st3Ws = path.join(MD_TMP, "st3-ws");
+const st3Lead = "session-st3-lead";
+const st3AgentTeams = makeAgentTeams();
+const st3Env = teamEnv({
+	teams: [{ ...teamRow({ name: "st3-team", workspace: st3Ws }), mode: "agent-team", leadSessionId: st3Lead }],
+	selfCwd: st3Ws,
+	sessions: [{ header: { id: st3Lead, createdAt: 1000, cwd: st3Ws }, live: true, persisted: true }],
+	extraAgents: [{ id: st3Lead, status: "running" }],
+});
+st3Env.ctx.provide("agentTeams", st3AgentTeams.service);
+const st3SettingsBefore = JSON.stringify(st3Env.ns.data);
+const st3Out = await statusCall(st3Env, { team: "st3-team" });
+check("B/U13 状态卡形态段: 状态卡追加第 ⑦ 段「形态」——形态 + Lead + 名册投影（文案一）+ **完整能力矩阵** + 结论，而 A 批的六段一字未少",
+	st3Out.includes("--- 形态（⑦") && st3Out.includes("- st3-team：形态=agent-team · Lead=" + st3Lead)
+		&& st3Out.includes("来源：宿主 agentTeams 投影（本部署可读）") && st3Out.includes("| 能力 | 多会话档 | agent-team 档 |") && st3Out.includes(MD_CONCLUSION)
+		&& ["团队与角色", "换届 pending", "看门狗", "会话面", "活性（有界", "台账尾"].every((needle) => st3Out.includes(needle)));
+check("B/U13 状态卡只读: 形态段与 A 批六段一样**零写入**（调用前后 settings 逐字节不变，形态未被自动改写）",
+	JSON.stringify(st3Env.ns.data) === st3SettingsBefore && st3Env.ns.data.teams[0].mode === "agent-team" && st3AgentTeams.calls.writes.length === 0);
+
+// --- U14: 形态诊断行（只提示，绝不自动切）--------------------------------------
+const st3SoleWs = path.join(MD_TMP, "st3-sole-ws");
+const st3Sole = teamEnv({ teams: [teamRow({ name: "sole-team", workspace: st3SoleWs })], selfCwd: st3SoleWs, sessions: [], extraAgents: [] });
+const st3SoleSettingsBefore = JSON.stringify(st3Sole.ns.data);
+const st3SoleOut = await rosterCall(st3Sole, { action: "get" }, execFor(st3Sole.senderAgent));
+const st3SoleStatus = await statusCall(st3Sole, { team: "sole-team" });
+check("B/U14 诊断行（出现）: 除自己外没有其他可达会话 ⇒ 读面（roster get 与状态卡）各附一行，文案点名 set-mode 这条路，并写明**只提示**",
+	st3SoleOut.includes("⚠ 多会话通道看起来不可用（列表里没有其他会话）—— 你可以让协调者切到 agent-team 档（team_link_roster action=set-mode）")
+		&& st3SoleOut.includes("只提示：本插件绝不自动切档") && st3SoleStatus.includes("team_link_roster action=set-mode）") && st3SoleStatus.includes("只提示"));
+const smGet = await rosterCall(smOk, { action: "get" }, execFor(smOk.senderAgent));
+check("B/U14 诊断行（不出现）: 列表里有别的会话 ⇒ 一行都不打（同一个渲染器，判据只有一条）",
+	mdGet.includes("多会话通道看起来不可用") === false && smGet.includes("多会话通道看起来不可用") === false);
+check("B/U14 只提示、绝不自动切: 出诊断行的那两次读**零写入**——settings 逐字节不变、形态一个字没改、decisions 零新增（红线 6）",
+	JSON.stringify(st3Sole.ns.data) === st3SoleSettingsBefore && st3Sole.ns.data.teams[0].mode === undefined && (await decTextOf(st3SoleWs, "sole-team")) === "" && st3Sole.ns.data.teams[0].leadSessionId === undefined);
+
+// --- U12: 既有四动词与 rotate / recover 零回归 --------------------------------
+const rgEnv = modeSetEnv();
+const rgBefore = JSON.stringify(rgEnv.ns.data.teams);
+const rgUpsert = await rosterCall(rgEnv, { action: "upsert-team", team: SM_TEAM }, execFor(rgEnv.senderAgent));
+const rgSetRole = await rosterCall(rgEnv, { action: "set-role", team: SM_TEAM, role: "reviewer", session: SM_OTHER, note: "评审岗" }, execFor(rgEnv.senderAgent));
+const rgRetire = await rosterCall(rgEnv, { action: "retire", team: SM_TEAM, role: "reviewer" }, execFor(rgEnv.senderAgent));
+check("B/U12 零回归（既有四动词）: upsert-team / set-role / retire 的语义与文案一字未改——同一个 action 闭集里只多了第五个动词",
+	rgBefore !== "" && rgUpsert.includes("已存在") && rgUpsert.includes("幂等") && rgSetRole.includes("已设置") && rgSetRole.includes("未迁移 pairs") && rgRetire.includes("已退役") && rgEnv.row().roles.some((entry) => entry.role === "reviewer" && entry.current === null));
+// D7③ 如实标注：这两条 arity 断言（@writerGate.length === 2@ 等）是**函数元数变更探测器**，
+// 不是**行为锁** —— 有人给这三个门加/减一个形参时会红，而它红的理由与门的行为对不对无关。
+// 保留它（形参面漂移同样值得一次人工确认），但这里不再把它读成「门没被改过」的证据；
+// 真正钉住门的是上面那几条行为断言与动词闭集锁。
+check("B/U12 零回归（rotate / recover）: 两个工具的动词闭集锁定，三道门函数的**形参个数**同上（元数探测器，见上三行的标注——它不是行为锁）",
+	__testing.writerGate.length === 2 && __testing.retireGate.length === 2 && __testing.rotateGate.length === 3
+		&& rgEnv.tool("team_link_rotate").parameters.properties.action.enum.join(",") === "prepare,claim"
+		&& rgEnv.tool("team_link_recover").parameters.properties.action.enum.join(",") === "revive,reappoint");
+check("B/U12 只动两个键: 切档只改 mode / leadSessionId —— 团队行的键集恰是规范形状（多出来的正是那两个），roles / policy / workspace / createdAt 逐字节不变",
+	Object.keys(smOk.ns.data.teams[0]).sort().join(",") === "createdAt,leadSessionId,mode,name,policy,roles,rotationBackup,workspace"
+		&& JSON.stringify(smOk.ns.data.teams[0].policy) === JSON.stringify({ writer: "coordinator" })
+		&& smOk.ns.data.teams[0].roles.length === 1 && smOk.ns.data.teams[0].roles[0].current === "session-self");
+
+// ===========================================================================
+// 分歧审计修复轮 `DIVERGENCE(8)`（2026-09-27）· 代码与断言面：D1 / D2 / D3 / D5 / D6 / D8
+// 设计口径：B 档 §4.2（幂等放宽为「同档同 Lead ＋ 账上有该行」）/ §4.3(3)（首行按分支准确化）/
+// §3.3.1（镜像与设置变更同一事务）/ §4.4（确认框的两档 teammate 行）；父档 §2.3 第 7 行改**已核**口径。
+// ===========================================================================
+
+// --- D1: 拒绝文案通用化 ＋ 补设置 UI 兜底路 -----------------------------------
+// 旧文案断言「本部署的 profile 未启用该组合包」—— 而真机 desktop profile **已经装载**它，真机走到的是
+// 「服务在场但调用方不是成员」那一支。所以「怎么开」只对**确实缺席**的 profile 有意义，必须写成通用
+// 表述；同时补一条永远可用的兜底路（设置 UI 是超级写者）—— 防假阴性把用户卡死。
+check("D1 拒绝文案通用化: 「怎么开」不再断言「本部署没装载」，改成按**当前活动 profile** 的 dsh.profile.bundles 自查（该组合包确实缺席时才适用），并明说「已经在那里 ⇒ 拦住本次切换的是别的原因」",
+	smNoHostOut.includes("当前活动的 profile") && smNoHostOut.includes("dsh.profile.bundles")
+		&& smNoHostOut.includes("@deepseek-ai/dsh-experimental-agent-team-profile")
+		&& smNoHostOut.includes("本部署") === false && smNoHostOut.includes("本部署未装载") === false);
+check("D1 设置 UI 兜底路: 拒绝文案补上「用户经设置 UI 直接改 team-link.teams[].mode / leadSessionId」这条永远可用的路",
+	smNoHostOut.includes("兜底路（永远可用）") && smNoHostOut.includes("用户经设置 UI 永远是超级写者")
+		&& smNoHostOut.includes("team-link.teams[].mode") && smNoHostOut.includes("leadSessionId"));
+
+// --- D2: 名册投影不可读的分支（服务在场）＋ D5: 确认框的不可读档 ---------------
+/** D2/D5 夹具：同一个团队行（agent-team + Lead），只换宿主替身。 */
+const mdProbeEnv = (agentTeams, askScript = []) => {
+	const built = teamEnv({
+		teams: [mdHostRow],
+		askScript,
+		sessions: [{ header: { id: MD_LEAD, createdAt: 1000, cwd: MD_WS }, live: true, persisted: true }],
+		extraAgents: [{ id: MD_LEAD, status: "running" }],
+		selfCwd: MD_WS,
+	});
+	built.ctx.provide("agentTeams", agentTeams.service);
+	return built;
+};
+// 分支①「调用方非成员」：服务在、凭据不认（tryMembership 返回 undefined ⇒ 根本走不到 listMembers）。
+// 这一支此前**零断言**，而它正是真机最可能走到的那一支。
+const mdNonMember = makeAgentTeams({ isMember: false });
+const mdNonMemberEnv = mdProbeEnv(mdNonMember);
+const mdNonMemberOut = await rosterCall(mdNonMemberEnv, { action: "get" }, execFor(mdNonMemberEnv.senderAgent));
+check("D2 分支①「调用方非成员」: 首行是**中性**的「成员名册不可读」，不再谎称「本部署未提供该投影」（首行与原因行不许自相矛盾）；紧随的原因行点名调用方不在宿主团队里，形态 + Lead + 能力矩阵照旧",
+	mdNonMemberOut.includes("成员名册不可读") && mdNonMemberOut.includes("本部署未提供该投影") === false
+		&& mdNonMemberOut.includes("（不可读原因：") && mdNonMemberOut.includes("不是宿主团队的成员")
+		&& mdNonMember.calls.listMembers === 0
+		&& mdNonMemberOut.includes("- host-team：形态=agent-team · Lead=" + MD_LEAD) && mdNonMemberOut.includes("| 能力 | 多会话档 | agent-team 档 |"));
+// 分支②「读取抛错」：两个读方法都在、凭据也认，但 listMembers 自己抛错。此前同样**零断言**。
+const mdThrow = makeAgentTeams({ listThrows: true });
+const mdThrowEnv = mdProbeEnv(mdThrow);
+const mdThrowOut = await rosterCall(mdThrowEnv, { action: "get" }, execFor(mdThrowEnv.senderAgent));
+check("D2 分支②「读取抛错」: 同样用中性首行 ＋ 原因行（原因里带宿主抛出的错），形态 + Lead + 能力矩阵照给 —— 读路径如实降级，不是拒绝",
+	mdThrowOut.includes("成员名册不可读") && mdThrowOut.includes("本部署未提供该投影") === false
+		&& mdThrowOut.includes("（不可读原因：") && mdThrowOut.includes("宿主 agentTeams 投影读取失败")
+		&& mdThrow.calls.listMembers === 1 && mdThrowOut.includes("| 能力 | 多会话档 | agent-team 档 |"));
+check("D2 首行按分支准确化（反向锁）: 只有**服务缺席**那一支才说「本部署未提供该投影」，且原因行点名是服务缺席（两行互相印证：不再无条件先打那一句）。**收尾修复轮 R1 同批改写**：原因行的措辞随 `probeAgentTeams` 一起软化（旧文案「宿主没有提供 agentTeams 服务（本次运行的 profile 没有装载…）」把服务缺席断言成 profile 没装载），本锁改为咬新措辞",
+	mdNoHostGet.includes("成员名册不可读（本部署未提供该投影）—— 仍可读 Lead 与形态") && mdNoHostGet.includes("（不可读原因：服务 agentTeams 当前不可见")
+		&& mdNoHostGet.includes("也可能尚未激活完成") && mdNoHostGet.includes("（不可读原因："));
+// D5（§4.4 的第二档）：确认框正文里「当前 teammate」那一行的**不可读**档。
+const d5Env = mdProbeEnv(makeAgentTeams({ isMember: false }), ["切换"]);
+const d5Out = await rosterCall(d5Env, { action: "set-mode", team: "host-team", mode: "agent-team" }, execFor(d5Env.senderAgent));
+check("D5 确认框正文（名册不可读档）: 「当前 teammate（若可读）：（成员名册不可读）」如实说出不可读，而「不会迁移的三件事」与「本提示不阻断切换」两句照旧 —— §4.4 的两档此前只断言了可读档",
+	(() => {
+		const ask = d5Env.uq.requests[0];
+		if (ask === undefined) return false;
+		const body = String(ask.questions[0].question);
+		return body.includes("当前 teammate（若可读）：（成员名册不可读）") && body.includes("切换后不会迁移：")
+			&& body.includes("① 信任") && body.includes("② 成员名册") && body.includes("③ 任务归属")
+			&& body.includes("请确认它们的结论已落到黑板或文件 —— 本提示不阻断切换。");
+	})());
+check("D5 两档对照: 名册**可读**时同一句照旧逐个列成员（U2 那次确认框），不可读时写「（成员名册不可读）」—— 同一处代码的两个分支，不是两套口径；两次切换都照常落笔",
+	String(smOk.uq.requests[0]?.questions[0]?.question ?? "").includes("当前 teammate（若可读）：lead（Lead，running）")
+		&& d5Out.includes("已切换形态") && d5Env.ns.data.teams.find((entry) => entry.name === "host-team").mode === "agent-team");
+
+// --- D3: roster.md 镜像补 mode / Lead 两行，set-mode 落笔后重写镜像 -----------
+const mrWs = path.join(MD_TMP, "mirror-ws");
+const mrEnv = modeSetEnv({ askScript: ["切换"], workspace: mrWs });
+const mrOut = await rosterCall(mrEnv, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(mrEnv.senderAgent));
+const mrMirrorPath = path.join(mrWs, "team", SM_TEAM, "roster.md");
+const mrMirror = await readOrMissing(mrMirrorPath);
+check("D3 镜像补两行: set-mode 也是一次**设置变更** ⇒ 落笔后与既有调用点同形地重写 roster.md 镜像（返回体带「镜像已更新」），镜像里出现「形态（mode）」与「Lead 会话（leadSessionId）」两行（值 = 本次落笔的值）",
+	mrOut.includes("已切换形态") && mrOut.includes("镜像已更新：" + mrMirrorPath)
+		&& mrMirror.includes("- 形态（mode）：agent-team") && mrMirror.includes("- Lead 会话（leadSessionId）：session-self")
+		&& mrMirror.includes("- policy.writer：coordinator"));
+const mrBackEnv = modeSetEnv({ askScript: ["切换"], workspace: mrWs, mode: "agent-team", lead: "session-self" });
+const mrBackOut = await rosterCall(mrBackEnv, { action: "set-mode", team: SM_TEAM, mode: "sessions" }, execFor(mrBackEnv.senderAgent));
+const mrMirrorBack = await readOrMissing(mrMirrorPath);
+check("D3 镜像跟着事实走: 切回 sessions 的同一次调用又重写一遍镜像 ——「形态（mode）：sessions」＋ Lead 行如实写成**空**（多会话档没有 Lead 角色），镜像不比事实活得久",
+	mrBackOut.includes("已切换形态") && mrMirrorBack.includes("- 形态（mode）：sessions")
+		&& mrMirrorBack.includes("- Lead 会话（leadSessionId）：（空；"));
+const mrBlockedEnv = modeSetEnv({ askScript: ["切换"], workspace: blockedRoot });
+const mrBlockedOut = await rosterCall(mrBlockedEnv, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(mrBlockedEnv.senderAgent));
+check("D3 镜像仍 best-effort: 镜像写不动（workspace 指向一个**文件**）时 set-mode 照旧**落笔成功**（settings 落笔 ＋ 一句「镜像写入失败」告警 ＋ 形态史的失败如实标注），语义与既有调用点一字不差 —— 镜像坏掉绝不把整次切换变成失败",
+	mrBlockedOut.includes("已切换形态") && mrBlockedOut.includes("镜像写入失败") && mrBlockedOut.includes("settings 是本插件的事实源")
+		&& mrBlockedOut.includes("形态史未写") && mrBlockedEnv.row().mode === "agent-team");
+
+// --- D6: 「只改这两个键」的准确口径（整份数组回写）----------------------------
+const mtWs = path.join(MD_TMP, "multi-ws");
+const mtFilled = { ...teamRow({ name: "other-filled", workspace: mtWs, current: "session-other" }), mode: "agent-team", leadSessionId: "session-other-lead" };
+const mtBare = teamRow({ name: "other-bare", workspace: mtWs, current: "session-other" });
+const mtEnv = teamEnv({
+	teams: [teamRow({ name: SM_TEAM, workspace: mtWs }), mtFilled, mtBare],
+	askScript: ["切换"],
+	selfCwd: mtWs,
+	sessions: [{ header: { id: SM_OTHER, createdAt: 1000, cwd: mtWs }, live: true, persisted: true }],
+	extraAgents: [{ id: SM_OTHER, status: "idle" }],
+});
+// 宿主探测要过（否则整次切换在探测那一关就被拒，测不到「整份数组回写」这一条）。
+mtEnv.ctx.provide("agentTeams", makeAgentTeams().service);
+const mtOut = await rosterCall(mtEnv, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(mtEnv.senderAgent));
+const mtFilledAfter = mtEnv.ns.data.teams[1];
+const mtBareAfter = mtEnv.ns.data.teams[2];
+check("D6 多团队夹具（准确口径）: 切档只改**本团队行**的 mode / leadSessionId；其余团队行因整份数组回写被**补默认值**（夹具里缺这两个键 ⇒ sessions / 空串），而**已有值一个字不被覆盖**（与既有 upsert-team 同形，语义无变化）",
+	mtBare.mode === undefined && mtBare.leadSessionId === undefined
+		&& mtOut.includes("已切换形态") && mtEnv.ns.data.teams[0].mode === "agent-team" && mtEnv.ns.data.teams[0].leadSessionId === "session-self"
+		&& mtFilledAfter.mode === "agent-team" && mtFilledAfter.leadSessionId === "session-other-lead"
+		&& mtBareAfter.mode === "sessions" && mtBareAfter.leadSessionId === ""
+		&& mtFilledAfter.roles[0].current === "session-other" && mtBareAfter.roles[0].current === "session-other");
+
+// --- D8: 可执行的补记路径（decisions 写失败 ⇒ 按指路重发 ⇒ 账上确实出现该行）----
+const nbWs = path.join(MD_TMP, "noboard-ws");
+const nbEnv = modeSetEnv({ askScript: ["切换"], workspace: "" });
+const nbOut1 = await rosterCall(nbEnv, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(nbEnv.senderAgent));
+check("D8 前置（写失败）: 团队没有 workspace ⇒ settings 落笔成功而**形态史未写**，返回体给出可执行的指路（补上路径后重发本次切换以补记）",
+	nbEnv.row().mode === "agent-team" && nbEnv.row().leadSessionId === "session-self" && nbOut1.includes("已切换形态")
+		&& nbOut1.includes("形态史未写") && nbOut1.includes("重发本次切换以补记"));
+// 用户经设置 UI 补上 workspace（这里就是改这一个字段；设置 UI 是超级写者）。
+nbEnv.ns.data.teams[0].workspace = nbWs;
+const nbOut2 = await rosterCall(nbEnv, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(nbEnv.senderAgent));
+const nbDec = await decTextOf(nbWs, SM_TEAM);
+check("D8 指路可执行（本轮修复的核心）: 按指路重发 ⇒ 幂等分支命中但账上缺那一行 ⇒ **补记恰好一行**，账上确实出现「形态 → agent-team（Lead=session-self）」，返回体如实说明这是补记（US6「每次切换留一行」不再被幂等分支永久破坏）",
+	nbOut2.includes("已是该档") && nbOut2.includes("形态史补记")
+		&& nbDec.split(/\r?\n/u).filter((line) => line !== "").length === 1 && /形态 → agent-team（Lead=session-self）$/u.test(nbDec.trim()));
+// fail-closed 的两条：拿不准就**不补记**，并把「为什么没写」如实说回来（猜就是造假账）。
+const fbWs = path.join(MD_TMP, "readfail-ws");
+await mkdir(path.join(fbWs, "team", SM_TEAM, "decisions.md"), { recursive: true });
+const fbEnv = modeSetEnv({ mode: "agent-team", lead: "session-self", workspace: fbWs });
+const fbOut = await rosterCall(fbEnv, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(fbEnv.senderAgent));
+check("D8 fail-closed①（账读不出来）: decisions.md 读不出来（夹具：同名**目录** ⇒ EISDIR）⇒ 无法核实账上有没有这一行 ⇒ **不补记**，返回体如实说明「不补记」且**不出现成功措辞**",
+	fbOut.includes("已是该档") && fbOut.includes("不补记") && fbOut.includes("无法读取")
+		&& fbOut.includes("形态史补记（恰好一行）") === false);
+const nbEmpty = modeSetEnv({ mode: "agent-team", lead: "session-self", workspace: "" });
+const nbEmptyOut = await rosterCall(nbEmpty, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(nbEmpty.senderAgent));
+check("D8 fail-closed②（没有 workspace）: 幂等分支同样**不补记**（黑板根目录未知 ⇒ 无从核实），返回体如实说明并给出「补写路径后重发」的路",
+	nbEmptyOut.includes("已是该档") && nbEmptyOut.includes("不补记") && nbEmptyOut.includes("重发本次切换以补记"));
+
+// ===========================================================================
+// B 批**收尾修复轮**（2026-09-27）· 代码评审 R1–R6（R7 仅留档，本轮不动）：
+// R1 诊断话术软化（D1 同类漏改的一处）· R2 同一判据只取一次 · R3 TOCTOU 后镜像与形态史同源 ·
+// R4 形态史语义明示（返回体措辞与 README / B 档 §4.2 同批）· R5 无会话身份时不判、不猜。
+// 设计口径：B 档 docs/team-mode-batch-design-2026-09-26.md §4.2 / §4.3(3) / §6 U6。
+// ===========================================================================
+
+// --- R1: 诊断话术不再替宿主下结论（旧文案把「服务看不见」断言成「profile 没装载」）----
+check("R1 写路径拒绝文案软化: 「服务缺席」那一支只说**服务当前不可见**并列出两种可能（可能未装载该组合包 / 也可能尚未激活完成），不再断言「本次运行的 profile 没有装载」—— 拒绝本身照旧刺眼（拒绝 + 指路 + 零写入），只是**不替宿主下结论**",
+	smNoHostOut.includes("切换被拒绝") && smNoHostOut.includes("服务 agentTeams 当前不可见")
+		&& smNoHostOut.includes("也可能尚未激活完成") && smNoHostOut.includes("没有装载") === false
+		&& smNoHostOut.includes("怎么开：") && smNoHostOut.includes("本次**零写入**"));
+check("R1 写读同源（读路径的原因行）: 同一条 reason 在名册投影的「（不可读原因：…）」行里逐字相同 —— 只有一份字面量，两条路不许各写一份",
+	mdNoHostGet.includes("（不可读原因：服务 agentTeams 当前不可见") && mdNoHostGet.includes("也可能尚未激活完成")
+		&& mdNoHostGet.includes("没有装载") === false);
+
+// --- R2: 同一个判据只取一次（可用性门与确认框正文的投影曾各探一次）----------------
+const r2Ws = path.join(MD_TMP, "r2-ws");
+const r2Probe = makeAgentTeams();
+const r2Env = modeSetEnv({ askScript: ["切换"], workspace: r2Ws, agentTeams: r2Probe });
+const r2Out = await rosterCall(r2Env, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(r2Env.senderAgent));
+check("R2 同一判据只取一次: 切到 agent-team 的整条路径上宿主投影只被**探测一次**（tryMembership / listMembers 各恰 1 次）—— 可用性门的结果直接复用为确认框正文的投影，不再对同一判据探两次",
+	r2Out.includes("已切换形态") && r2Probe.calls.tryMembership === 1 && r2Probe.calls.listMembers === 1
+		&& r2Env.uq.requests.length === 1);
+const r2BackWs = path.join(MD_TMP, "r2-back-ws");
+const r2BackProbe = makeAgentTeams();
+const r2BackEnv = modeSetEnv({ mode: "agent-team", lead: "session-self", askScript: ["切换"], workspace: r2BackWs, agentTeams: r2BackProbe });
+const r2BackOut = await rosterCall(r2BackEnv, { action: "set-mode", team: SM_TEAM, mode: "sessions" }, execFor(r2BackEnv.senderAgent));
+check("R2 ★ 负相（复用不改切回方向的语义；两种实现上都绿 —— 覆盖缺口类，不冒充红相）: 切**回** sessions 没有前置探测 ⇒ 现读一次投影，确认框正文的「当前 teammate」行照旧逐个列成员（复用只发生在「切到 agent-team」那一向）",
+	(() => {
+		const ask = r2BackEnv.uq.requests[0];
+		if (ask === undefined) return false;
+		return String(ask.questions[0].question).includes("当前 teammate（若可读）：lead（Lead，running）");
+	})() && r2BackProbe.calls.tryMembership === 1 && r2BackOut.includes("已切换形态：团队 " + SM_TEAM + " —— agent-team → sessions"));
+
+// --- R3: TOCTOU 复检后镜像与形态史**同源**（曾在确认框期间改 workspace 时分家）------
+// 用户在确认框打开期间经设置 UI 改 workspace（设置 UI 是超级写者）：镜像用复检后的行，
+// 形态史原先用**对话框前**那一行 ⇒ 镜像写新路径、账写旧路径。这里把两者钉在同一行上。
+const r3OldWs = path.join(MD_TMP, "r3-old-ws");
+const r3NewWs = path.join(MD_TMP, "r3-new-ws");
+// 对话框脚本在 ask() 里执行（此时 r3Env 已初始化）：正是「对话框期间设置变了」那一瞬。
+const r3Env = modeSetEnv({ askScript: [() => { r3Env.ns.data.teams[0].workspace = r3NewWs; return "切换"; }], workspace: r3OldWs });
+const r3Out = await rosterCall(r3Env, { action: "set-mode", team: SM_TEAM, mode: "agent-team" }, execFor(r3Env.senderAgent));
+const r3NewMirror = await readOrMissing(path.join(r3NewWs, "team", SM_TEAM, "roster.md"));
+const r3NewDecisions = await readOrMissing(path.join(r3NewWs, "team", SM_TEAM, "decisions.md"));
+const r3OldDecisions = await readOrMissing(path.join(r3OldWs, "team", SM_TEAM, "decisions.md"));
+check("R3 TOCTOU 后镜像与形态史**同源**: 确认框期间 workspace 被改 ⇒ 两者都落在**复检后**的那一行：新路径下 roster.md 与 decisions.md 都在（且写着本次落笔的值），旧路径下**一个文件都没生成** —— 「镜像写新、形态史写旧」的账/镜像分家不再可能",
+	r3Out.includes("已切换形态") && r3Out.includes("镜像已更新：" + path.join(r3NewWs, "team", SM_TEAM, "roster.md"))
+		&& r3NewMirror.includes("- 形态（mode）：agent-team") && r3NewDecisions.includes("形态 → agent-team（Lead=session-self）")
+		&& r3OldDecisions.includes("读取失败") === true && r3Env.ns.data.teams[0].workspace === r3NewWs);
+
+// --- R4: 形态史语义（「首次声明也算一行」—— 文档与返回体措辞同批同源）--------------
+check("R4 形态史语义明示（返回体）: 「已是该档」那一支如实说明形态史记的是「**声明过这一档**」、不是「档位发生变化」—— 与 README / B 档 §4.2 的新口径同源；旧措辞「形态史记的是「切换」，不是「重复声明」」在实现里**零残留**（首次声明也会补记一行）",
+	smIdemOut.includes("已是该档") && smIdemOut.includes("声明过这一档") && smIdemOut.includes("档位发生变化")
+		&& smIdemOut.includes("重复声明") === false);
+
+// --- R5: 无会话身份时**不判、不猜**（旧实现退化为按 process.cwd() 过滤）-------------
+const r5AnonExec = { signal: new AbortController().signal };
+const r5AnonGet = await rosterCall(st3Sole, { action: "get" }, r5AnonExec);
+check("R5 无会话身份（roster get）: 调用方没有会话身份 ⇒ 诊断行的判据是 **null（不判）**，与 sessionIdSnapshot 的失败语义对齐 —— 读面照出形态段，但**不打**「⚠ 多会话通道看起来不可用」（旧实现退化成按 process.cwd() 过滤，于是凭空打出基于猜测的告警）",
+	r5AnonGet.includes("- sole-team：形态=sessions") && r5AnonGet.includes("--- 能力矩阵")
+		&& r5AnonGet.includes("多会话通道看起来不可用") === false);
+check("R5 无会话身份（状态卡 ⑦ 段）: 同一条纪律收敛到状态卡 —— 没有身份时不判（判据 = null），⑦ 段照出、身份如实标「（当前会话未知）」，但**不打**诊断行",
+	stNoIdentity.includes("--- 形态（⑦") && stNoIdentity.includes("（当前会话未知）")
+		&& stNoIdentity.includes("多会话通道看起来不可用") === false);
+check("R5 反面对照（有身份时判据照样生效）: 同一个夹具**带**会话身份时诊断行照旧出现 —— 「不判」只针对**没有身份**那一支，不是把判据整体关掉",
+	st3SoleOut.includes("多会话通道看起来不可用") && st3SoleStatus.includes("多会话通道看起来不可用"));
 // B6（③b 差异审计）: `tmpDir` is the export block's output directory and it is
 // re-created at the END of the run, so `rmSync` at import time cleans the PREVIOUS
 // run but leaves the current run's two files behind — every suite run leaked two

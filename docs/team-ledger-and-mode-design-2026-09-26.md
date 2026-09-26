@@ -1,6 +1,6 @@
 # 团队协作的「台账 + 形态」设计
 
-> **状态**：✅ 已拍板（2026-09-26）· ✅ **设计评审 PASS（2026-09-26，零 🔴；7 条建议已按用户裁定全部折入本档）** · 🚧 **实施中**（eng_coder，5 阶段）· 判据 **U1–U18**。**第 0 步（文档与约定）已完成**；§6 是拍板结果与决策留痕，§7 是实施顺序，§9 是第一批的实施级设计。
+> **状态**：✅ 已拍板（2026-09-26）· ✅ **设计评审 PASS（2026-09-26，零 🔴；7 条建议已按用户裁定全部折入本档）** · ✅ **已全部实施**（步 0–6：第 1 步「台账」＋ 第 2 / 4 / 6 步「可观测批（A 批）」＋ 第 3 / 5 步「形态批（B 批）」）· 判据 **U1–U18**。**第 0 步（文档与约定）已完成**；§6 是拍板结果与决策留痕，§7 是实施顺序，§9 是第一批的实施级设计。
 > **来源**：会诊 #9 裁定层（`docs/consult-minutes/2026-09-26-consult-9-minutes.md` §2–§5）+ 2026-09-26 的用户口径与讨论。
 > **读法**：**先看 §1（白话版）**，再看 §6（拍板点）；§2–§5 是想细看时的方案本体。
 
@@ -61,7 +61,7 @@
 | 看门狗（`watch`） | ✅ | ❌ teammate 不是根代理，盯不了 |
 | 黑板（decisions / discipline / tasks） | ✅ | ⚠️ 仍可用，但只有 Lead 一方读写 |
 | roster 身份 / 版本史 | ✅ | ⚠️ 只记「本团队是 agent-team 档 + Lead 是谁」 |
-| 团队状态卡（只读） | ✅ | ⚠️ 成员部分要读宿主投影（**未复核**） |
+| 团队状态卡（只读） | ✅ | ⚠️ 成员部分读宿主投影（2026-09-27 已核：本部署已挂载该服务 ⇒ 探针 available=true） |
 | 会话深链 / 导出 | ✅ | ✅ 与形态无关 |
 
   结论：agent-team 档应叫「**单会话兜底档**」，不是「另一种平等的形态」。**多会话不可用**时才切过去，切过去就等于放弃跨会话的全部能力。
@@ -158,16 +158,16 @@ seq | 时间                | 作者              | 正文
 
 ## 7. 实施顺序（已拍板，按风险从低到高）
 
-> **第 0 步已于 2026-09-26 完成**：四条纪律已进 README §四的「推荐起手的 `discipline.md`」；README 置顶新增「与 DSH Agent Teams 的关系：正交，不是竞争」（并已进目录与设计文档索引）；本页与对比页 §7 已回填拍板结论。**第 1 步（台账）已于 2026-09-26 实施**（`lib/index.js` ＋ `host-half.test.mjs`，判据 U1–U18 见 §9；**当次实测** `node host-half.test.mjs` → `1057 (failed: 0)`、`node client-half.test.mjs` → `269 (failed: 0)`，逐轮红相/绿相读数见 `docs/verification-log.md`）。**第 2 / 4 / 6 步已于 2026-09-26 作为「可观测批（A 批）」一并实施**（实施级设计另立一档：[observability-batch-design-2026-09-26.md](observability-batch-design-2026-09-26.md)，判据 U1–U14；范围 = 本档 §7 的步 2 ＋ 步 4 ＋ 步 6 两半；**当次实测** `node host-half.test.mjs` → `1117 (failed: 0)`、`node client-half.test.mjs` → `269 (failed: 0)`，红相/绿相读数见 `docs/verification-log.md` 的「可观测批（A 批）」一节；提交哈希 `ac3a831d74fb64ae4f6577b3f79a9cc0cc7fb371`（回填于 2026-09-27））。**第 3 步（形态）与第 5 步（交卷提示）尚未开工。**
+> **第 0 步已于 2026-09-26 完成**：四条纪律已进 README §四的「推荐起手的 `discipline.md`」；README 置顶新增「与 DSH Agent Teams 的关系：正交，不是竞争」（并已进目录与设计文档索引）；本页与对比页 §7 已回填拍板结论。**第 1 步（台账）已于 2026-09-26 实施**（`lib/index.js` ＋ `host-half.test.mjs`，判据 U1–U18 见 §9；**当次实测** `node host-half.test.mjs` → `1057 (failed: 0)`、`node client-half.test.mjs` → `269 (failed: 0)`，逐轮红相/绿相读数见 `docs/verification-log.md`）。**第 2 / 4 / 6 步已于 2026-09-26 作为「可观测批（A 批）」一并实施**（实施级设计另立一档：[observability-batch-design-2026-09-26.md](observability-batch-design-2026-09-26.md)，判据 U1–U14；范围 = 本档 §7 的步 2 ＋ 步 4 ＋ 步 6 两半；**当次实测** `node host-half.test.mjs` → `1117 (failed: 0)`、`node client-half.test.mjs` → `269 (failed: 0)`，红相/绿相读数见 `docs/verification-log.md` 的「可观测批（A 批）」一节；提交哈希 `ac3a831d74fb64ae4f6577b3f79a9cc0cc7fb371`（回填于 2026-09-27））。**第 3 步（形态）与第 5 步（交卷提示）已于 2026-09-27 作为「形态批（B 批）」一并实施**（实施级设计另立一档：[team-mode-batch-design-2026-09-26.md](team-mode-batch-design-2026-09-26.md)，判据 U1–U14 ＋ U11b；**当次实测** `node host-half.test.mjs` → `1168 (failed: 0)`、`node client-half.test.mjs` → `269 (failed: 0)`，红相/绿相读数见 [verification-log.md](verification-log.md) 的「形态批（B 批）」一节；提交哈希 **待父会话回填**）。**B 批收尾修复轮（代码评审 R1–R6）已于 2026-09-27 在同一批内闭环**：R1 诊断话术软化（不再把「服务当前不可见」断言成「profile 没装载」）· R2 同一判据只探一次 · R3 镜像与形态史**同源** · R4 幂等语义明示「首次声明也算一行」· R5 无会话身份时形态诊断行**不判** · R6 本档状态行与 §7 步 3 的「唯一的行为改动」收窄为「唯一的**门 / 写路径语义**改动」（R7 仅留档、代码与夹具一字未动）；本轮新增 **9** 条宿主断言 ＋ 改写 **1** 条 ⇒ 套件自报 `1193 (failed: 0)` / `269 (failed: 0)`，读数见 [verification-log.md](verification-log.md) 的「B 批收尾修复轮（R1–R6）」一节；提交哈希 **待父会话回填**）。
 
 | 步 | 内容 | 规模 | 前置 |
 |---|---|---|---|
 | 0 | 文档与约定：本条四条纪律进 `discipline.md`；README 置顶「与 DSH Agent Teams 的关系」；对比页 §7 回填 | 小（零代码） | 无 |
 | 1 | ✅ **已实施**（2026-09-26；当次实测 `host 1057 (failed: 0)` / `client 269 (failed: 0)`；提交哈希：`3a9635c7f7248f34ed0d1cd23f95099fa58c1ef0`（回填于 2026-09-26））：台账 `tasks.md`（只追加 + 读时投影）+ `t-<序号>` 约定 | 中 | 拍板一 |
 | 2 | ✅ **已实施**（2026-09-26，随「可观测批（A 批）」，设计与判据见 [observability-batch-design-2026-09-26.md](observability-batch-design-2026-09-26.md) §4.1；提交哈希 `ac3a831d74fb64ae4f6577b3f79a9cc0cc7fb371`（回填于 2026-09-27））：解读会话的 **12 窗口**（`PREVIEW_SESSIONS`）—— 台账收件视图与派生回执都依赖它；本批把它从「固定 12」扩成「**默认 12 ＋ 点名 `readIds` ＋ 分页 `offset`**」，并把成本上限定成**按工具分账**的不变量 | 中 | 无（可并行） |
-| 3 | 形态字段 + agent-team 档（只读投影 + 拒绝时指路 + 不悄悄降级） | 中 | 拍板二 |
-| 4 | ✅ **已实施**（2026-09-26，随「可观测批（A 批）」：新工具 `team_link_status`，六段 + 判据写死的反面预警注记；见 [observability-batch-design-2026-09-26.md](observability-batch-design-2026-09-26.md) §4.2；提交哈希 `ac3a831d74fb64ae4f6577b3f79a9cc0cc7fb371`（回填于 2026-09-27））：只读团队状态卡 + 反面预警注记 | 中 | 步 2 |
-| 5 | teammate 交卷提示 | 小 | 拍板三 + 步 3 |
+| 3 | ✅ **已实施**（2026-09-27，随「形态批（B 批）」，设计与判据见 [team-mode-batch-design-2026-09-26.md](team-mode-batch-design-2026-09-26.md) §4.1 / §4.2 / §4.3；**当次实测** `host 1168 (failed: 0)` / `client 269 (failed: 0)`，提交哈希 **待父会话回填**）：形态字段 + agent-team 档（只读投影 + 拒绝时指路 + 不悄悄降级）—— 形态记在 settings 的 `mode` / `leadSessionId`；`team_link_roster action=set-mode` 第五个封闭动词；读面形态段（roster get ＋ 状态卡 ⑦ 段）；**分歧修复轮 `DIVERGENCE(8)`（2026-09-27）在同批内闭环 8 条分歧**（唯一的**门 / 写路径语义**改动是 D8：幂等放宽为「同档同 Lead ＋ 账上有该行」，让「重发以补记」这条指路可执行；另 D1 按真机实测更正文档、D2/D3/D4/D5/D6/D7 见该档与 [verification-log.md](verification-log.md) 的「分歧审计修复轮 `DIVERGENCE(8)`」一节；本轮新增 16 条宿主断言；**收尾修复轮 R1–R6（2026-09-27）**又在同批内闭环 6 条评审结论（R4 明示「首次声明也算一行」· R6 把本行那句声明收窄为「唯一的门 / 写路径语义改动」· 其余见该轮验证档一节），再新增 9 条断言 ＋ 改写 1 条 ⇒ 当前套件自报 `1193 (failed: 0)` / `269 (failed: 0)`） | 中 | 拍板二 |
+| 4 | ✅ **已实施**（2026-09-26，随「可观测批（A 批）」：新工具 `team_link_status`，六段 + 判据写死的反面预警注记（**第 ⑦ 段「形态」由 2026-09-27 的「形态批（B 批）」追加**，见 [team-mode-batch-design-2026-09-26.md](team-mode-batch-design-2026-09-26.md) §4.3）；见 [observability-batch-design-2026-09-26.md](observability-batch-design-2026-09-26.md) §4.2；提交哈希 `ac3a831d74fb64ae4f6577b3f79a9cc0cc7fb371`（回填于 2026-09-27））：只读团队状态卡 + 反面预警注记 | 中 | 步 2 |
+| 5 | ✅ **已实施**（2026-09-27，同属「形态批（B 批）」，见 [team-mode-batch-design-2026-09-26.md](team-mode-batch-design-2026-09-26.md) §4.4；提交哈希 **待父会话回填**）：teammate 交卷提示 —— 切换确认框正文列出「不会迁移的三件事」（信任 / 成员名册 / 任务归属）＋ 当前 teammate（可读则列、不可读如实说）＋「请确认它们的结论已落到黑板或文件」；**提示式、不阻断**，不逐成员推断有没有交卷 | 小 | 拍板三 + 步 3 |
 | 6 | ✅ **已实施**（2026-09-26，随「可观测批（A 批）」；**收件视图 ＋ 派生回执 均 ✅**——两半都在本批，见 [observability-batch-design-2026-09-26.md](observability-batch-design-2026-09-26.md) §4.3 / §4.4；提交哈希 `ac3a831d74fb64ae4f6577b3f79a9cc0cc7fb371`（回填于 2026-09-27））：**台账收件视图与派生回执**（会诊 Q1 采纳项：按 `t-<n>` 把相关消息归到一起，**读时算**、不建队列） | 中 | 步 1 + 步 2 |
 
 第 0 步**零风险且已完成**；**第 1 步（台账本体）不依赖任何其它步**——它读的是 `tasks.md` 而非会话日志（§9 已核）；第 2 步是**第 4 步（状态卡）与 §2.2 收件视图**的前置。**第 2 / 4 / 6 步的实施级设计与判据（U1–U14）另立一档**：[observability-batch-design-2026-09-26.md](observability-batch-design-2026-09-26.md)——自此「**每批一档**」是本仓的既定约定（第一批的内嵌式 §9 是特例，不再复制）。
@@ -176,7 +176,7 @@ seq | 时间                | 作者              | 正文
 
 - §1–§7 是**提案与决策留痕**，§9 是**实施级设计**（落点已逐条实读）。两者都**不是**「已实施事实」——落地与否只看 §9.8 的阶段状态与该批的交付报告（**§9 的第一批已于 2026-09-26 实施**：见 §7 第 1 步与 §9 的状态行）。
 - 不写任何宿主源码级结论：对比页 §9 的「未复核线索」在独立复核前不进本方案。
-- **待验**：agent-team 档下「宿主 `agentTeam` 投影能否被本插件客户端读到」——会诊称已核实可读（链路引文），本会话未复核；若不可读，第 3 步的成员视图降级为「只显示 Lead 与形态」。
+- ✅ **已核（2026-09-27，形态批实施期；同日由分歧修复轮 `DIVERGENCE(8)` D1 实证更正）**：agent-team 档下「宿主 `agentTeams` 投影能否被本插件读到」——① **服务名与读面形状已核实**（`TeamService extends Service` → `super(ctx, 'agentTeams')`；读面 `tryMembership(agent)` / `listMembers(agent)`，**以活动代理本人为凭据**）；② **本部署已装载该组合包 ⇒ 服务已挂载**（活动 profile 是 desktop，其 `dsh.profile.bundles` 含 `@deepseek-ai/dsh-experimental-agent-team-profile`；本会话系统提示词同时含该工具包的 POLICY 常量与只由它注册的 `spawn_teammate` 声明 ⇒ 它的 `inject` 含 `agentTeams` 已被满足）⇒ 探针 `available:true`、**U11b 的拒绝路径在本部署不会触发、US1 可达**。此前记的「本部署未装载」（证据是便携残留的 `profile/profiles/web/...`）**是错的**，已更正。读面仍按**分支**文案处置（服务缺席 ⇒ 「成员名册不可读（本部署未提供该投影）—— 仍可读 Lead 与形态」；服务在场而读不到 ⇒ 中性首行 + 原因行）。详见 [team-mode-batch-design-2026-09-26.md](team-mode-batch-design-2026-09-26.md) §8.1 A1 与 §4.3(3)。
 - ✅ **已核实**：`tasks.md` 的写入路径**可以**与 `decisions.md` 完全同构——见 §9.2 落点表（`appendFile` + 每文件独立 seq + 同样的 500 码点上限）。会诊列为「待核实」的那一项，本会话已读码确认。
 ## 9. 实施级设计 · 第一批：台账 `tasks.md`
 

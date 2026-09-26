@@ -1424,3 +1424,259 @@ node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
 - `lib/index.js`：`ROSTER_RESOLVED_NOTE` 常量 ＋ `receiptRowsOf` / `renderReceiptRow` 的按当前名册解析标注 ＋ `team_link_team_read` 描述面同步；**其余一字未动**；
 - `docs/observability-batch-design-2026-09-26.md`：§4.1 / §4.2 / §4.3 / §4.4 的口径回填 ＋ §8.1 A5 行订正 ＋ 状态行加「后续回填」一句；
 - `docs/team-ledger-and-mode-design-2026-09-26.md`：**一字未动**（本轮无该档范围的改动）；B 档 `docs/team-mode-batch-design-2026-09-26.md` 同样一字未动。
+
+---
+
+## 形态批（B 批）：团队形态 · `set-mode` · 读面形态段 · teammate 交卷提示（2026-09-27；当次实测 `1168 (failed: 0)` / `269 (failed: 0)`，基线 `1127 (failed: 0)` / `269 (failed: 0)`）
+
+> 设计（唯一事实源）：[team-mode-batch-design-2026-09-26.md](team-mode-batch-design-2026-09-26.md)（§4.1 形态字段 / §4.2 `set-mode` / §4.3 读面形态段 / §4.4 交卷提示 / §5 红线六条 / §6 判据 U1–U14 ＋ U11b / §7 明确不做 / §8 假设 A1–A4）。变更史见 [../CHANGELOG.md](../CHANGELOG.md) 的「形态批（B 批）」。
+
+### 本批做了什么（四件交付）
+
+1. **形态字段**（只落在 settings）：`mode`（闭集 `sessions` / `agent-team`，默认 `sessions`）＋ `leadSessionId`（Lead **指针**）；`normalizeTeams` 读到闭集外的 `mode` ⇒ 落默认档**并留痕**（读面点名原值 / 闭集 / 「原值未被改写」）；
+2. **`team_link_roster action=set-mode`（第五个封闭动词）**：宿主探测（只对「切到 agent-team」这一向）＋ **双重门**（writer gate 原样 ＋ 人类确认框；无服务 / 超时 / 取消 ⇒ fail-closed 零写入）＋ Lead 校验（形状 ＋ 在场）与默认 ＋ `decisions.md` **恰好一行**形态史 ＋ **幂等**（同档同 Lead ⇒「已是该档」，不弹框、零写入）＋ 写时复检（TOCTOU）；
+3. **读面形态段**（`roster get` 与状态卡 ⑦ 段同一渲染器）：形态 ＋ Lead ＋ 成员名册**投影**（读时现算、一行不落 settings；两种来源文案写死）＋ **完整能力矩阵**（逐行照抄父档 §2.3）＋ 结论 ＋ **形态诊断行**（只提示、绝不自动切）；
+4. **teammate 交卷提示**（提示式、不阻断）：切换确认框正文列出「不会迁移的三件事」＋ 当前 teammate（可读则列 / 不可读如实说）＋「请确认它们的结论已落到黑板或文件」。
+
+**红线（设计 §5，六条）**：只读宿主 · 不悄悄降级（写路径刺眼报错 / 读路径如实降级，两条路不混用）· 信任不迁移（一行不写）· 双重门 fail-closed · 指针不拷贝 · 切档永远由人触发。
+
+### 新增 41 条宿主断言：分阶段红相（测试先行，逐阶段实跑）
+
+方法：**先写断言、后写实现**，每一阶段都在该阶段实现**之前**跑一次套件并记下读数 —— 这比事后换实现更强：整轮跑到底、只有新断言红（Y7 纪律的两处调用器 `rosterCall` / `statusCall` 把「参数不存在 / 工具未注册」的抛错收成文本，不会把 `assertion total` 打崩）。
+
+| 阶段 | 本阶段新断言 | 阶段红相读数 | 备注 |
+| --- | --- | --- | --- |
+| 1 形态字段 ＋ `normalizeTeams` 降级 ＋ `roster get` 形态段（U1 / U11） | 10 | `1137 (failed: 9)` | 1 条**负相**（见下） |
+| 2 `set-mode` 第五动词（U2–U7 / U10 / U11b） | 20 | `1157 (failed: 19)` | 1 条**负相** |
+| 3 状态卡 ⑦ 段 ＋ 诊断行 ＋ 交卷提示 ＋ 零回归（U8 / U9 / U12 / U13 / U14） | 11 | `1168 (failed: 2)` | 其中 3 条已被阶段 2 的实现满足、6 条**负相** |
+| **合计** | **41** | 见下「红相 B」 | |
+
+### 红相 B（本批 41 条判据 ＋ **实施前**的 `lib/index.js`）
+
+方法（安全还原纪律）：把工作树版 `lib/index.js` **读进内存** → 用 `git show HEAD:lib/index.js` 覆写 → 跑 `node host-half.test.mjs` → **还原内存里的那一份** → **sha256 逐字节复核**。换进去的那一份**用 git 自己的量具对过**：覆写后 `git hash-object lib/index.js` == `git rev-parse HEAD:lib/index.js`（`swapBlobMatch=True`）——「实施前」不是自述，是 blob 相等。**不留备份文件、不留探针**，工作树零残留。
+
+- 读数：**`assertion total: 1168 (failed: 34)`** = **33 条 B 判据红** ＋ **1 条既有锁红**；
+- 工作树版 sha256：`4110893DC5F07C56909EE194B1E6BF0F20F5C674B8233007065CAE81A378FA3B`，**还原后逐字节一致**（`restoreMatch: true`）；
+- **那 1 条既有锁红是该红**：`U10: the tool surface has no coordinator parameter`（roster 参数键集锁）—— 临时状态下测试文件已按设计要求期望 `mode`/`leadSessionId`，而旧实现没有这两个参数。**这正是这条锁该红的理由**（加参数而不同改锁即红），与 A 批的「工具计数同改锁」同源，**不是回归**；
+- **本批新增 41 条，其中 33 条在实施前实测红**；另 **8 条在两种实现上都通过**，逐条如实列出（负相 —— 它们补的是**判据覆盖缺口**，不冒充「实施前必红」）：
+
+| # | 在红相 B 上也通过的 8 条 | 为什么 |
+| --- | --- | --- |
+| 1 | B/U11 零回归锁：读面既有内容一字未少（注册表头行 / 角色现任行 / 详情块 / 黑板根 / 读数戳） | **回归锁**：本批只**追加**形态段 |
+| 2 | B/U10 信任不动：切档前后 pairs / trustedSenders / rememberTargets 逐字节不变 | 旧实现里那次调用根本不发生 ⇒ 红相上 trivially 成立；绿相上它是真锁（红线 3） |
+| 3 | B/U9 只读宿主（拒绝路径）：被 writer gate 拒绝的那次零写调用、零投影读 | 旧实现同样不碰宿主 ⇒ trivially 成立；绿相上钉住「门在探测与弹框之前就拦下」 |
+| 4 | B/U13 状态卡只读：调用前后 settings 逐字节不变、形态未被自动改写、宿主零写调用 | 旧实现没有形态段却也不写 ⇒ trivially 成立 |
+| 5 | B/U14 诊断行（不出现）：列表里有别的会话 ⇒ 一行都不打 | 旧实现没有诊断行 ⇒ trivially 成立；绿相上它是**反向锁**（有会话时不许打） |
+| 6 | B/U14 只提示、绝不自动切：出诊断行的那两次读零写入（settings 不变 / 形态未改 / decisions 零新增） | 同上 |
+| 7 | B/U12 零回归（既有四动词）：`upsert-team` / `set-role` / `retire` 的语义与文案一字未改 | **回归锁**：本批不动这四个动词 |
+| 8 | B/U12 零回归（rotate / recover）：两个工具的动词闭集与三道门函数一字未动 | **回归锁**：本批只读它们、不碰它们 |
+
+- **负相如实标注（不冒充「实施前必红」）**：上表 8 条在实施前**本来就绿**（旧实现没有这个 bug，只是没有这条锁）。这与本档既有记法（`★` 标负相）同源。
+- **红相 B 里多出来的 3 条**（相对阶段 3 的红读数）：`B/U8 不悄悄降级`、`B/U9 只读宿主（成功路径）`、`B/U12 只动两个键` —— 它们是阶段 3 写的断言，但**由阶段 2 的实现满足**，所以在本阶段的红读数是绿的、在实施前的实现上是红的。
+
+### 绿相（本批最终读数，实跑两行原文）
+
+```text
+node host-half.test.mjs    → ALL PASS / assertion total: 1168 (failed: 0)
+node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
+```
+
+基线 `1127` / `269` ⇒ **新增 41 条宿主断言**（`1168 = 1127 + 41`）；**浏览器半边本批一字未改**（仍 `269` —— 设计 §7 明确不做客户端面板）。**唯一改动的既有断言**是 roster 参数键集锁（必须与参数面同改，本仓「改一处即两处」的既有规矩）。
+
+### §8 假设 A1–A4 的实测结论（实施期验证，如实标注）
+
+| # | 假设 | 实测结论 |
+| --- | --- | --- |
+| A1 | 宿主 `agentTeams` 服务可 `ctx.get` 到且读面形状可知 —— **2026-09-27 已核**（`DIVERGENCE(8)` D1 实证更正：本节原先记的「本部署仍读不到它」**把真机读反了**） | **① 读面形状已核实**（直读宿主包）：宿主 `TeamService extends Service` → `super(ctx, 'agentTeams')`（`…/dsh-experimental-agent-team/lib/types/index.js:28,46`），读面 = `tryMembership(agent)` / `listMembers(agent)` —— **以活动代理本人为凭据**，没有「按 id 读某一队」的公开面。**② 本部署已装载该组合包 ⇒ 服务已挂载**：活动 profile 是 **desktop**（`DSH_PROFILE=desktop`，`C:\Users\magic\.dsh\profiles\desktop`），其 `dsh.profile.bundles` **含** `@deepseek-ai/dsh-experimental-agent-team-profile`（写入 12:30 早于宿主启动 17:16），四个包也在 `desktop-runtime.json` 的 `sharedPackages` 里；**决定性证据**：本会话日志的系统提示词同时含该工具包的 POLICY 常量与**只由它注册**的 `spawn_teammate` 工具声明，而该工具包 `inject = ["agents","agentTeams","tools","systemPrompt"]` ⇒ `agentTeams` 服务已在运行实例中挂载。⇒ 探针 `available:true`、**U11b 那一支在本部署不会触发、US1 可达**。③ 原证据 `profile/profiles/web/...` 是**便携残留**，不是本部署。**读面仍按分支文案**（服务在场而调用方不是成员 ⇒ 中性首行 + 原因行），**写路径的拒绝分支仍由替身夹具断言**（真机不触发 ≠ 不需要） |
+| A2 | `userQuestions.ask` 在 `set-mode` 场景可用（既有三处调用形一致） | **成立**：确认框走与既有三处同一个调用形（`questions[].options` + `agent` + `signal`，计时器 ＋ `AbortController` 复用 `ROTATION_CONFIRM_TIMEOUT_MS`）；四条路径各有断言：答「切换」⇒ 落笔 / 答「取消」⇒ 零写入 / 3 分钟超时 ⇒ 零写入 / 无确认服务 ⇒ fail-closed 零写入 |
+| A3 | `normalizeTeams` 的降级留痕方式与既有范式一致 | **成立，但确如设计所料需补一处留痕通道**：`normalizeTeams` 是**纯函数**（导出给测试、被 `normalizePolicy` 每次读取调用），拿不到 `ctx` 也就打不出日志 ⇒ 留痕落在**读面**上，由一张**进程内**表（`TEAM_MODE_DEGRADATIONS`，每次归一化重建）承载 —— 与看门狗去抖同一条纪律（进程内、不持久化），**零新持久状态** |
+| A4 | 当前会话 id 可从调用方上下文取（用于默认 Lead） | **成立**：`agentSessionId(exec)`（`exec.agent.id`）就是默认 Lead 的来源，断言覆盖「落笔的 Lead == 调用方会话 id」。**已知未断言的一条分支**（如实记）：`writer=any` 且执行上下文**没有会话身份**时，省略 `leadSessionId` 会走「请显式给 leadSessionId」的拒绝；该分支有实现、暂无断言（writer=coordinator 时空缺 / 无身份那两条已由既有门断言覆盖） |
+
+### 边界证据（逐条取值）
+
+| # | 实测原文（由断言钉住「出现在工具输出里」；字符串常量取自 `lib/index.js`） |
+| --- | --- |
+| **U1** | `- legacy-team：形态=sessions`（老 settings 行，读前读后 settings 逐字节不变、两个新键**没被写进盘**）；`- bad-mode-team：形态=sessions · 形态降级留痕：settings 里的原值「agentTeam」不在闭集内（闭集 sessions / agent-team）⇒ 已按默认档 sessions 读出（原值未被改写，请由用户在设置 UI 修正）。` |
+| **U2** | 落笔：`已切换形态：团队 sm-team —— sessions → agent-team（Lead=session-self）（自 …）。`；形态史恰一行：`1 | 2026-…Z | session-self | 形态 → agent-team（Lead=session-self）`；确认框正文含`省略 leadSessionId ⇒ 默认取本次调用会话自己` |
+| **U3 / U4** | `切换未执行（目标档 agent-team）：确认服务（userQuestions）不可用——切档必须有人在对话框里点一下；无确认即不执行（fail-closed，§4.2）。` / `确认框选了「取消」。` / `确认框 3 分钟内未获应答（超时；无人在场）。` ＋ `本次零写入：settings 与 decisions.md 逐字节未动，团队 … 的形态仍为 sessions。` |
+| **U5** | 沿用既有门文案：`写操作被拒绝：团队 sm-team 的 policy.writer=coordinator，只有现任协调者会话 session-self 可写（当前调用会话 session-target）。` |
+| **U6** | `已是该档：团队 … 的形态已经是 agent-team（Lead=…）—— 本次**不弹确认框、零写入**（连 decisions.md 都不追加：形态史记的是「切换」，不是「重复声明」）。` |
+| **U7** | `切换失败：mode 必须在闭集内（sessions / agent-team）—— 当前是「agentTeam»；…` · `leadSessionId 是**显式空串**…` · `leadSessionId 形状非法（「-bad id!」）…` · `leadSessionId session-typo-1 在本次会话列表快照里找不到（本次列表共 … 个会话）—— 多半是 id 转录错位…` · `leadSessionId 只对 agent-team 档生效…` |
+| **U11b / U8** | `切换被拒绝：本宿主现在到不了 agent-team 档 —— 宿主没有提供 agentTeams 服务（本次运行的 profile 没有装载 Agent Teams 组合包 @deepseek-ai/dsh-experimental-agent-team-profile）。` ＋ `怎么开：先看你**当前活动的 profile** 的 dsh.profile.bundles 里有没有…`（`DIVERGENCE(8)` D1：通用表述，不再断言「本部署没装载」）＋ `兜底路（永远可用）：形态就落在 settings 的 team-link.teams[].mode / leadSessionId 两个键上…` ＋ `本次**零写入**…连确认框都没弹`；切**回** sessions ⇒ `已切换形态：团队 … —— agent-team → sessions`（不探测宿主）。**注意：本部署已装载该组合包（A1）⇒ 真机不会走到这一支**，本条由替身夹具（`agentTeams: null`）断言 |
+| **U11** | 名册可读：`来源：宿主 agentTeams 投影（本部署可读）` ＋ `- lead（Lead，running）`；不可读**按分支取首行**（`DIVERGENCE(8)` D2）：服务缺席 ⇒ `成员名册不可读（本部署未提供该投影）—— 仍可读 Lead 与形态`，其余四条（缺方法 / 无会话身份 / 调用方非成员 / 读取抛错）⇒ 中性首行 `成员名册不可读 —— 仍可读 Lead 与形态（哪一条读不到，见下一行的原因）`；两种情形都在下一行给`（不可读原因：…）`；矩阵区**逐行锁八行原文**（4 个 `❌` ＋ 3 个 `⚠️` ＋ 1 件与形态无关，含第 7 行的已核口径） |
+| **U13** | 状态卡新增段标题：`--- 形态（⑦；本段由 B 批 §4.3 追加：形态 + Lead + 成员名册投影 + 能力矩阵 + 诊断行）---`（A 批六段一字未少，调用前后 settings 逐字节不变） |
+| **U14** | `⚠ 多会话通道看起来不可用（列表里没有其他会话）—— 你可以让协调者切到 agent-team 档（team_link_roster action=set-mode）（只提示：本插件绝不自动切档，切档永远由人在确认框里点一下）。`；有别的会话时**一行都不打** |
+
+### 计数与同批同步
+
+- `lib/index.js`：形态常量与渲染（能力矩阵一行一源）· `TeamConfig` 两字段 · `normalizeTeams` 降级留痕 · `probeAgentTeams` / `readLeadSessionId` / `askModeDialog` / `teamModeSectionLines` / `modeCapabilityLines` / `sessionIdSnapshot` / `otherReachableSessions` · `set-mode` 分支 · `roster get` 与 `team_link_status` 的形态段 · 两个工具描述面；
+- `host-half.test.mjs`：41 条断言 ＋ 宿主 `agentTeams` 替身（只给两个读方法，写方法调用即抛错并记账）＋ `rosterCall` 的 Y7-safe 调用器 ＋ 参数键集锁同改；
+- `README.md`：tests 徽章 / 稳定性格 / §十「当前读数」**三处读数** `1127 → 1168`；roster 动词表补 `set-mode`、工具一览两行（roster / status）；**新增「团队形态（多会话档 ↔ agent-team 档）」一节**（两档白话 ＋ 三句要紧的话 ＋ 能力矩阵 ＋ 怎么切怎么看 ＋ 红线）；状态卡表补 ⑦ 行；设置键表与两处 yaml 样例补两个字段；设计文档索引加本档一行 ＋ 修正 A 批那行的「六段」表述；
+- `CHANGELOG.md`：新增「形态批（B 批）」条目（修了什么 → 为什么 → 明确不做 → 怎么验证 → 同批同步的面）；
+- `docs/team-mode-batch-design-2026-09-26.md`：状态行改「✅ 已实施」＋ 实测读数；§8 假设 A1–A4 回填实测结论；
+- `docs/team-ledger-and-mode-design-2026-09-26.md`：§7 步 3 / 5 标 ✅ 已实施 ＋ 指向本档的链接；状态行同步。**提交哈希留「待父会话提交后回填」**（本轮 coder 不碰 git 历史）；
+- `docs/observability-batch-design-2026-09-26.md`：§7 第 6 条改标「状态卡形态段由 B 批实施」。
+
+---
+
+## 分歧审计修复轮 `DIVERGENCE(8)`（2026-09-27；当次实测 `1184 (failed: 0)` / `269 (failed: 0)`，基线 `1168 (failed: 0)` / `269 (failed: 0)`）
+
+> 来源：只读分歧审计的 **8 条**结论（D1–D8）逐条闭环。**不夹带新功能、不扩范围**：A 批 §7 与 B 档 §7「明确不做」继续有效；`docs/observability-batch-design-2026-09-26.md` **本轮一字未动**。变更史见 [../CHANGELOG.md](../CHANGELOG.md) 的「分歧审计修复轮 `DIVERGENCE(8)`」条目；设计口径落在 B 档 [team-mode-batch-design-2026-09-26.md](team-mode-batch-design-2026-09-26.md)（§3 未复核面行 · §4.2 幂等 · §4.3(3) 首行按分支 · §6 U6 / U11 / U11b · §8 A1 · §8.1 A1）与父档 [team-ledger-and-mode-design-2026-09-26.md](team-ledger-and-mode-design-2026-09-26.md)（§2.3 第 7 行 · §7 步 3 · §8 已核那条）。
+> **上一节（形态批 B 批）的读数是那一批「当次实测」的历史读数**（`1168`）；本节是本轮修复后的当前读数（`1184`），两节不冲突：B 批自身的红相/绿相不变，本轮只在其上**补 16 条断言 ＋ 改写 3 条**。
+
+### 本批做了什么（八条，逐条对审计结论）
+
+| # | 审计结论 | 本轮处置 |
+| --- | --- | --- |
+| D1 🔴 | 文档把真机读反了（断言「本部署未装载组合包 ⇒ 切档被拒」，被实证推翻） | `lib/index.js` 的 `AGENT_TEAMS_HOWTO` 改**通用表述**（按**当前活动 profile** 的 `dsh.profile.bundles` 自查；已经在 ⇒ 拦住本次切换的是别的原因）＋ 拒绝文案补一行 `MODE_SETTINGS_FALLBACK`（设置 UI 永远是超级写者）；B 档 §3 / §8.1 A1、父档 §8 已核那条、本档 A1 与 U11b / U11 证据行、README 与 CHANGELOG 一律同改**实测事实**（desktop profile · `dsh.profile.bundles` 含该包 · 工具包 `inject` 含 `agentTeams` 已被满足 ⇒ 服务已挂载 ⇒ 探针 `available:true` ⇒ 拒绝路径不触发 ⇒ US1 可达） |
+| D2 🟡 | 首行与原因行自相矛盾（5 条不可读分支，无条件的常量首行 + 真机走「调用方非成员」） | `probeAgentTeams` 回一个 `cause` 判别符；渲染器只在 `service-absent` 时打「本部署未提供该投影」，其余四条走中性首行 `TEAM_MODE_ROSTER_UNREADABLE_NEUTRAL` + 原因行；**补两条断言**（调用方非成员档 / 读取抛错档，此前**零断言**） |
+| D3 🟡 | 镜像不含 mode / Lead，而镜像自述「与设置变更同一事务内镜像」 | `renderRosterMirror` 补两行（形态 / Lead 会话）；`set-mode` 落笔后与既有调用点**同形**调用同一个 `writeRosterMirror`（best-effort 语义不变：失败只告警）；**补 3 条断言**（补两行 / 切回后跟着事实走 / 镜像坏掉不阻断切换） |
+| D4 🟡 | 同档自相矛盾 + 过期限定词抄进三处 | 父档 §2.3 第 7 行、`lib/index.js` 能力矩阵常量、README 同一行三处统一为已核口径「⚠️ 成员部分读宿主投影（2026-09-27 已核：本部署已挂载该服务 ⇒ 探针 available=true）」；矩阵断言同时改成**逐行锁八行原文** |
+| D5 🟡 | §4.4 的两档只断言了可读档 | **补「成员名册不可读」档断言**（确认框正文），并补一条两档对照（可读档照旧逐个列成员） |
+| D6 🟡 | 「除这两个键以外一个字不改」是过强表述（实现是整份数组回写） | README / CHANGELOG 改成准确表述（只改**本团队行**的两个键；其余行**缺值补默认、已有值不被覆盖**，与既有 `upsert-team` 同形）；**补一条多团队夹具断言**钉住这两半 |
+| D7 🔵 | 测试盲区 / 死参数 / 元数断言的语义 | ① 能力矩阵断言改**逐行锁八行原文**（原锁只咬 `❌===4 && ⚠️===3` ＋ 2 行原文，其余 6 行文本漂移不会红）；② 删 `modeSetEnv({ tag: "rg" })` 死参数；③ 三道门的 `length` 断言在注释里**如实标注**为「函数元数变更探测器」，不是行为锁 |
+| D8 🟡 | 指路与幂等互斥（唯一的行为缺口） | 幂等判据放宽为「同档同 Lead **且账上已有这一档的形态史行** ⇒ 已是该档（零写）；**账上缺 ⇒ 补记恰好一行**再返回」；正文由**共享常量函数** `modeHistoryBody` 生成（写读同源），只比正文、不看时间戳与作者；**账读不出来 / 没有 workspace ⇒ 不补记**并在返回体如实说明（fail-closed）；**补 3 条断言**（先写失败再按指路重发 ⇒ 账上确实出现该行 / 账读不出来 ⇒ 不补记 / 没有 workspace ⇒ 不补记） |
+
+### 新增 16 条宿主断言的逐条红/负相拆分（测试先行：断言先写，打在**本轮修复前**的实现上）
+
+方法：把 16 条断言（＋ 3 条改写）**先**写进 `host-half.test.mjs`，在**本轮修复前的实现**（工作树，即 B 批的 `lib/index.js`）上整轮跑一次并记下读数 —— 这比事后换实现更强：整轮跑到底、只有新断言红（Y7 纪律的两处调用器把「参数不存在 / 工具未注册」的抛错收成文本，不会把 `assertion total` 打崩）。
+
+- 读数：**`assertion total: 1184 (failed: 14)`**（`nodeExit=1`）。**逐条点名后做了归因**：其中 **13 条是真红**（下面逐条列出），第 14 条（`D6 多团队夹具（准确口径）`）是**夹具假红** —— 那一版夹具忘了 `ctx.provide("agentTeams", …)`，于是整次切换先被宿主探测拒掉、断言读到的是拒绝文案。**补上替身**后，该断言在**两种实现上都绿**（本轮**没有改过**整份数组回写那一行 `reopened.teams.map(...)` ⇒ 行为在修复前后逐字相同）⇒ 它**改归 ★ 负相**（见下面的负相表，第 6 条）。**有效红相 = 13 条**。真红逐条：
+  1. `B/U11 完整能力矩阵（D7① 逐行锁八行原文）`；
+  2. `B/U6 幂等（sessions，账上缺该行 ⇒ 补记）`；
+  3. `B/U6 幂等（补记之后）`；
+  4. `D1 拒绝文案通用化`；
+  5. `D1 设置 UI 兜底路`；
+  6. `D2 分支①「调用方非成员」`；
+  7. `D2 分支②「读取抛错」`；
+  8. `D3 镜像补两行`；
+  9. `D3 镜像跟着事实走`；
+  10. `D3 镜像仍 best-effort`；
+  11. `D8 指路可执行（本轮修复的核心）`；
+  12. `D8 fail-closed①（账读不出来）`；
+  13. `D8 fail-closed②（没有 workspace）`。
+- 另 **6 条在修复前本来就绿**（含上面那条归因过来的 D6）—— 如实标 **★ 负相**（补的是判据覆盖缺口，不冒充「修复前必红」）：
+
+| # | 在本轮修复前也通过的 6 条 | 为什么（★ 负相） |
+| --- | --- | --- |
+| 1 | `B/U6 幂等（agent-team，账上已有该行）`（**改写既有断言**：加上「账上已有该行」这一半 ＋ decisions 逐字节不变） | 夹具的账上本就有 U2 那次真切换写的同一行 ⇒ 旧实现的「同档同 Lead ⇒ 零写」在这一支上**本来就对**；改写的价值是把它与「缺行则补记」那一支**分开钉住** |
+| 2 | `D2 首行按分支准确化（反向锁）` | 反向锁：要求**服务缺席**那一支仍说「本部署未提供该投影」—— 旧实现无条件都这么说，所以它在旧实现上 trivially 绿；绿相上它是「不许把中性首行滥用到服务缺席」的锁 |
+| 3 | `D5 确认框正文（名册不可读档）` | 该档**早就实现了**（`（成员名册不可读）`），缺的是断言 —— 覆盖缺口类 |
+| 4 | `D5 两档对照` | 同上（可读档由 B/U2 断言，本轮把它与不可读档并排对照） |
+| 5 | `D8 前置（写失败）` | 前置条件断言：「没有 workspace ⇒ settings 落笔成功而形态史未写 ＋ 给出指路」在旧实现上**本来就成立**（那一条分支没变）；它钉住的是**重发路径的起点** |
+| 6 | `D6 多团队夹具（准确口径）` | **D6 是文档表述问题、不是行为缺陷**：审计要求的是把「除这两个键以外一个字不改」改准 ＋ **补一条覆盖断言**。本轮**没有动过** `reopened.teams.map(...)` 那一行（修复前后逐字相同）⇒ 断言在两种实现上都绿。**假红说明**：首次红跑时这条 FAIL 是**夹具缺宿主替身**造成的（切换先被探测拒绝），不是 D6 的行为差异 —— 补上替身后即归 ★ 负相，如实标注 |
+
+- **本轮改写的既有断言 3 条**（同批同步，不留旧口径）：`U11 完整能力矩阵`（→ 逐行锁八行原文）· `U6 幂等（agent-team）`（→ 加上「账上已有该行」这一半）· `U6 幂等（sessions）`（→ 拆成「缺行 ⇒ 补记恰好一行」＋「补记之后 ⇒ 零写幂等」两条）。
+
+### 绿相（本批最终读数，实跑两行原文）
+
+```text
+node host-half.test.mjs    → ALL PASS / assertion total: 1184 (failed: 0)
+node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
+```
+
+基线 `1168` / `269` ⇒ **新增 16 条宿主断言**（`1184 = 1168 + 16`）；**浏览器半边本轮一字未改**（仍 `269` —— 本轮只动宿主半边的文案、镜像与幂等分支）。两套件的宿主进程**退出码均为 0**。
+
+### D1–D8 逐条「怎么验证它没了」
+
+| # | 怎么验证它没了（皆由本轮断言钉住） |
+| --- | --- |
+| D1 | 拒绝文案断言要求：含「当前活动的 profile」「dsh.profile.bundles」「@deepseek-ai/dsh-experimental-agent-team-profile」，且**不含**「本部署」/「本部署未装载」；另一条要求含「兜底路（永远可用）」「用户经设置 UI 永远是超级写者」「team-link.teams[].mode」。四处文档同步后，`grep 未装载` 在本档 / README / `lib/index.js` 中**零命中**（B 档与父档只剩「曾把真机读反、已更正」的叙述） |
+| D2 | 两条新断言：`isMember:false` 档与 `listThrows` 档的读面首行是中性行、**不含**「本部署未提供该投影」、且原因行点名各自的 cause；反向锁要求服务缺席档仍用旧文案 —— **首行与原因行不再可能互相打脸** |
+| D3 | 三条断言：`set-mode` 落笔后 `roster.md` 里出现 `- 形态（mode）：agent-team` 与 `- Lead 会话（leadSessionId）：session-self`（返回体带「镜像已更新」）；切回 sessions 后同一文件里是 `sessions` ＋ Lead 行如实写「（空；…）」；镜像写不动（workspace 指向一个文件）时切换照旧成功、只多一句「镜像写入失败」 |
+| D4 | 矩阵断言**逐行**比对八行原文（表头 ＋ 八行恰 9 行），其中第 7 行是已核口径 ⇒ 三处任一处漂回「未复核」即红；`grep 未复核` 在父档 / B 档 / README / `lib/index.js` 的能力矩阵一行**零命中** |
+| D5 | 断言读确认框正文：名册不可读时那一行逐字是 `当前 teammate（若可读）：（成员名册不可读）`，同一次调用的正文仍含三件不迁移与「不阻断」两句；另一条把它与可读档（`lead（Lead，running）`）并排对照 |
+| D6 | 多团队夹具断言：本团队行 `mode=agent-team` / `leadSessionId=session-self`；另一行**已有值**（`agent-team` / `session-other-lead`）**一字未被覆盖**；第三行夹具里**没有**这两个键，调用后变成 `sessions` / 空串 —— 正对着 README / CHANGELOG 改后的准确表述 |
+| D7 | ① 矩阵锁逐行（见 D4）；② `modeSetEnv` 无 `tag` 形参，`grep 'tag: "rg"'` 零命中；③ arity 断言上方的注释如实写明它是**函数元数变更探测器**，不是行为锁 |
+| D8 | 三条断言：**先**在 `workspace` 为空的团队上切换（settings 落笔、形态史未写、给出「重发本次切换以补记」的指路），**再**补上 workspace 重发 ⇒ 账上**确实出现** `形态 → agent-team（Lead=session-self）` 恰一行、返回体说「已是该档」＋「形态史补记」；另两条钉住 fail-closed（`decisions.md` 读不出来 / 没有 workspace ⇒ 「不补记」且不出现成功措辞）；外加两条幂等断言分清「账上有该行 ⇒ 零写」与「账上缺该行 ⇒ 补记」 |
+
+### 边界与残留声明
+
+- **本轮未运行任何破坏性命令**（无 `git rebase` / `reset --hard` / `clean -f` / `push --force`）；**未碰部署面**（`profile/profiles/web/...` 与用户目录里的插件副本）；**未碰 `docs/observability-batch-design-2026-09-26.md`**。
+- **工作树零新增残留**：本轮的套件运行由脚本自己在 teardown 里清掉 `<repo>/.test-tmp-team`（含本轮新增的 `mode/*`、`mirror-ws`、`multi-ws`、`noboard-ws`、`readfail-ws` 夹具目录）；本轮**没有产生任何临时文件 / 探针 / 备份**（红相是「先写断言、在同一棵树里跑」得到的，不需要换实现、不需要隔离夹具目录）。
+- `git status --short` 的八个 `M` 与本轮开始时**逐条相同**（`lib/index.js` · `host-half.test.mjs` · `README.md` · `CHANGELOG.md` · `docs/verification-log.md` · `docs/team-mode-batch-design-2026-09-26.md` · `docs/team-ledger-and-mode-design-2026-09-26.md` · `docs/observability-batch-design-2026-09-26.md` 的修改早于本轮、属上一轮 `DIVERGENCE(12)`）；根目录下那些 `.log` 与被忽略的 `.test-tmp-r7pre/` 都是**更早轮次**留下的（`.gitignore` 已覆盖），本轮既不产生也不清理它们。
+- **提交哈希留「待父会话回填」**（本仓纪律：coder 不碰 git 历史）。
+
+### 同批同步的面
+
+- `lib/index.js`：`AGENT_TEAMS_HOWTO`（通用化）· `MODE_SETTINGS_FALLBACK`（新）· 能力矩阵第 7 行 · `probeAgentTeams` 的 `cause` · `TEAM_MODE_ROSTER_UNREADABLE_NEUTRAL`（新）· `teamModeSectionLines` 按分支取首行 · `renderRosterMirror` 两行 · `set-mode` 的镜像调用 ＋ 幂等放宽 ＋ 形态史共享写入（`modeHistoryBody` / `decisionRowBody` / `decisionsHasModeHistory` / `appendModeHistoryRow` / `backfillModeHistoryRow`）· roster 工具描述面的幂等口径；
+- `host-half.test.mjs`：16 条新断言 ＋ 3 条改写 ＋ `makeAgentTeams` 的 `listThrows` 与 `modeSetEnv` 的 `workspace` 两个夹具参数 ＋ 删死参数 ＋ 元数断言注释；
+- `README.md`：三处读数 `1168 → 1184` · 能力矩阵第 7 行 · 落笔 / 幂等 / 看形态 / `set-mode` 四行 · `agentTeams` 服务表两处；
+- `CHANGELOG.md`：本轮条目 ＋ B 批条目里「落笔」「幂等」两条口径同改；
+- `docs/team-mode-batch-design-2026-09-26.md`：状态行补本轮说明 · §3 未复核面行 · §4.2 落笔后 / 幂等 · §4.3(3) 首行按分支（第三种文案）· §6 U6 / U11 / U11b · §8 A1 · §8.1 A1；
+- `docs/team-ledger-and-mode-design-2026-09-26.md`：§2.3 第 7 行 · §7 步 3 行（补本轮交付说明）· §8 已核那条。
+
+## B 批收尾修复轮（代码评审 R1–R6）（2026-09-27；当次实测 `1193 (failed: 0)` / `269 (failed: 0)`，基线 `1184 (failed: 0)` / `269 (failed: 0)`）
+
+> 来源：形态批（B 批）与分歧审计修复轮 `DIVERGENCE(8)` 之后的**只读代码评审 7 条**，本轮闭环其中 **6 条**（R1–R6）；**R7 不接受修复**（父侧裁定：接受顺序耦合）—— 见下「已知可接受项」。**不夹带新功能、不扩范围**：A 批设计 §7 与 B 档 §7「明确不做」继续有效；`docs/observability-batch-design-2026-09-26.md` **本轮一字未动**；**不碰部署面**。变更史见 [../CHANGELOG.md](../CHANGELOG.md) 的「B 批收尾修复轮（代码评审 R1–R6）」条目；设计口径落在 B 档 [team-mode-batch-design-2026-09-26.md](team-mode-batch-design-2026-09-26.md)（状态行 · §4.2 幂等）与父档 [team-ledger-and-mode-design-2026-09-26.md](team-ledger-and-mode-design-2026-09-26.md)（状态段 · §7 步 3 行）。
+> **取代声明（不删历史）**：上一节 `DIVERGENCE(8)` 的「U11b / U8 边界证据」行引用的 reason 原文（`宿主没有提供 agentTeams 服务（本次运行的 profile 没有装载…）`）**已被本轮 R1 改写** —— 那一行是**那一轮的实测读数**，不再代表当前实现；当前原文见本节 U11b 行。
+
+### 本批做了什么（六条，逐条对评审结论）
+
+| # | 评审结论 | 本轮处置 |
+| --- | --- | --- |
+| R1 🟡 | 诊断话术仍是**断言式归因**（D1 同类，漏改了一处）：`probeAgentTeams` 的 service-absent 分支把「服务看不见」写成因果断言「**本次运行的 profile** 没有装载…」 | reason 软化为「服务 `agentTeams` 当前不可见（可能未装载 Agent Teams 组合包 …, 也可能尚未激活完成 —— 可稍后重试，或核对当前活动 profile 的 `dsh.profile.bundles`）」；写路径拒绝照旧刺眼（拒绝 + 指路 + 零写入），**不替宿主下结论**；**引用该文案的既有断言同批改写**（`D2 首行按分支准确化（反向锁）`） |
+| R2 🔵 | 同一判据被探测两次：可用性门与确认框正文的投影各调一次 `probeAgentTeams` | 「切到 agent-team」那一向的探测结果**直接复用**为确认框正文的投影（`probe ?? probeAgentTeams(...)`）；只有「切回 sessions」那一向没有前置探测、才现读一次。两条路的处置仍各自决定 |
+| R3 🔵 | TOCTOU 复检后的**不对称**：镜像用复检后的行，形态史那行还用**对话框前**的 `team` ⇒ 确认框期间设置变了就账/镜像分家 | 两者**同源**：镜像与形态史都取 `teamWritten = nextTeams.find(...)`（复检后的那一行） |
+| R4 🔵 | 幂等放宽的语义噪音：从未切换过的团队第一次收到默认档声明会**补记一行史**（设计裁定的取舍，**行为不动**） | B 档 §4.2 与 README 的对应处补明示「**首次声明也算一行**（形态史记的是「**声明过这一档**」，不是「档位发生变化」）」；`lib/index.js` 里两处同义措辞（`已是该档` 那一支与 `backfillModeHistoryRow` 的「已有」档）**同批改准** —— 否则文档与工具输出自相矛盾（旧措辞「形态史记的是「切换」，不是「重复声明」」全库零残留） |
+| R5 🔵 | 无会话身份时诊断行会「猜」：`otherReachableSessions` 退化为按 `process.cwd()` 过滤 ⇒ 可能打**基于猜测**的「⚠ 多会话通道看起来不可用」 | `selfId === undefined` ⇒ **返回 `null`（不判）**，与 `sessionIdSnapshot` 的失败语义对齐（读不到 ⇒ `null` ⇒ 不判、不猜）；状态卡 ⑦ 段（原先直接传 `pool`）随之收敛到同一判据 |
+| R6 🔵 | 状态行措辞过宽：B 档写「**D8 是本轮唯一的行为改动**」，而 D2 / D3 都改了**可观测输出** | 收窄为「唯一的**门 / 写路径语义**改动（D2 / D3 只改读面文案与镜像渲染）」；**同类声明全库同改**（B 档状态行 · B 档 §4.2 · `CHANGELOG.md` 的 `DIVERGENCE(8)` 条目 · 父档 §7 步 3 行） |
+
+### 新增 9 条宿主断言 ＋ 改写 1 条的逐条红/负相拆分（测试先行：断言先写，打在**本轮修复前**的实现上）
+
+方法：把 9 条新断言与 1 条改写断言**先**写进 `host-half.test.mjs`，在**本轮修复前的实现**（工作树，即 B 批 ＋ `DIVERGENCE(8)` 的 `lib/index.js`）上整轮跑一次并记下读数。
+
+- 读数：**`assertion total: 1193 (failed: 8)`**（`nodeExit=1`）；**8 条真红**逐条：`R1 写路径拒绝文案软化` · `R1 写读同源（读路径的原因行）` · `R2 同一判据只取一次` · `R3 TOCTOU 后镜像与形态史同源` · `R4 形态史语义明示（返回体）` · `R5 无会话身份（roster get）` · `R5 无会话身份（状态卡 ⑦ 段）`（以上 7 条新断言）＋ `D2 首行按分支准确化（反向锁）`（**改写**：期望值随 R1 的文案一起改，故在本轮修复前的实现上必红）；
+- 另 **2 条新断言在两种实现上都绿** —— 如实标 **★ 负相**（覆盖缺口类 / 反向锁，**不冒充红相**）：
+
+| # | 在本轮修复前也通过的 2 条 | 为什么（★ 负相） |
+| --- | --- | --- |
+| 1 | `R2 ★ 负相（切回方向的对话框正文）` | 切**回** sessions 那一向修复前后**逐字同形**（旧实现也是现读一次投影）⇒ trivially 绿；它的价值是钉住「复用只发生在切到 agent-team 那一向」，防 R2 的复用被顺手扩到另一向 |
+| 2 | `R5 反面对照（有身份时判据照样生效）` | 反向锁：要求**带**会话身份时诊断行照旧出现 —— 旧实现本来就出这一行 ⇒ trivially 绿；绿相上它钉住「R5 不是把判据整体关掉」 |
+
+- **本轮改写的既有断言 1 条**：`D2 首行按分支准确化（反向锁）`（`mdNoHostGet` 的原因行期望值改为新措辞，并新增「也可能尚未激活完成」这半条）。
+
+### 绿相（本批最终读数，实跑两行原文）
+
+```text
+node host-half.test.mjs    → ALL PASS / assertion total: 1193 (failed: 0)
+node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
+```
+
+基线 `1184` / `269` ⇒ **新增 9 条宿主断言**（`1193 = 1184 + 9`）＋ **改写 1 条**；**浏览器半边本轮一字未改**（仍 `269` —— 本轮只动宿主半边的文案与判据）。两套件的宿主进程**退出码均为 0**。
+
+- **如实记一条偶发读数**：绿相**首跑**出现过 1 条与本轮 diff 无关的 FAIL —— `缺口1 超时读数自报真实后果（计时器到点）`（该夹具把生产计时器压成 `0ms`，本身带时序敏感性）。本轮共实跑 6 次：红相 2 次它都绿、绿相首跑它红、其后 **2 次绿相重跑与 1 次改注释后的复核全绿**。它不在本轮触碰的任何代码路径上（rotate / claim 的确认框路径本轮一字未动），按偶发记录在此，供宿主复核时对照。
+
+### R1–R6 逐条「怎么验证它没了」
+
+| # | 怎么验证它没了（皆由本轮断言钉住） |
+| --- | --- |
+| R1 | 两条断言同时咬**写路径**（`smNoHostOut`：含 `服务 agentTeams 当前不可见` 与 `也可能尚未激活完成`、**不含** `没有装载`）与**读路径**（`mdNoHostGet` 的 `（不可读原因：…）` 行逐字同源）⇒ 文案既不再断言成因，也仍然只有一份字面量；`grep 没有装载` 在 `lib/index.js` 的 reason 上**零命中**（HOWTO 里「有没有 …」那类正常表述不受影响） |
+| R2 | `tryMembership` / `listMembers` 各**恰 1 次**，且同一次调用的确认框**确实弹了**（`uq.requests.length === 1`）—— 不是「没探测」而是「只探测一次」。**修复前的次数由代码直接读出**：`probeAgentTeams` 在可用性门与确认框正文各调一次 ⇒ 2 / 2（该断言在本轮修复前实测红，红的就是计数这一项） |
+| R3 | 确认框期间把 workspace 改成新路径 ⇒ 断言要求 **新路径下 `roster.md` 与 `decisions.md` 都在**（内容各含本次落笔的值），**旧路径下一个文件都没生成**（`readOrMissing` 返回读取失败）。修复前该断言红：镜像在新路径、账落在旧路径 |
+| R4 | `已是该档` 的返回体含 `声明过这一档` 与 `档位发生变化`、**不含** `重复声明`；`grep 重复声明` 在 `lib/index.js` / `README.md` / B 档三处**零命中**（仅历史读数节保留旧措辞的引用） |
+| R5 | 两条断言各咬一条路：无身份时 `roster get` 与状态卡 ⑦ 段都**不打**诊断行（旧实现按 `process.cwd()` 过滤 ⇒ 凭空打出这一行），同时形态段、能力矩阵、「（当前会话未知）」照旧；第三条反向锁要求**有身份**时该行照旧出现 |
+| R6 | 四处同类声明（B 档状态行 · B 档 §4.2 · `CHANGELOG.md` 的 `DIVERGENCE(8)` 条目 · 父档 §7 步 3 行）一律收窄为「唯一的**门 / 写路径语义**改动（D2 / D3 只改读面文案与镜像渲染）」；`grep '唯一的行为改动'` 剩下的命中只在**本轮条目的叙述里**（引用旧措辞说明改了什么）与**另一批**（A 批流水里 D7 那条，本轮不在范围内、未动） |
+
+### 已知可接受项（R7，**本轮不修、仅留档**）
+
+- **R7 🔵 测试夹具顺序耦合 —— 接受，不改**。`host-half.test.mjs` 的 `modeSetEnv` 共享 `SM_WS` / `smDecisions`，多个用例依赖前序写入（例如 `U6 幂等（agent-team）` 依赖 `U2` 那次真切换写下的形态史行）。评审与父侧一致裁定为**可接受的顺序耦合**：夹具里有注释说明、`rmSync(TEAM_TMP)` 的 teardown 已清理本轮新增的一切。
+- **如未来重排用例**：必须**同时**给各用例独立 workspace（否则重排即静默改语义）。**已有的正确做法**就在同一文件里：`D8` 的 `nbWs` / `fbWs` 各自一份 workspace。**本轮不新增顺序耦合**：新夹具的 4 个目录各自独立（`r2-ws` / `r2-back-ws` / `r3-old-ws` → `r3-new-ws`，覆盖其中 3 条断言），**其余 6 条新断言读的是既有夹具的只读字符串**（`smNoHostOut` / `mdNoHostGet` / `smIdemOut` / `st3Sole` / `stNoIdentity`），零写入、无前序依赖。
+
+### 边界与残留声明
+
+- **本轮未运行任何破坏性命令**（无 `git rebase` / `reset --hard` / `clean -f` / `push --force`）；**未碰部署面**（`profile/profiles/web/...` 与用户目录 `C:\Users\magic\.dsh-plugins\dsh-team-link`）；**未碰 `docs/observability-batch-design-2026-09-26.md`**。
+- **工作树零新增残留**：本轮没有产生任何临时文件 / 探针 / 备份（红相是「先写断言、在同一棵树里跑」得到的，不换实现、不隔离夹具目录），套件运行由它自己的 teardown 清掉 `<repo>/.test-tmp-team`。`git status --short` 只列本轮允许的 8 个 `M`；根目录下那些 `.log` 与被忽略的 `.test-tmp-r7pre/` 是**更早轮次**留下的（`.gitignore` 已覆盖），本轮既不产生也不清理它们。
+- **提交哈希留「待父会话回填」**（本仓纪律：coder 不碰 git 历史）。
+
+### 同批同步的面
+
+- `lib/index.js`：`probeAgentTeams` 的 service-absent reason（R1）· `set-mode` 的探测复用（R2）与 `teamWritten` 同源（R3）· 两处形态史措辞（R4）· `otherReachableSessions` 的 `selfId` 早返回（R5）· 状态卡 ⑦ 段的判据（R5）；
+- `host-half.test.mjs`：9 条新断言 ＋ 1 条改写（新夹具各自一份 workspace，不新增顺序耦合）；
+- `README.md`：三处读数 `1184 → 1193`（tests 徽章 / 稳定性行 / §十「当前读数」）· 宿主探测行（只报现象 + 只探一次）· 落笔行（镜像与形态史同源）· 幂等行（首次声明也算一行）· 形态诊断行（无身份不判）；
+- `CHANGELOG.md`：本轮条目 ＋ `DIVERGENCE(8)` 条目里 D8 那句声明的收窄；
+- `docs/team-mode-batch-design-2026-09-26.md`：状态行（本轮交付说明 ＋ R6 收窄）· §4.2（R4 明示「首次声明也算一行」＋ R6 收窄）；
+- `docs/team-ledger-and-mode-design-2026-09-26.md`：状态段（本轮交付说明）· §7 步 3 行（R6 收窄 ＋ 本轮读数）。
+
+
+
