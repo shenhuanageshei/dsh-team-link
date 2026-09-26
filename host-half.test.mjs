@@ -6,7 +6,7 @@
 import { Context } from "@deepseek-ai/cordis";
 import { existsSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { apply, __testing } from "./lib/index.js";
@@ -4993,7 +4993,7 @@ check("Y2 文档面=实现面: 发起域（现任成员 ∪ 该角色最近一�
 // 同改清单锁（② 轮「同一清单两处写、只改了一处」的教训）：README 里的工具计数必须
 // 等于**实际注册的工具数**——加一个工具而忘了改 README（或反过来）在这里立刻变红。
 const README_TOOL_COUNT = /(\d+) 个工具 \+ 2 条 \/ 命令/u.exec(handoffReadme)?.[1];
-check("§11.9 文档面=实现面（工具计数同改锁）: README 架构图里写的工具数 == 实际注册的工具数（加/删工具而不同改文档即红）", README_TOOL_COUNT !== undefined && Number(README_TOOL_COUNT) === diagEnv.registeredTools.length && diagEnv.registeredTools.length === 9 && diagEnv.registeredTools.some((tool) => tool.name === "team_link_recover"));
+check("§11.9 文档面=实现面（工具计数同改锁）: README 架构图里写的工具数 == 实际注册的工具数（加/删工具而不同改文档即红）", README_TOOL_COUNT !== undefined && Number(README_TOOL_COUNT) === diagEnv.registeredTools.length && diagEnv.registeredTools.length === 10 && diagEnv.registeredTools.some((tool) => tool.name === "team_link_recover") && diagEnv.registeredTools.some((tool) => tool.name === "team_link_status"));
 
 // ---------------------------------------------------------------------------
 // §9 收尾修复（0.3.7）: U9 settings 时序锁 / U10 创建即认领 / U11 降级红线
@@ -6999,6 +6999,437 @@ check("U4: once BOTH services are up the route mounts (the late-attach pattern n
 const stage1Module = await import("./lib/index.js");
 check("§4.1 红线 B1: `connection` is NOT in the module-level inject array — the fence is an optional service, so a host without it loses the route and nothing else",
 	sameJson(stage1Module.inject, ["sessionReferenceResolver", "tools", "sessionQuery", "agents"]));
+
+// ===========================================================================
+// A 批（可观测批）· 阶段 3：台账收件视图 + 派生回执（team_link_team_read 新块）
+// 设计档 §4.3 / §4.4，判据 U10 / U11 / U14 / U12 与 U7 的 team_read 那一半。
+// ===========================================================================
+
+const TR_TMP = path.join(TEAM_TMP, "inbox");
+const TR_WS = path.join(TR_TMP, "ws");
+const TR_TEAM = "inbox-team";
+const TR_AT = 1_700_000_000_000;
+/** banner 形状照 §3.4 逐字（`ref=` 就在首行里）——收件视图抽的就是它。 */
+const trBanner = (sender, ref) => `📨 [跨会话消息 · 来自会话「${sender}」(${sender}) · 2026-09-26 21:19:00 · type=report ref=${ref}]`;
+const trCall = (seq, callId, time, args) => ({ type: "tool/call", seq, time, data: { turn: 1, step: 1, callId, name: "team_link_send", arguments: JSON.stringify(args) } });
+const trCardResult = (seq, callId, at, ref, targets) => ({
+	type: "tool/result", seq, time: at + 1, data: {
+		turn: 1, step: 1,
+		meta: { kind: "team-link-send", v: 1, at, senderSessionId: "session-self", meta: { ref }, message: { text: "…", truncated: false, chars: 1 }, targets, summary: { delivered: 1, refused: 0, noAgent: 0, noHolder: 0, deduped: 0 }, fanout: false },
+		message: { id: `r-${callId}`, role: "user", source: { kind: "tool", callId }, content: [] },
+	},
+});
+/** D4（修复轮）: the receipt the SENDER text truncates with `targetsTruncated` — the derived view
+ * must report the receipt's OWN total instead of inventing an identity for a target it never saw. */
+const trTruncatedResult = (seq, callId, at, ref, total) => ({
+	type: "tool/result", seq, time: at + 1, data: {
+		turn: 1, step: 1,
+		meta: { kind: "team-link-send", v: 1, at, senderSessionId: "session-self", meta: { ref }, message: { text: "…", truncated: false, chars: 1 }, targets: [{ sessionId: "session-worker-b", outcome: "delivered", detail: "已投递" }], targetsTruncated: { total }, summary: { delivered: 1, refused: 0, noAgent: 0, noHolder: 0, deduped: 0 }, fanout: true },
+		message: { id: `r-${callId}`, role: "user", source: { kind: "tool", callId }, content: [] },
+	},
+});
+/** D4（修复轮）: 18 个目标 —— 一次投递就足以越过 `TASK_INBOX_MESSAGES`(20) 的逐行渲染上限，
+ * 于是「本次还有 N 行未显示」那行必须出现（N 是真实差额，不是静默截断）。 */
+const TR_MANY_TARGETS = Array.from({ length: 18 }, (_, index) => `session-many-${String(index).padStart(2, "0")}`);
+const trSelfEvents = [
+	{ type: "user/message", seq: 1, time: TR_AT - 60000, data: { id: "u1", role: "user", source: { kind: "agent-message", form: "relay", senderSessionId: "session-worker-b" }, content: [{ type: "text", text: `${trBanner("session-worker-b", "t-7")}\n核出 3 处错（依据 lib/index.js:3548）` }] } },
+	{ type: "assistant/message", seq: 2, time: TR_AT - 50000, data: { turn: 1, step: 1, message: { id: "a1", role: "assistant", source: { kind: "model" }, content: [{ type: "text", text: "收到，我来核" }] } } },
+	{ type: "user/message", seq: 3, time: TR_AT - 40000, data: { id: "u2", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "没有 ref 的普通消息" }] } },
+	{ type: "user/message", seq: 4, time: TR_AT - 30000, data: { id: "u3", role: "user", source: { kind: "agent-message", form: "relay", senderSessionId: "session-worker-c" }, content: [{ type: "text", text: `${trBanner("session-worker-c", "t-9")}\n${"长".repeat(100)}` }] } },
+	trCall(5, "call-1", TR_AT, { targetSessionId: "session-worker-b", message: "复核 §3", meta: { ref: "t-7" } }),
+	trCardResult(6, "call-1", TR_AT, "t-7", [{ sessionId: "session-worker-b", outcome: "delivered", detail: "已投递" }]),
+	trCall(7, "call-2", TR_AT + 20000, { targets: ["session-worker-c"], message: "第二条（只有实参，没有结构化回执）", meta: { ref: "t-8" } }),
+	trCall(12, "call-6", TR_AT + 25000, { targetSessionId: "session-worker-broken", message: "第六条（点名了但会话面读不到）", meta: { ref: "t-11" } }),
+	trCall(8, "call-3", TR_AT + 30000, { targetSessionId: "session-worker-d", message: "第三条（未点名）", meta: { ref: "t-9" } }),
+	trCall(9, "call-4", TR_AT + 40000, { targetSessionId: "session-worker-e", message: "第四条", meta: { ref: "t-10" } }),
+	trCardResult(10, "call-4", TR_AT + 40000, "t-10", [{ sessionId: "session-worker-e", outcome: "refused", detail: "未投递：接收方拒绝" }]),
+	// 一条没有任务号的投递（如实计数，不进视图）
+	trCall(11, "call-5", TR_AT + 50000, { targetSessionId: "session-worker-b", message: "随口一句，没挂任务号", meta: { ref: "slp-abc" } }),
+	// D12（修复轮）: 归组面 = **任何消息文本里第一个 `ref=t-<n>`** —— 这条既不是 banner、
+	// 也不是别人发来的（本会话自己那条），照样归到 t-7 上，发送方回落标「（本会话）」。
+	{ type: "user/message", seq: 13, time: TR_AT + 80000, data: { id: "u5", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "补充：依据 ref=t-7 那一行" }] } },
+	// D4（修复轮）: `run_code` 里发出的那一类投递 —— 桥记的 `tool/ptc-dispatch`，**没有**
+	// 结构化回执（于是走实参兜底），目标是 `team:<name>/<role>` 表达式（按当前名册解析）。
+	{ type: "tool/ptc-dispatch", seq: 14, time: TR_AT + 90000, data: { turn: 1, step: 1, callId: "ptc-1", name: "team_link_send", arguments: JSON.stringify({ targets: ["team:" + TR_TEAM + "/coordinator"], message: "从 run_code 里发的", meta: { ref: "t-7" } }) } },
+	// D4（修复轮）: 回执被行数上限裁过的那一笔（回执自己报了 12 个目标，逐行只带回 1 个）。
+	trCall(15, "call-7", TR_AT + 100000, { targetSessionId: "session-worker-b", message: "第七条", meta: { ref: "t-12" } }),
+	trTruncatedResult(16, "call-7", TR_AT + 100000, "t-12", 12),
+	// D4（修复轮）: 逐行渲染上限（TASK_INBOX_MESSAGES=20）——18 个目标一次投递，超出部分
+	// 必须**如实标注**而不是静默丢。
+	trCall(17, "call-8", TR_AT + 110000, { targets: TR_MANY_TARGETS, message: "第八条", meta: { ref: "t-12" } }),
+	trCardResult(18, "call-8", TR_AT + 110000, "t-12", TR_MANY_TARGETS.map((id) => ({ sessionId: id, outcome: "delivered", detail: "已投递" }))),
+];
+const trBEvents = [
+	{ type: "assistant/message", seq: 1, time: TR_AT + 60000, data: { turn: 1, step: 1, message: { id: "b1", role: "assistant", source: { kind: "model" }, content: [{ type: "text", text: "我这边核完了" }] } } },
+];
+const trCEvents = [
+	{ type: "user/message", seq: 1, time: TR_AT + 70000, data: { id: "c1", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "只有入站消息，没有 assistant 事件" }] } },
+];
+const trEnv = setup({
+	sessions: [],
+	eventsBySession: { "session-self": trSelfEvents, "session-worker-b": trBEvents, "session-worker-c": trCEvents },
+	selfCwd: TR_WS,
+	useSettings: true,
+});
+trEnv.ns = trEnv.settings.namespaces.get("team-link");
+trEnv.ns.data.teams = [{
+	name: TR_TEAM,
+	createdAt: TR_AT,
+	workspace: TR_WS,
+	policy: { writer: "coordinator" },
+	roles: [{ role: "coordinator", current: "session-self", pending: null, history: [{ session: "session-self", from: TR_AT, until: null }] }],
+}];
+const trTasksPath = path.join(TR_WS, "team", TR_TEAM, "tasks.md");
+await mkdir(path.dirname(trTasksPath), { recursive: true });
+// t-7 已登记；t-9 / t-10 **从未登记**（收件视图照样分组并标注）。
+await writeFile(trTasksPath, [
+	"1 | 2026-09-26T21:10:02.123Z | session-self | plan | t-7 | 让 worker-b 复核 §3 的行号",
+	"2 | 2026-09-26T21:12:44.001Z | session-worker-b | claim | t-7 | 接了",
+].join("\n") + "\n", "utf8");
+
+const readCall = async (args, exec = undefined) => {
+	const tool = trEnv.tool("team_link_team_read");
+	if (tool === undefined) return "【工具未注册】";
+	try {
+		return String(await tool.execute(args, exec ?? execFor(trEnv.senderAgent)));
+	} catch (error) {
+		return `【调用失败：${String(error?.message ?? error)}】`;
+	}
+};
+
+// --- U10/U11: 默认路径 = 只读调用方自己，目标面零读 -----------------------------
+const trMark = trEnv.query.surfaceReads.length;
+const trOut = await readCall({ team: TR_TEAM });
+const trReads = trEnv.query.surfaceReads.slice(trMark);
+check("U11 未点名时目标面**零读**: 默认调用只读调用方自己那一次（surface stub 计数恰 = [session-self]）", trReads.length === 1 && trReads[0] === "session-self");
+check("U10 收件视图: 从调用方 surface 抽出 ref=t-<n> **按任务号分组**（谁说的 / 什么时候 / 开头几个字符）", trOut.includes("--- 收件视图（按任务号；来源：本会话最近 20 条消息 · 常量 TASK_INBOX_MESSAGES）---") && trOut.includes("- t-7 ← session-worker-b（") && trOut.includes("）：核出 3 处错（依据 lib/index.js:3548）") && trOut.includes("- t-9 ← session-worker-c（") && /^- t-7 ← .+（\d\d-\d\d \d\d:\d\d）：/mu.test(trOut));
+check("U10 截断必标注: 超过 TASK_INBOX_PREVIEW(80) 码点的条目就地标注省略了几个字符", trOut.includes("…（已省略 20 字符）"));
+check("U10 无 ref 的消息: **不进视图但如实计数**（不静默丢弃）", trOut.includes("（无 ref 的消息 2 条：未归任务，未参与本视图）"));
+check("U10 边界: ref 指向**从未登记**过的号 → 照样分组显示，并标注成因（可能是笔误，也可能是先发后记）", trOut.includes("（该号在台账里未登记 —— 可能是笔误，也可能是先发后记）") && (trOut.match(/该号在台账里未登记/gu) ?? []).length === 1 && !trOut.includes("t-7 ← session-worker-b（09-26 21:19）：核出 3 处错（依据 lib/index.js:3548）\n（该号在台账里未登记"));
+
+// --- U14: 派生回执三态（未点名 ⇒ 一律「未读」）---------------------------------
+check("U14 未点名: 每一行都标「未读」并给出点名骨架（目标面这一次真的没读）", trOut.includes("- t-7 → session-worker-b（") && trOut.includes("：未读（未点名读该会话；要读 → readIds=[\"session-worker-b\"]）") && trOut.includes("- t-8 → session-worker-c（") && trOut.includes("：未读（未点名读该会话；要读 → readIds=[\"session-worker-c\"]）") && trOut.includes("- t-9 → session-worker-d（"));
+check("U14 无任务号的投递如实计数: 没挂 t-<n> 的那一笔不进视图（但有计数行）", trOut.includes("（无任务号的投递 1 次：没有挂到 t-<n> 上，未参与本视图）"));
+check("U14 非 delivered 的投递**不冒充**反应读数: 回执 outcome=refused 的那一行如实写「未投递」", trOut.includes("- t-10 → session-worker-e（") && trOut.includes("：未投递（outcome=refused）"));
+
+// --- U14 三态（点名后）：✅ 有反应 / ⚠ 无后续反应 / 未读 ------------------------
+const trMark2 = trEnv.query.surfaceReads.length;
+const trNamed = await readCall({ team: TR_TEAM, readIds: ["session-worker-b", "session-worker-c", "session-worker-broken", "session-worker-b"] });
+const trNamedReads = trEnv.query.surfaceReads.slice(trMark2);
+check("U14 ✅ 有反应: 点名的目标面里，投递时刻之后有 assistant 事件 ⇒ 标「有反应」并给出那个时刻", trNamed.includes("- t-7 → session-worker-b（") && /✅ 有反应（\d\d-\d\d \d\d:\d\d 起有 assistant 事件）/u.test(trNamed));
+check("U14 ⚠ 无后续反应: 点名的目标面里，投递时刻之后**没有** assistant 事件 ⇒ 标「无后续反应」（只陈述事实，不下结论）", trNamed.includes("：⚠ 无后续反应（该时刻之后无 assistant 事件）"));
+check("U14 未读: 没点名的目标（session-worker-d）仍然是「未读」——点名只把被点的那几个变贵", trNamed.includes("- t-9 → session-worker-d（") && trNamed.includes("：未读（未点名读该会话"));
+check("U7 成本不变量（team_read 半边）: 自读占 1 个额 + 点名 3 个（去重后）= 4 次 ≤ min(12, 1+|readIds|)=4；同一个 id 不重复读", trNamedReads.length === 4 && trNamedReads[0] === "session-self" && trNamedReads.slice(1).join(",") === "session-worker-b,session-worker-c,session-worker-broken");
+check("U14 点名但读不到: 目标面读取失败 ⇒ 标「未读」，**不用空数据算读数**", trNamed.includes("- t-11 → session-worker-broken（") && trNamed.includes("：未读（点名的会话面读取失败——不用空数据算读数）"));
+const trMark3 = trEnv.query.surfaceReads.length;
+const trMany = await readCall({ team: TR_TEAM, readIds: Array.from({ length: 15 }, (_, index) => `session-tr-${index}`) });
+const trManyReads = trEnv.query.surfaceReads.slice(trMark3);
+check("U7 成本不变量（team_read 上限）: 15 个点名也只读 1（自读）+ 11（目标面上限）= 12 = min(12, 1+15)，且**零额外**", trManyReads.length === 12 && trManyReads[0] === "session-self");
+check("U14 超额的点名**不静默丢**: 超出读额的 4 个被逐个点名标「本次未读」", trMany.includes("readIds 超出目标面读额（自读占 1 个额，最多 11 个）") && trMany.includes("session-tr-11") && trMany.includes("session-tr-14") && trMany.includes("本次未读"));
+
+// --- D4 / D5 / D7 / D12（分歧审计修复轮）: 未覆盖的实现分支逐条钉住 -------------
+// 七条断言各自锚在一个**具体的**读数上（不是「跑通了」）：D4 四条（载体不同 / 寻址方式不同 /
+// 回执被裁 / 行数越界）、D12 一条（文本归组面）、D5 一条（形状非法）、D7 一条（标注）。
+// D7 那一条钉的是「按当前名册解析」这个**标注**，它在修复轮之前不存在 —— 所以它只会在旧实现上红。
+const trRowOf = (prefix) => trOut.split("\n").find((line) => line.startsWith(prefix));
+const trRosterRow = trRowOf(`- t-7 → team:${TR_TEAM}/coordinator（session-self）`) ?? "";
+check("D4 载体: `run_code` 里发出的那一类投递（桥记的 `tool/ptc-dispatch`）同样是**投递事实**——没有结构化回执就按实参兜底出一行，不因为载体不同而漏掉一笔投递",
+	trRosterRow !== "" && trOut.includes("--- 派生回执（我发出去之后，对方动了没有；"));
+check("D4 实参兜底: 没有结构化回执时按**实参**解析 `team:<name>/<role>` —— 表达式与它解析出的那个会话一并显示，三态照常判",
+	trRosterRow.includes(`- t-7 → team:${TR_TEAM}/coordinator（session-self）（`) && trRosterRow.includes(`：未读（未点名读该会话；要读 → readIds=["session-self"]）`));
+check("D7 读数不失准: 按**当前名册**解析出来的行如实标注「按当前名册解析」（换届之后它未必是投递当时那一个）；同一批里按字面 id 解析的行**不带**该标注",
+	trRosterRow.includes(" · 按当前名册解析（该表达式按读取时的名册解析，未必是投递当时那一个）") && !(trRowOf("- t-7 → session-worker-b（") ?? " · 按当前名册解析").includes("按当前名册解析"));
+check("D4 回执截断行: 回执自己报的总数 > 逐行带回的目标数 ⇒ 只报告**回执自己报的总数**，不给一个没见过的目标编身份",
+	trOut.includes("- t-12 → （回执共报了 12 个目标，超出逐行渲染上限；明细见该次调用的返回文本——本视图不编目标身份）"));
+check("D4 行上限: 逐行渲染上限 = TASK_INBOX_MESSAGES(20) —— 恰好渲染 20 行，其余**如实标注**「本次还有 N 行未显示」（N = 真实差额，不是静默截断）",
+	(trOut.match(/^- t-\d+ → /gmu) ?? []).length === 20 && trOut.includes("（本次还有 6 行未显示：一行 = 一次投递里的一个目标；同一屏界常量 TASK_INBOX_MESSAGES）"));
+check("D12 归组面: 归组只认「消息文本里第一个 `ref=t-<n>`」——**非 banner** 的普通消息（本会话自己发的那条）同样归组，发送方如实回落标「（本会话）」",
+	/^- t-7 ← （本会话）（\d\d-\d\d \d\d:\d\d）：补充：依据 ref=t-7 那一行$/mu.test(trOut));
+const trNonArrayMark = trEnv.query.surfaceReads.length;
+const trNonArray = await readCall({ team: TR_TEAM, readIds: "session-worker-b" });
+check("D5 readIds 非数组: 工具面直接拒绝（数组是硬形状，不是靠实现里的兜底分支），且该次调用**零读**——拒绝发生在任何 surface 读之前",
+	trNonArray.startsWith("【调用失败：") && trNonArray.includes("readIds") && trNonArray.includes("must be an array") && trEnv.query.surfaceReads.length === trNonArrayMark);
+
+// --- U12: 既有四块零回归（唯一新增是收件视图 / 派生回执块）-----------------------
+const trHeaders = ["--- roster（概要；事实源 = 设置 team-link 的 teams 键）---", "--- decisions.md（只追加；此处显示末 20 条）---", "--- discipline.md（整文件替换，带 baseHash 乐观锁）---", "--- tasks.md（只追加台账；显示末 20 条）---", "--- 收件视图（按任务号；", "--- 派生回执（我发出去之后，对方动了没有；"];
+check("U12 零回归: 既有四块（roster / decisions / discipline / tasks）仍在且顺序不变，新块**唯一新增**并排在 tasks 之后", trHeaders.every((needle, index) => trOut.includes(needle) && (index === 0 || trOut.indexOf(needle) > trOut.indexOf(trHeaders[index - 1]))) && (trOut.match(/baseHash=[0-9a-f]{16}/gu) ?? []).length === 3 && trOut.includes("（原始行）"));
+check("U12 零回归: 派生读数（最后主张 / 未消解存疑）与原始行窗口一字未动地留在 tasks 块里", trOut.includes("（派生读数：扫描最近 500 行；逐任务给「最后主张」与「未消解存疑」——是读数，不是裁决）") && trOut.includes("- t-7 · 2 行 · 最后主张 claim（2026-09-26 21:12 · session-worker-b）") && trOut.includes("| plan | t-7 | 让 worker-b 复核 §3 的行号"));
+
+// ===========================================================================
+// A 批（可观测批）· 阶段 2：只读团队状态卡 team_link_status（六段 + 参数边界 + U13）
+// 设计档 §4.2，判据 U8 / U9 / U13 与 U7 的 status 那一半。
+// ===========================================================================
+
+/** Y7-safe invoker for the NEW tool: on the pre-implementation module it is not
+ * registered at all, so reading `.execute` would throw — the text below makes the
+ * assertion RED instead of aborting the run. */
+async function statusCall(env, args, exec = undefined) {
+	const tool = env.tool("team_link_status");
+	if (tool === undefined) return "【团队状态卡工具未注册】";
+	try {
+		return String(await tool.execute(args, exec ?? execFor(env.senderAgent)));
+	} catch (error) {
+		return `【参数被拒：${String(error?.message ?? error)}】`;
+	}
+}
+
+const ST_TMP = path.join(TEAM_TMP, "status");
+const ST_WS = path.join(ST_TMP, "ws");
+const ST_BARE_WS = path.join(ST_TMP, "ws-bare");
+const ST_TOTEN = "1a2b3c4d-5e6f-7890-abcd-ef1234567890";
+const ST_TEAM = "status-card";
+const ST_IDS = Array.from({ length: 14 }, (_, index) => `session-st-${String(index).padStart(2, "0")}`);
+/** 一个 surface 的全部消息共用**同一个时间戳**：锚 T0 之后一条消息都没有 ——
+ * 正是 §4.2 触发条件的前半个（N == 0）。 */
+const stSameStampEvents = [
+	{ type: "user/message", seq: 1, time: 7, data: { id: "s1", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "同一时刻" }] } },
+	{ type: "assistant/message", seq: 2, time: 7, data: { turn: 1, step: 1, message: { id: "s2", role: "assistant", source: { kind: "model", provider: "p", model: "m" }, content: [{ type: "text", text: "同一时刻" }] } } },
+];
+const stTeamRow = (name, workspace) => ({
+	name,
+	createdAt: 1_700_000_000_000,
+	workspace,
+	policy: { writer: "coordinator" },
+	roles: [
+		{
+			role: "coordinator",
+			current: "session-self",
+			pending: { session: "session-new", token: ST_TOTEN, team: name, role: "coordinator", createdAt: 1_700_000_000_000, expiresAt: 1_700_001_800_000, migratedPairs: [] },
+			history: [{ session: "session-old", from: 1, until: 2, note: "交班" }, { session: "session-self", from: 2, until: null }],
+		},
+		{ role: "worker", current: null, pending: null, history: [] },
+	],
+});
+/** 状态卡的夹具单独搭（不走 teamEnv）：teamEnv 不转发 eventsBySession，而本卡要的
+ * 正是**真的**消息事件（注记的 T0 / N 都从它们里数）。其余与 teamEnv 同源：settings
+ * 引擎开启，然后把 teams 种进同一个命名空间。 */
+const stEnv = setup({
+	sessions: ST_IDS.map((id, index) => ({ header: { id, createdAt: 1000 + index, cwd: ST_WS }, live: true, persisted: true })),
+	eventsBySession: Object.fromEntries(ST_IDS.map((id) => [id, stSameStampEvents])),
+	extraAgents: ST_IDS.map((id) => ({ id, status: "idle" })),
+	selfCwd: ST_WS,
+	useSettings: true,
+});
+stEnv.ns = stEnv.settings.namespaces.get("team-link");
+stEnv.ns.data.teams = structuredClone([stTeamRow(ST_TEAM, ST_WS), stTeamRow("bare-team", ST_BARE_WS)]);
+stEnv.ns.data.watchdogs = [{ id: "wd-test", team: "", watcherSession: "session-self", targets: ["session-st-00"], silentMinutes: 10, intervalMinutes: 5, expiresAt: 1_700_003_600_000, createdAt: 1_700_000_000_000 }];
+
+const stTasksPath = path.join(ST_WS, "team", ST_TEAM, "tasks.md");
+await mkdir(path.dirname(stTasksPath), { recursive: true });
+await writeFile(stTasksPath, [
+	"1 | 2026-09-26T21:10:02.123Z | session-lead | plan | t-7 | 让 worker-b 复核 §3 的行号",
+	"2 | 2026-09-26T21:12:44.001Z | session-wb | claim | t-7 | 接了，预计 10 分钟",
+	"3 | 2026-09-26T21:19:31.552Z | session-wb | done | t-7 | 核出 3 处错（依据 lib/index.js:3548）",
+	"4 | 2026-09-26T21:21:08.900Z | session-lead | dispute | t-7 | 对 43 存疑：第 2 处的行号我读到的不一样",
+	"5 | 2026-09-26T21:24:55.310Z | session-wb | retract | t-7 | 撤回 43 的第 2 处",
+	"6 | 2026-09-26T21:30:00.000Z | session-lead | plan | t-8 | 第二件事",
+	"7 | 2026-09-26T21:31:00.000Z | session-wb | claim | t-8 | 接了",
+].join("\n") + "\n", "utf8");
+
+const stMark = stEnv.query.surfaceReads.length;
+const stOut = await statusCall(stEnv, { team: ST_TEAM, tasksTail: 3 });
+const stReads = stEnv.query.surfaceReads.slice(stMark);
+
+check("U8 段①角色: 每位角色一行给出「在位/空缺」与**版本史末条**（只给最后一段任期，不是整段史）", stOut.includes("--- 团队与角色（" + ST_TEAM + "；来源：设置 team-link 的 teams 键）---") && stOut.includes("角色 coordinator：现任 session-self（自 ") && stOut.includes("角色 worker：空缺（vacant）") && stOut.includes("· 版本史末条：session-self ") && stOut.includes("→ 现任") && !stOut.includes("session-old"));
+check("U8 段②换届 pending: 角色/继任者/到期齐全，且 token **掩码**（完整令牌一个字都不出现）", stOut.includes("--- 换届 pending（在飞令牌；token 一律掩码）---") && stOut.includes(ST_TEAM + "/coordinator → 继任者 session-new") && stOut.includes("到期 2023-") && stOut.includes("token " + __testing.maskToken(ST_TOTEN) + "（掩码") && !stOut.includes(ST_TOTEN));
+check("U8 段③看门狗: 谁盯谁 / 阈值 / 到期（来源 policy.watchdogs）", stOut.includes("--- 看门狗（policy.watchdogs；") && stOut.includes("wd-test") && stOut.includes("观察者 session-self（空闲）") && stOut.includes("目标 session-st-00") && stOut.includes("静默阈 10min") && stOut.includes("巡检 5min"));
+check("U8 段④会话面: id / 代理状态 / 创建时间 / provisional 标记（本条不读日志）", stOut.includes("--- 会话面（同工作区其他会话：") && stOut.includes("- session-st-00 — ○ 空闲 · 创建于 ") && !stOut.includes("provisional 配对 0 条"));
+check("U8 段⑤活性（有界）: 前 12 行给真实 verdict，第 13 行起如实标注**本卡**的窗口", (stOut.match(/^- session-st-\d\d：verdict=/gmu) ?? []).length === 12 && stOut.includes("--- 活性（有界：与 team_link_list_sessions 同一顺序读前 12 行）---") && stOut.includes("session-st-12：未读（本卡只读了前 12 行）") && stOut.includes("session-st-13：未读（本卡只读了前 12 行）"));
+check("U8 段⑥台账尾: 指定条数如实显示，并给出 baseHash 的审计口径", stOut.includes("--- 台账尾（tasks.md 末 3 条；tasksTail 默认 5、上限 20）---") && stOut.includes("- " + ST_TEAM + "/tasks.md：共 7 行，显示 3 条") && stOut.includes("baseHash=") && stOut.includes("仅供参考/审计：tasks 只追加、不接受 baseHash 参数") && stOut.includes("| plan | t-8 | 第二件事") && !stOut.includes("| plan | t-7 | 让 worker-b"));
+check("U8 整卡: 六段齐 + 读数戳 + 当前会话（本工作区）", ["团队与角色", "换届 pending", "看门狗", "会话面", "活性（有界", "台账尾"].every((needle) => stOut.includes(needle)) && /团队状态卡（读数 \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}，>2min 作废）/u.test(stOut) && stOut.includes("当前工作区：" + ST_WS + "（当前会话：session-self）"));
+check("U7 成本不变量（status 半边）: 状态卡本次 surface 读数 ≤ PREVIEW_SESSIONS=12（与列表工具同一个有界读窗）", stReads.length === 12);
+
+// --- 参数与边界 ---------------------------------------------------------------
+const stUnknown = await statusCall(stEnv, { team: "no-such-team" });
+check("U8 边界: team 不存在 → 拒绝并**列出已知团队名**（不编造、不静默空卡）", stUnknown.includes("状态卡读取失败") && stUnknown.includes("no-such-team") && stUnknown.includes(ST_TEAM) && stUnknown.includes("bare-team"));
+const stTooMany = await statusCall(stEnv, { team: ST_TEAM, tasksTail: 21 });
+check("U8 边界: tasksTail 超上限（21 > 20）→ 拒绝并给出有效区间 1..20", stTooMany.includes("状态卡读取失败") && stTooMany.includes("tasksTail 越界") && stTooMany.includes("1..20"));
+const stZero = await statusCall(stEnv, { team: ST_TEAM, tasksTail: 0 });
+check("U8 边界: tasksTail 非正 → 拒绝（同一区间口径）", stZero.includes("状态卡读取失败") && stZero.includes("1..20"));
+const stNoTail = await statusCall(stEnv, { team: ST_TEAM });
+check("U8 默认值: 省略 tasksTail ⇒ 末 5 条（默认值写进段标题）", stNoTail.includes("--- 台账尾（tasks.md 末 5 条；tasksTail 默认 5、上限 20）---"));
+const stAggregate = await statusCall(stEnv, {});
+check("U8 聚合: 省略 team ⇒ 本工作区全部团队各一段（两个团队都在，标题报总数）", stAggregate.includes("--- 团队与角色（共 2 个团队；") && stAggregate.includes("- " + ST_TEAM + " —") && stAggregate.includes("- bare-team —"));
+const stNoIdentity = await statusCall(stEnv, { team: ST_TEAM }, { signal: new AbortController().signal });
+check("U8 无会话身份: 照常出卡，「当前会话」改为如实标注（当前会话未知）——不编造身份", stNoIdentity.includes("（当前会话未知）") && stNoIdentity.includes("--- 团队与角色") && !stNoIdentity.includes("当前会话：undefined"));
+
+// --- U9: 全只读（调用前后 settings 与磁盘文件逐字节不变）------------------------
+const stSettingsBefore = JSON.stringify(stEnv.ns.data);
+const stFileBefore = await readFile(stTasksPath, "utf8");
+const stDiskBefore = createHash("sha256").update(stFileBefore, "utf8").digest("hex");
+const stWriteProbe = await statusCall(stEnv, { tasksTail: 5 });
+const stFileAfter = await readFile(stTasksPath, "utf8");
+check("U9 零写入: 调用前后 settings 命名空间逐字节不变（不新增键、不改 teams/watchdogs/pending）", JSON.stringify(stEnv.ns.data) === stSettingsBefore);
+check("U9 零写入: 磁盘上的 tasks.md 逐字节不变（连换届过期清扫都不跑——那会写）", stFileAfter === stFileBefore && createHash("sha256").update(stFileAfter, "utf8").digest("hex") === stDiskBefore && stWriteProbe.includes("台账尾"));
+
+// --- U13: 反面预警注记（N == 0 且 M > 0 才出现；零额外读）------------------------
+check("U13 触发: 本读窗消息全在同一时刻（N == 0）而台账同期新增行（M > 0）⇒ 打注记，且只陈述两个计数", stOut.includes("--- 反面预警注记 ---") && /⚠ 窗口内 0 条消息 \/ 台账同期新增 \d+ 行 —— 会话可能已停止说话只写行（读数，不是裁决）。/u.test(stOut) && stOut.includes("台账同期新增 7 行"));
+// N > 0: 换一组「锚之后还有消息」的 surface —— 同一批 session 的新 surface 直接换掉 stub 的事件表。
+const stLaterEnv = setup({
+	sessions: ST_IDS.map((id, index) => ({ header: { id, createdAt: 1000 + index, cwd: ST_WS }, live: true, persisted: true })),
+	eventsBySession: Object.fromEntries(ST_IDS.map((id) => [id, ancientEvents("锚之后还有消息")])),
+	extraAgents: ST_IDS.map((id) => ({ id, status: "idle" })),
+	selfCwd: ST_WS,
+	useSettings: true,
+});
+stLaterEnv.settings.namespaces.get("team-link").data.teams = structuredClone([stTeamRow(ST_TEAM, ST_WS), stTeamRow("bare-team", ST_BARE_WS)]);
+const stLater = await statusCall(stLaterEnv, { team: ST_TEAM });
+check("U13 不触发（N > 0）: 读窗里有锚之后的消息 ⇒ 不打注记（连那一段标题都不出现）", !stLater.includes("反面预警注记") && stLater.includes("--- 活性（有界"));
+const stNoLedger = await statusCall(stEnv, { team: "bare-team" });
+check("U13 不触发（M == 0）: 换一个没有台账的团队 ⇒ N == 0 但 M == 0 ⇒ 不打注记", !stNoLedger.includes("反面预警注记") && stNoLedger.includes("（文件不存在，按空处理：0 行）"));
+// --- D9（修复轮）: 这半句原先**恒真**（`slice(length)` 永远是空数组），换成真实计数：
+// 打注记的那一次与不打注记的那一次，各自的 surface 读数**恰都是有界读窗的 12 行** ——
+// 两个计数相等即证明注记本身零读；哪一次多读一个会话，这条就会红。
+const stNoteMark = stEnv.query.surfaceReads.length;
+const stNoteCall = await statusCall(stEnv, { team: ST_TEAM, tasksTail: 3 });
+const stNoteReads = stEnv.query.surfaceReads.slice(stNoteMark);
+const stLaterMark = stLaterEnv.query.surfaceReads.length;
+const stLaterCall = await statusCall(stLaterEnv, { team: ST_TEAM });
+const stLaterReadsAgain = stLaterEnv.query.surfaceReads.slice(stLaterMark);
+check("U13 零额外读: 打注记的那一次与不打注记的那一次，surface 读数**逐次相等**（各恰 12 = 同一个有界读窗），注记本身零读",
+	stNoteReads.length === 12 && stLaterReadsAgain.length === 12 && stNoteReads.length === stLaterReadsAgain.length && stNoteCall.includes("反面预警注记") && !stLaterCall.includes("反面预警注记"));
+
+// --- D1 / §8.1 A5（修复轮）: 注记的**第三态**「无时间戳 ⇒ 无法计算」--------------
+// 读窗**非空**，但窗内没有一条**带时间戳的** surface 消息 ⇒ 锚 T0 取不到。此时打的是
+// 「无法计算」那一句（诚实优于沉默），**不是**计数注记，也**不是**整段消失 —— 台账里
+// 的行照常显示（证明「M 有行可数」不是它沉默的原因）。
+const stNoStampEvents = [{ type: "turn/start", seq: 1, time: 1_700_000_000_000, data: { turn: 1 } }];
+const ST_NOSTAMP_WS = path.join(ST_TMP, "ws-nostamp");
+const stNoStampEnv = setup({
+	sessions: ST_IDS.slice(0, 3).map((id, index) => ({ header: { id, createdAt: 1000 + index, cwd: ST_NOSTAMP_WS }, live: true, persisted: true })),
+	eventsBySession: Object.fromEntries(ST_IDS.slice(0, 3).map((id) => [id, stNoStampEvents])),
+	extraAgents: ST_IDS.slice(0, 3).map((id) => ({ id, status: "idle" })),
+	selfCwd: ST_NOSTAMP_WS,
+	useSettings: true,
+});
+stNoStampEnv.ns = stNoStampEnv.settings.namespaces.get("team-link");
+stNoStampEnv.ns.data.teams = [stTeamRow("nostamp-team", ST_NOSTAMP_WS)];
+const stNoStampTasks = path.join(ST_NOSTAMP_WS, "team", "nostamp-team", "tasks.md");
+await mkdir(path.dirname(stNoStampTasks), { recursive: true });
+await writeFile(stNoStampTasks, Array.from({ length: 3 }, (_, index) => `${index + 1} | 2026-09-26T21:${String(10 + index).padStart(2, "0")}:02.123Z | session-lead | plan | t-${index + 1} | 第 ${index + 1} 件事`).join("\n") + "\n", "utf8");
+const stNoStamp = await statusCall(stNoStampEnv, { team: "nostamp-team" });
+check("D1/A5 注记第三态: 读窗非空但窗内**没有带时间戳的** surface 消息（锚 T0 取不到）⇒ 打「无法计算」那一句并**不打**计数注记（不猜，也不沉默）",
+	stNoStamp.includes("--- 反面预警注记 ---") && stNoStamp.includes("（反面预警注记无法计算：本读窗内没有带时间戳的 surface 消息——不猜。）") && !stNoStamp.includes("台账同期新增") && stNoStamp.includes("共 3 行，显示 3 条"));
+
+// --- D2①（修复轮）: 读窗为空 ⇒ 注记**整段不打印** ------------------------------
+// 本工作区里没有别的会话（读窗 0 行）：没有可对比的两边，连那一段标题都不出现 ——
+// 这与「打一句无法计算」是两件不同的事，判据各钉一条。
+const ST_NOWIN_WS = path.join(ST_TMP, "ws-nowin");
+const stNoWinEnv = setup({ sessions: [], extraAgents: [], selfCwd: ST_NOWIN_WS, useSettings: true });
+stNoWinEnv.ns = stNoWinEnv.settings.namespaces.get("team-link");
+stNoWinEnv.ns.data.teams = [stTeamRow("nowin-team", ST_NOWIN_WS)];
+const stNoWinTasks = path.join(ST_NOWIN_WS, "team", "nowin-team", "tasks.md");
+await mkdir(path.dirname(stNoWinTasks), { recursive: true });
+await writeFile(stNoWinTasks, Array.from({ length: 3 }, (_, index) => `${index + 1} | 2026-09-26T21:${String(10 + index).padStart(2, "0")}:02.123Z | session-lead | plan | t-${index + 1} | 第 ${index + 1} 件事`).join("\n") + "\n", "utf8");
+const stNoWin = await statusCall(stNoWinEnv, { team: "nowin-team" });
+check("D2① 读窗为空: 本工作区没有其他会话（读窗 0 行）⇒ 注记**整段不打印**（连标题都不出现），即使台账里有行可数",
+	!stNoWin.includes("反面预警注记") && stNoWin.includes("共 3 行，显示 3 条") && stNoWin.includes("--- 活性（有界"));
+
+// --- D10（修复轮）: 聚合口径的 M = **所示各团队**同期新增行数之**和** -----------
+const ST_AGG_WS = path.join(ST_TMP, "agg", "ws");
+const stAggEnv = setup({
+	sessions: ST_IDS.slice(0, 2).map((id, index) => ({ header: { id, createdAt: 1000 + index, cwd: ST_AGG_WS }, live: true, persisted: true })),
+	eventsBySession: Object.fromEntries(ST_IDS.slice(0, 2).map((id) => [id, stSameStampEvents])),
+	extraAgents: ST_IDS.slice(0, 2).map((id) => ({ id, status: "idle" })),
+	selfCwd: ST_AGG_WS,
+	useSettings: true,
+});
+stAggEnv.ns = stAggEnv.settings.namespaces.get("team-link");
+stAggEnv.ns.data.teams = [stTeamRow("agg-a", ST_AGG_WS), stTeamRow("agg-b", ST_AGG_WS)];
+for (const [name, count] of [["agg-a", 3], ["agg-b", 2]]) {
+	const file = path.join(ST_AGG_WS, "team", name, "tasks.md");
+	await mkdir(path.dirname(file), { recursive: true });
+	await writeFile(file, Array.from({ length: count }, (_, index) => `${index + 1} | 2026-09-26T21:${String(10 + index).padStart(2, "0")}:02.123Z | session-lead | plan | t-${index + 1} | 第 ${index + 1} 件事`).join("\n") + "\n", "utf8");
+}
+const stAggNote = await statusCall(stAggEnv, {});
+check("D10 聚合口径（上限）: 省略 team ⇒ 注记里的 M = **所示各团队** tasks.md 同期新增行数之**和**（3 + 2 = 5；既不是只数第一个团队，也不逐团队各打一段）",
+	stAggNote.includes("--- 反面预警注记 ---") && stAggNote.includes("台账同期新增 5 行") && stAggNote.includes("agg-a/tasks.md：共 3 行") && stAggNote.includes("agg-b/tasks.md：共 2 行"));
+
+// ===========================================================================
+// A 批（可观测批）· 阶段 1：读窗 readIds / offset / 成本不变量 / 尾巴提示
+// 设计档 docs/observability-batch-design-2026-09-26.md §4.1，判据 U1–U6 与 U7 的
+// list_sessions 那一半（team_read / team_link_status 两半在各自阶段补齐）。
+// ===========================================================================
+
+/** Y7-safe invoker（本仓既有纪律）: the PRE-implementation tool has no `readIds` /
+ * `offset` parameter at all, so `defineTool` refuses the call BEFORE the body runs
+ * (an argument-schema violation is thrown, not returned). That rejection is turned
+ * into text here so the new assertions go RED on the old implementation instead of
+ * aborting the run before its own `assertion total` line. */
+async function listCall(env, args) {
+	try {
+		return String(await env.tool("team_link_list_sessions").execute(args, execFor(env.senderAgent)));
+	} catch (error) {
+		return `【参数被拒：${String(error?.message ?? error)}】`;
+	}
+}
+
+const RW_IDS = Array.from({ length: 14 }, (_, index) => `session-rw-${String(index).padStart(2, "0")}`);
+const rwEnv = setup({
+	sessions: RW_IDS.map((id, index) => ({ header: { id, createdAt: 1000 + index, cwd: CWD }, live: true, persisted: true })),
+	eventsBySession: Object.fromEntries(RW_IDS.map((id) => [id, ancientEvents(`读窗主题 ${id}`)])),
+	extraAgents: RW_IDS.map((id) => ({ id, status: "idle" })),
+});
+/** The rows of one listing, split exactly the way the §3.1 window test does. */
+const rwRows = (out) => out.split(/\n(?=- session-rw-)/u).filter((block) => block.startsWith("- session-rw-"));
+const rwRowOf = (out, id) => rwRows(out).find((block) => block.startsWith(`- ${id} `));
+/** Everything from the tail's first line on — the batch's ONE format addition. */
+const rwTailOf = (out) => out.slice(out.indexOf("读窗："));
+
+const rwDefault = await listCall(rwEnv, {});
+/** The surface stub ACCUMULATES across calls (it is the list of every id read, in
+ * call order), so each path's cost is read as a DELTA — one mark per call. */
+const rwMarks = [rwEnv.query.surfaceReads.length];
+check("U1 默认调用: 读窗就是前 12 行（surfaceReads 恰 12 个且逐个按序），与现状一字未改", rwEnv.query.surfaceReads.length === 12 && rwEnv.query.surfaceReads.every((id, index) => id === RW_IDS[index]));
+check("U1 默认调用: 每行结构逐字保持（id — 代理状态 · 创建于 … （读数 …，>2min 作废）），14 行全在", rwRows(rwDefault).length === 14 && /^- session-rw-0\d — ○ 空闲 · 创建于 .+（读数 \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}，>2min 作废）$/mu.test(rwRowOf(rwDefault, RW_IDS[3])));
+check("U1 默认调用: 窗口内 12 行给出真实 verdict，窗口外 2 行标未读（既有口径逐字）", (rwDefault.match(/^    活性：verdict=/gmu) ?? []).length === 12 && (rwRowOf(rwDefault, RW_IDS[12]) ?? "").includes("活性：未读（超出快照窗口 12）") && (rwRowOf(rwDefault, RW_IDS[13]) ?? "").includes("活性：未读（超出快照窗口 12）"));
+check("U1 默认调用: 末尾新增「未读 Y 行 + 怎么读」提示段（本次唯一的格式新增），且它在最后一行之后", rwDefault.includes("未读 2 行（读窗 12/共 14 行）") && rwDefault.includes("读第 13–24 行 → offset=12") && rwDefault.includes("或点名 → readIds=[") && rwDefault.indexOf("读窗：") > rwDefault.lastIndexOf("- session-rw-13"));
+check("U1 默认调用: 提示段给的是**真的**未读 id（可复制的参数），不是占位符", rwTailOf(rwDefault).includes(`readIds=["${RW_IDS[12]}", "${RW_IDS[13]}"]`) && !rwTailOf(rwDefault).includes("<id>"));
+
+const rwPage = await listCall(rwEnv, { offset: 12 });
+const rwPageReads = rwEnv.query.surfaceReads.slice(rwMarks[0]);
+rwMarks.push(rwEnv.query.surfaceReads.length);
+check("U2 offset=12: 读的是第 13 行起的那一页（恰两行），前 12 行本次不再是「已读」那一批", rwPageReads.length === 2 && rwPageReads[0] === RW_IDS[12] && rwPageReads[1] === RW_IDS[13]);
+check("U2 offset=12: 被翻到的那两行给出真实 verdict，窗口外的 12 行改标未读", (rwRowOf(rwPage, RW_IDS[13]) ?? "").includes("活性：verdict=silent-idle") && (rwRowOf(rwPage, RW_IDS[5]) ?? "").includes("活性：未读（超出快照窗口 12）") && (rwPage.match(/^    活性：verdict=/gmu) ?? []).length === 2);
+check("U2 offset=12: 尾巴如实报出本页读窗（读窗 2/共 14 行）并给下一页/点名的下一步", rwPage.includes("读窗：offset=12 起的 2 行") && rwPage.includes("未读 12 行（读窗 2/共 14 行）") && rwPage.includes(`readIds=["${RW_IDS[0]}"`));
+
+const rwNamed = await listCall(rwEnv, { readIds: [RW_IDS[13]] });
+const rwNamedReads = rwEnv.query.surfaceReads.slice(rwMarks[1]);
+rwMarks.push(rwEnv.query.surfaceReads.length);
+check("U3 readIds: 窗口外的 id 被点名后给出真实 verdict（不再是「未读」）", (rwRowOf(rwNamed, RW_IDS[13]) ?? "").includes("活性：verdict=silent-idle") && !(rwRowOf(rwNamed, RW_IDS[13]) ?? "").includes("未读（超出快照窗口"));
+check("U3 readIds: 点名优先占额、其余按原顺序补足到 12（本行 = 被点名的那个 + 前 11 行）", rwNamedReads.length === 12 && rwNamedReads[0] === RW_IDS[13] && rwNamedReads.slice(1).every((id, index) => id === RW_IDS[index]));
+check("U3 readIds: 返回体标明本次是点名读（读窗来源写在提示段里）", rwNamed.includes(`读窗：点名读 1 个（${RW_IDS[13]}）+ 默认窗补足`) && rwNamed.includes("【参数被拒") === false);
+
+// 边界（§4.1 逐条给行为）: 重复 id 去重后计数；本就在默认窗内的 id 只占一个额、不重复读。
+const rwDup = await listCall(rwEnv, { readIds: [RW_IDS[13], RW_IDS[13]] });
+const rwDupReads = rwEnv.query.surfaceReads.slice(rwMarks[2]);
+check("U3 边界: readIds 含重复 id → 去重后计数（仍是 1 个点名），且不会重复读同一个会话", rwDup.includes(`读窗：点名读 1 个（${RW_IDS[13]}）`) && rwDupReads.length === 12 && new Set(rwDupReads).size === 12);
+const rwInside = await listCall(rwEnv, { readIds: [RW_IDS[0]] });
+const rwInsideReads = rwEnv.query.surfaceReads.slice(rwMarks[2] + rwDupReads.length);
+check("U3 边界: 点名的 id 本就在默认窗内 → 只占一个额、不重复读（12 个 id 各读一次，窗口内容不变）", rwInsideReads.length === 12 && new Set(rwInsideReads).size === 12 && rwInsideReads.filter((id) => id === RW_IDS[0]).length === 1 && (rwRowOf(rwInside, RW_IDS[0]) ?? "").includes("活性：verdict="));
+
+// U4/U5/U6: every refusal happens BEFORE any session log is touched — 零读。
+const rwBefore = rwEnv.query.surfaceReads.length;
+const rwTooMany = await listCall(rwEnv, { readIds: RW_IDS.slice(0, 13) });
+check("U4 readIds 超上限: 13 个（> 12）→ 拒绝，且明说上限与「本次零读」的出路", rwTooMany.includes("列出会话失败") && rwTooMany.includes("最多 12 个") && rwTooMany.includes("去重后 13 个"));
+check("U4 readIds 超上限: 该次调用**零读**（surface stub 计数不动）", rwEnv.query.surfaceReads.length === rwBefore);
+const rwUnknown = await listCall(rwEnv, { readIds: [RW_IDS[3], "session-not-in-this-list"] });
+check("U5 readIds 含未知/非本列表 id: 拒绝并**指出那个 id**，指路先复制正确的 id", rwUnknown.includes("列出会话失败") && rwUnknown.includes("session-not-in-this-list") && rwUnknown.includes("不属于本次列表") && rwUnknown.includes("team_link_list_sessions"));
+check("U5 readIds 含未知 id: 同样**零读**", rwEnv.query.surfaceReads.length === rwBefore);
+const rwBoth = await listCall(rwEnv, { readIds: [RW_IDS[0]], offset: 0 });
+check("U6 互斥: readIds 与 offset 同现 → 拒绝（明说互斥与成本上限同源）", rwBoth.includes("列出会话失败") && rwBoth.includes("互斥"));
+const rwFrac = await listCall(rwEnv, { offset: 1.5 });
+check("U6 offset 非整数: 拒绝并指出收到的值", rwFrac.includes("列出会话失败") && rwFrac.includes("必须是整数") && rwFrac.includes("1.5"));
+const rwNeg = await listCall(rwEnv, { offset: -1 });
+check("U6 offset 为负数: 拒绝（是整数但越界）并给有效区间 0..13", rwNeg.includes("列出会话失败") && rwNeg.includes("有效区间 0..13") && rwNeg.includes("本次列表共 14 行"));
+const rwFar = await listCall(rwEnv, { offset: 99 });
+check("U6 offset 超界: 拒绝并给有效区间", rwFar.includes("列出会话失败") && rwFar.includes("有效区间 0..13"));
+check("U6 三类拒绝一律**零读**（拒绝发生在任何 surface 读之前）", rwEnv.query.surfaceReads.length === rwBefore);
+// U7（list_sessions 那一半）: the invariant is a NUMBER per call, so each path's
+// measured count is asserted against it — 默认 12 · offset 2 · 点名 12 · 重复去重 12 ·
+// 点名窗内 12，没有任何一条路径越过 PREVIEW_SESSIONS。
+const rwCounts = [rwEnv.query.surfaceReads.slice(0, rwMarks[0]).length, rwPageReads.length, rwNamedReads.length];
+check("U7 成本不变量（按工具分账 · list_sessions 三路径 ≤ 12，stub 计数逐一断言）: 默认 12 / offset 2 / 点名 12，逐条 ≤ PREVIEW_SESSIONS=12", rwCounts.every((count) => Number.isInteger(count) && count <= 12) && rwCounts[0] === 12 && rwCounts[1] === 2 && rwCounts[2] === 12);
 
 // B6（③b 差异审计）: `tmpDir` is the export block's output directory and it is
 // re-created at the END of the run, so `rmSync` at import time cleans the PREVIOUS
