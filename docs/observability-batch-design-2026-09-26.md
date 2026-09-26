@@ -1,6 +1,6 @@
 # 可观测批（A 批）设计：读窗扩展 · 团队状态卡 · 台账收件视图
 
-> **状态**：✅ **已实施**（2026-09-26，eng_coder，三阶段一次交付；文件 `lib/index.js` ＋ `host-half.test.mjs`；**当次实测** `node host-half.test.mjs` → `1117 (failed: 0)`、`node client-half.test.mjs` → `269 (failed: 0)`；红相 60 条新判据打在**实施前**的 `lib/index.js`（`89074fe`）上 → `1117 (failed: 55)`，读数账本见 [`docs/verification-log.md`](verification-log.md) 的「可观测批（A 批）」一节；提交哈希待父会话回填）。跨文档同步十条见 §10，逐条已完成。
+> **状态**：✅ **已实施**（2026-09-26，eng_coder，三阶段一次交付；文件 `lib/index.js` ＋ `host-half.test.mjs`；**当次实测** `node host-half.test.mjs` → `1117 (failed: 0)`、`node client-half.test.mjs` → `269 (failed: 0)`；红相 60 条新判据打在**实施前**的 `lib/index.js`（`89074fe`）上 → `1117 (failed: 55)`，读数账本见 [`docs/verification-log.md`](verification-log.md) 的「可观测批（A 批）」一节；提交哈希 `ac3a831d74fb64ae4f6577b3f79a9cc0cc7fb371`（回填于 2026-09-27））。跨文档同步十条见 §10，逐条已完成。
 > **来源**：《台账 + 形态设计》§7 的**步 2 / 步 4 / 步 6**（用户 2026-09-26 把这三步合并为「A 批」，与 B 批「形态」并行开工）。会诊 #9 的 Q1 采纳项（只读按任务分组收件视图）即本批的步 6。
 > **落点核对**：§3 的行号按 `89074fe` 的 `lib/index.js` **逐条实读**。
 > **后续回填**：2026-09-27 的 **DIVERGENCE(12) 分歧审计修复轮**在此之上回填了本档 §4.1（`team_read` 的点名读边界）· §4.2（注记三态与聚合口径 · 台账尾成本列 · 会话面服务名）· §4.3（归组面 · 点名读上限）· §4.4（投递事实的两类载体 · `callId` 配对 · 窗口单位 · 第 4 态），并新增 **10** 条宿主断言（套件自报 `1127`）；逐条读数见 [`docs/verification-log.md`](verification-log.md) 的「分歧审计修复轮」一节。
