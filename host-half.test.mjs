@@ -2000,6 +2000,9 @@ check("the failed mirror leaves no half-written file", !existsSync(path.join(blo
 const boardDir = path.join(TEAM_WS, "team", "night-shift");
 const decisionsPath = path.join(boardDir, "decisions.md");
 const disciplinePath = path.join(boardDir, "discipline.md");
+/** §9 第一批的第三个黑板文件（只追加台账）。夹具与 decisions / discipline 同构：同一
+ * 个黑板目录、同一条 500 码点上限、各自独立的 seq。 */
+const tasksPath = path.join(boardDir, "tasks.md");
 /** Independent re-implementation of the plugin hash, so the tests check the
  * discipline lock against the file content rather than against itself. */
 const hashOf = (text) => createHash("sha256").update(text, "utf8").digest("hex").slice(0, 16);
@@ -2016,6 +2019,20 @@ const disciplineHashOf = (out) => {
 	const matched = /baseHash=([0-9a-f]{16})/u.exec(out.slice(start));
 	return matched === null ? "" : matched[1];
 };
+/** The tasks block of a team_read result: from its header up to the raw window.
+ * The 单行上限 guidance line after it belongs to the whole board, not to tasks —
+ * and the raw rows below the marker are asserted separately, so the derived-view
+ * assertions must not be able to match text inside them. */
+const tasksBlockOf = (out) => {
+	const start = out.indexOf("--- tasks.md");
+	if (start === -1) return "";
+	const end = out.indexOf("（原始行）", start);
+	return end === -1 ? out.slice(start) : out.slice(start, end);
+};
+const tasksHashOf = (out) => {
+	const matched = /baseHash=([0-9a-f]{16})/u.exec(tasksBlockOf(out));
+	return matched === null ? "" : matched[1];
+};
 
 const boardEnv = teamEnv({ teams: [teamRow({ current: "session-self" })] });
 const boardRead = boardEnv.tool("team_link_team_read");
@@ -2025,7 +2042,9 @@ rmSync(disciplinePath, { force: true });
 
 const freshRead = await boardRead.execute({ team: "night-shift" }, execFor(boardEnv.targetAgent));
 check("team_read is open to any session and reports absent files honestly instead of failing", freshRead.includes("团队 night-shift 黑板") && freshRead.includes("（文件不存在，按空处理：0 条）") && freshRead.includes("（文件不存在，按空处理）baseHash=") && freshRead.includes("（空）"));
-check("team_read hands back a baseHash for both files even when they are absent", (freshRead.match(/baseHash=[0-9a-f]{16}/gu) ?? []).length === 2 && freshRead.includes(`baseHash=${hashOf("")}`));
+// 三件套（§9 第一批）之后，同一个读面给出的 baseHash 由两个变成三个 —— 这条断言量的是
+// 「每个黑板文件都有自己的哈希」，不是那两个文件的文案，所以它跟着文件数一起长。
+check("team_read hands back a baseHash for all three files even when they are absent (decisions · discipline · tasks)", (freshRead.match(/baseHash=[0-9a-f]{16}/gu) ?? []).length === 3 && freshRead.includes(`baseHash=${hashOf("")}`));
 check("team_read carries the roster summary (writer policy + roles)", freshRead.includes("policy.writer=coordinator") && freshRead.includes("角色 coordinator：现任 session-self"));
 // R4 (M2 review): decisions' baseHash is NOT a lock — the ledger is append-only
 // and accepts no baseHash at all. Only discipline's hash serializes writers, so
@@ -2108,6 +2127,241 @@ const noWsRead = await noWsEnv.tool("team_link_team_read").execute({ team: "nigh
 check("a team with no captured workspace reports the blackboard unusable instead of guessing a root", noWsRead.includes("没有 workspace 记录"));
 const noWsAppend = await noWsEnv.tool("team_link_team_append").execute({ team: "night-shift", file: "decisions", line: "x" }, execFor(noWsEnv.senderAgent));
 check("team_append refuses the same way without a workspace root", noWsAppend.includes("没有 workspace 记录"));
+// ---------------------------------------------------------------------------
+// §9 (docs/team-ledger-and-mode-design-2026-09-26.md) 第一批：追加式台账 tasks.md
+// —— 写面 U1–U10 / U16 / U18（本块）与读面 U11–U13 / U15 / U17 加 U14 的回归锁。
+// ---------------------------------------------------------------------------
+
+	const decisionsPristine = await readFile(decisionsPath, "utf8");
+	const disciplinePristine = await readFile(disciplinePath, "utf8");
+	rmSync(tasksPath, { force: true });
+	const tasksText = async () => (existsSync(tasksPath) ? readFile(tasksPath, "utf8") : "");
+	const tasksLines = async () => {
+		const text = (await tasksText()).trim();
+		return text === "" ? [] : text.split("\n");
+	};
+
+// --- U1 / U8 / U6: the whitelist takes tasks, and plan allocates the number --
+	const planOne = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "plan", line: "让 worker-b 复核 §3 的行号" }, execFor(boardEnv.senderAgent));
+	check("§9 U1: file=tasks is accepted — the whitelist now has three values", planOne.includes("已追加 tasks #1") && planOne.includes("task=t-1"));
+	const planOneRows = await tasksLines();
+	check("§9 U8: kind=plan has the plugin allocate t-<max+1> and hands that number back", planOneRows.length === 1 && /^1 \| \d{4}-\d{2}-\d{2}T[\d:.]+Z \| session-self \| plan \| t-1 \| 让 worker-b 复核 §3 的行号$/u.test(planOneRows[0]));
+	check("§9 U6: the author column is the calling session id (identity is never invented)", planOneRows[0].includes("| session-self | plan |"));
+
+// --- U2 / U3: append only, per-file seq, and a damaged line never resets it --
+	const beforeU2 = await tasksText();
+	const claimOne = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "接了，预计 10 分钟" }, execFor(boardEnv.targetAgent));
+	const afterU2 = await tasksText();
+	check("§9 U2: the tasks ledger is append-only — the file is the old bytes plus exactly one new row", afterU2.startsWith(beforeU2) && /^2 \| \d{4}-\d{2}-\d{2}T[\d:.]+Z \| session-target \| claim \| t-1 \| 接了，预计 10 分钟\n$/u.test(afterU2.slice(beforeU2.length)));
+	check("§9 U2: the earlier row is byte-identical after the append", beforeU2 === planOneRows[0] + "\n" && afterU2.slice(0, beforeU2.length) === beforeU2);
+	const decisionsMaxSeq = Math.max(...(await readFile(decisionsPath, "utf8")).trim().split("\n").map((row) => Number(row.split("|")[0].trim())));
+	check("§9 U3: seq counts per FILE — decisions is already at #26 while this fresh ledger starts at #1", decisionsMaxSeq === 26 && planOneRows[0].startsWith("1 | ") && claimOne.includes("已追加 tasks #2"));
+	await writeFile(tasksPath, `${await tasksText()}这不是一行台账（不可解析）\n`, "utf8");
+	const doneOne = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "done", task: "t-1", line: "核出 3 处错（依据 lib/index.js:3548）" }, execFor(boardEnv.targetAgent));
+	check("§9 U3: an unparsable line is ignored instead of being allowed to reset the counter", doneOne.includes("已追加 tasks #3") && (await tasksLines()).length === 4);
+
+// --- U4: the 500-code-point line cap ----------------------------------------
+	const tooLongTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "长".repeat(501) }, execFor(boardEnv.senderAgent));
+	check("§9 U4: a body past 500 code points is refused and nothing is written", tooLongTask.includes("超过单行上限 500") && tooLongTask.includes("§4.1") && (await tasksLines()).length === 4);
+	const astralTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "dispute", task: "t-1", line: "🔵".repeat(400) }, execFor(boardEnv.senderAgent));
+	check("§9 U4: the cap counts code points — 400 astral characters (800 UTF-16 units) are accepted", astralTask.includes("已追加 tasks #4") && (await tasksLines()).length === 5);
+	const exactCapTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "码".repeat(500) }, execFor(boardEnv.senderAgent));
+	check("§9 U4: a body of exactly 500 code points is ACCEPTED — the bound is inclusive, not exclusive", exactCapTask.includes("已追加 tasks #5") && exactCapTask.includes("本次 500 字符") && (await tasksLines()).length === 6);
+
+// --- U5: one row per line ---------------------------------------------------
+	const newlineTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "第一行\n第二行" }, execFor(boardEnv.senderAgent));
+	check("§9 U5: a body carrying LF is refused — the ledger is one row per line", newlineTask.includes("必须单行") && newlineTask.includes("kind | task | 正文") && (await tasksLines()).length === 6);
+	const crTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "第一行\r第二行" }, execFor(boardEnv.senderAgent));
+	check("§9 U5: a body carrying CR is refused too", crTask.includes("必须单行") && (await tasksLines()).length === 6);
+	const emptyTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "   " }, execFor(boardEnv.senderAgent));
+	check("§9 U5: an empty body is refused (§9.3.1 正文非空)", emptyTask.includes("不能为空") && (await tasksLines()).length === 6);
+
+// --- U6: the author column --------------------------------------------------
+	const anonTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "无会话身份的写入" }, { signal: new AbortController().signal });
+	const anonRows = await tasksLines();
+	check("§9 U6: a caller with no session identity still writes, recorded honestly as author=unknown", anonTask.includes("author=unknown") && anonRows[anonRows.length - 1].includes("| unknown | claim | t-1 |"));
+	const injectedTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "retract", task: "t-1", line: "撤回 #4 的第 2 处" }, execFor({ id: "weird|id\n注入" }));
+	const injectedRows = await tasksLines();
+	check("§9 U6: a session id carrying | or a newline is flattened to _ so it cannot split the row", injectedTask.includes("author=weird_id_注入") && injectedRows[injectedRows.length - 1].includes("| weird_id_注入 | retract | t-1 |"));
+
+// --- U7: the kind closed set ------------------------------------------------
+	const badKind = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "finish", line: "闭集之外" }, execFor(boardEnv.senderAgent));
+	check("§9 U7: a kind outside the closed set is refused AND the refusal names all six values", badKind.includes("闭集") && ["plan", "claim", "done", "block", "dispute", "retract"].every((word) => badKind.includes(word)) && (await tasksLines()).length === 8);
+	const noKind = await boardAppend.execute({ team: "night-shift", file: "tasks", line: "没有 kind" }, execFor(boardEnv.senderAgent));
+	check("§9 U7: a missing kind is refused the same way — the caller is told it is missing and shown the set", noKind.includes("闭集") && noKind.includes("缺失") && noKind.includes("retract") && (await tasksLines()).length === 8);
+
+// --- U9 / U10: allocation is the plugin's; every other kind names a row ------
+	const planWithTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "plan", task: "t-9", line: "派活" }, execFor(boardEnv.senderAgent));
+	check("§9 U9: kind=plan together with a task is refused (the number is the plugin's to assign)", planWithTask.includes("由插件分配") && planWithTask.includes("不要再传 task") && (await tasksLines()).length === 8);
+	const claimNoTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", line: "缺 task" }, execFor(boardEnv.senderAgent));
+	check("§9 U10: a non-plan row without a task is refused", claimNoTask.includes("非 plan 必须给 task") && (await tasksLines()).length === 8);
+	const badShape = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "7", line: "形状非法" }, execFor(boardEnv.senderAgent));
+	check("§9 U10: a task outside t-<n> is refused and the refusal gives the shape", badShape.includes("形状非法") && badShape.includes("t-<数字>") && (await tasksLines()).length === 8);
+	const unregistered = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-99", line: "没登记过的号" }, execFor(boardEnv.senderAgent));
+	check("§9 U10: a number never registered in THIS file is refused, and the refusal points at kind=plan", unregistered.includes("从未在本文件登记过") && unregistered.includes("kind=plan") && (await tasksLines()).length === 8);
+
+// --- U16: the allocation scans the whole file, skipping what it cannot parse --
+	await writeFile(tasksPath, `${await tasksText()}这不是一行台账（不可解析）\n99 | 2026-01-01T00:00:00.000Z | session-x | 未知kind | t-99 | 手写的坏行\n`, "utf8");
+	const planAfterGarbage = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "plan", line: "掺了坏行之后派的新活" }, execFor(boardEnv.senderAgent));
+	const garbageRows = await tasksLines();
+	check("§9 U16: with unparsable rows present the allocation is still the highest REGISTERED number + 1", planAfterGarbage.includes("task=t-2") && garbageRows[garbageRows.length - 1].includes("| plan | t-2 |"));
+	const garbageRegistered = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-99", line: "坏行里的号不算登记" }, execFor(boardEnv.senderAgent));
+	check("§9 U16: a number that only appears inside an unparsable row is NOT registered", garbageRegistered.includes("从未在本文件登记过"));
+
+// --- D9: the allocation path only accepts SAFE integers ----------------------
+	// A hand-written 22-digit task number still satisfies `^t-\d+$` and is therefore a
+	// REGISTERED number, but `Number` reads it as 1e22 ⇒ `Number.isFinite` stayed true and
+	// the old allocation wrote `t-1e+22` — a row this file's own parser then rejects. The
+	// fix is to refuse with the reason (never clamp): the file is left byte-identical.
+	const d9Before = await tasksText();
+	const d9Handwritten = "12345678901234567890 | 2026-01-01T00:00:00.000Z | session-x | plan | t-12345678901234567890 | 手写的超长任务号";
+	await writeFile(tasksPath, `${d9Before}${d9Handwritten}\n`, "utf8");
+	const d9Refusal = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "plan", line: "超号之后派的新活" }, execFor(boardEnv.senderAgent));
+	check("§9 D9: a task number past the safe-integer range makes kind=plan refuse — with the offending id named, zero writes, and no silent clamp", d9Refusal.includes("分配被拒绝") && d9Refusal.includes("安全整数") && d9Refusal.includes("t-12345678901234567890") && (await tasksText()) === `${d9Before}${d9Handwritten}\n`);
+	await writeFile(tasksPath, d9Before, "utf8");
+	const d9Recovered = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "plan", line: "修掉那一行之后派的新活" }, execFor(boardEnv.senderAgent));
+	check("§9 D9: ... and with that row gone the very same allocation succeeds again (the refusal was caused by the row, not by a broken fixture)", d9Recovered.includes("已追加 tasks #") && d9Recovered.includes("task=t-3，"));
+
+// --- U18: kind / task handed to the other two files -------------------------
+	const decisionsBeforeMisuse = await readFile(decisionsPath, "utf8");
+	const misuseDecisions = await boardAppend.execute({ team: "night-shift", file: "decisions", line: "参数误用", kind: "done" }, execFor(boardEnv.senderAgent));
+	check("§9 U18: kind with file=decisions is refused and the decisions ledger gets zero writes", misuseDecisions.includes("只对 file=tasks 生效") && misuseDecisions.includes("file=decisions") && (await readFile(decisionsPath, "utf8")) === decisionsBeforeMisuse);
+	const disciplineBeforeMisuse = await readFile(disciplinePath, "utf8");
+	const misuseDiscipline = await boardAppend.execute({ team: "night-shift", file: "discipline", line: "参数误用", baseHash: hashOf(disciplineBeforeMisuse), task: "t-1" }, execFor(boardEnv.senderAgent));
+	check("§9 U18: task with file=discipline is refused and the discipline file gets zero writes", misuseDiscipline.includes("只对 file=tasks 生效") && (await readFile(disciplinePath, "utf8")) === disciplineBeforeMisuse);
+	const misuseTaskDecisions = await boardAppend.execute({ team: "night-shift", file: "decisions", line: "参数误用", task: "t-1" }, execFor(boardEnv.senderAgent));
+	check("§9 U18: task with file=decisions is refused and the decisions ledger gets zero writes", misuseTaskDecisions.includes("只对 file=tasks 生效") && misuseTaskDecisions.includes("file=decisions") && (await readFile(decisionsPath, "utf8")) === decisionsBeforeMisuse);
+	const misuseKindDiscipline = await boardAppend.execute({ team: "night-shift", file: "discipline", line: "参数误用", baseHash: hashOf(disciplineBeforeMisuse), kind: "plan" }, execFor(boardEnv.senderAgent));
+	check("§9 U18: kind with file=discipline is refused and the discipline file gets zero writes", misuseKindDiscipline.includes("只对 file=tasks 生效") && misuseKindDiscipline.includes("file=discipline") && (await readFile(disciplinePath, "utf8")) === disciplineBeforeMisuse);
+	check("§9 U18: all four combinations are covered — {kind, task} × {decisions, discipline}, every one of them zero-write", [misuseDecisions, misuseTaskDecisions, misuseDiscipline, misuseKindDiscipline].every((out) => out.includes("只对 file=tasks 生效")) && (await readFile(decisionsPath, "utf8")) === decisionsBeforeMisuse && (await readFile(disciplinePath, "utf8")) === disciplineBeforeMisuse);
+
+// --- U1 negatives: the file argument is still an enum, never a path ---------
+	const pathTaskFile = await rejects(boardAppend, { team: "night-shift", file: "tasks.md", kind: "plan", line: "x" }, execFor(boardEnv.senderAgent));
+	check("§9 U1: a path-shaped file argument dies on the enum — tasks.md is not addressable as a path", pathTaskFile instanceof Error && pathTaskFile.message.includes("file"));
+	const traversalTaskFile = await rejects(boardAppend, { team: "night-shift", file: "../tasks", kind: "plan", line: "x" }, execFor(boardEnv.senderAgent));
+	check("§9 U1: ../tasks dies on the same enum (no traversal through file)", traversalTaskFile instanceof Error && traversalTaskFile.message.includes("file"));
+// --- U11: the read face — the absent file first ------------------------------
+	rmSync(tasksPath, { force: true });
+	const tasksAbsentRead = await boardRead.execute({ team: "night-shift" }, execFor(boardEnv.senderAgent));
+	check("§9 U11: with no tasks file the read face says so honestly instead of failing", tasksAbsentRead.includes("--- tasks.md（只追加台账；显示末 20 条）---") && tasksAbsentRead.includes("（文件不存在，按空处理：0 行）"));
+	check("§9 U11: an absent tasks file still hands back its hash, marked append-only (no baseHash parameter)", tasksHashOf(tasksAbsentRead) === hashOf("") && tasksAbsentRead.includes("（空内容哈希；仅供参考/审计：tasks 只追加、不接受 baseHash 参数）"));
+	check("§9 U11: the derived view announces itself as a reading, and is empty when there are no rows", tasksAbsentRead.includes("（派生读数：扫描最近 500 行；逐任务给「最后主张」与「未消解存疑」——是读数，不是裁决）") && tasksAbsentRead.includes("（无任务行）") && tasksAbsentRead.includes("（原始行）"));
+
+// §9.3.3 / §9.3.4 的样例台账，全程走真工具：t-1 有接活、有完成主张、有存疑、有撤回；
+// t-2 的存疑没人消解；t-3 只登记过；t-4 的存疑被后一条主张消解。
+	const ledgerPlan = (line) => boardAppend.execute({ team: "night-shift", file: "tasks", kind: "plan", line }, execFor(boardEnv.senderAgent));
+	const ledgerRow = (kind, task, line, agent) => boardAppend.execute({ team: "night-shift", file: "tasks", kind, task, line }, execFor(agent));
+	await ledgerPlan("让 worker-b 复核 §3 的行号");
+	await ledgerRow("claim", "t-1", "接了，预计 10 分钟", boardEnv.targetAgent);
+	await ledgerRow("done", "t-1", "核出 3 处错（依据 lib/index.js:3548）", boardEnv.targetAgent);
+	await ledgerRow("dispute", "t-1", "对 #3 存疑：第 2 处我读到的行号不同", boardEnv.senderAgent);
+	await ledgerRow("retract", "t-1", "撤回 #3 的第 2 处：是我读数窗口旧了", boardEnv.senderAgent);
+	await ledgerPlan("让 reviewer 复核 README");
+	await ledgerRow("claim", "t-2", "接了", boardEnv.targetAgent);
+	await ledgerRow("dispute", "t-2", "对 #7 存疑：没看到证据", boardEnv.senderAgent);
+	await ledgerPlan("待派：整理 CHANGELOG");
+	await ledgerPlan("让 worker-b 复核 §9");
+	await ledgerRow("claim", "t-4", "接了", boardEnv.targetAgent);
+	await ledgerRow("dispute", "t-4", "存疑：范围不对", boardEnv.senderAgent);
+	await ledgerRow("block", "t-4", "卡在缺授权", boardEnv.targetAgent);
+
+	const tasksRead = await boardRead.execute({ team: "night-shift" }, execFor(boardEnv.senderAgent));
+	const ledgerRows = (await readFile(tasksPath, "utf8")).trim().split("\n");
+	const ledgerBlock = tasksBlockOf(tasksRead);
+	const stampOfRow = (row) => [...row.split("|")[1].trim()].slice(0, 16).join("").replace("T", " ");
+	const stamp = (index) => stampOfRow(ledgerRows[index]);
+	const lineOf = (block, task) => block.split("\n").find((row) => row.startsWith(`- ${task} ·`)) ?? "";
+
+	check("§9 U11: with rows present the read face gives 共 N 行 / 显示 M 条 / baseHash", ledgerBlock.includes("共 13 行，显示 13 条 · baseHash="));
+	check("§9 U11: the tasks baseHash is the hash of the file on disk (reference/audit only)", tasksHashOf(tasksRead) === hashOf(await readFile(tasksPath, "utf8")));
+	check("§9 U11: the raw window prints the rows verbatim — the reading never replaces them", tasksRead.includes("（原始行）") && tasksRead.includes(ledgerRows[0]) && tasksRead.includes(ledgerRows[12]));
+	check("§9 U12: 最后主张 is the LAST claim / done / block row, with that row's own author", lineOf(ledgerBlock, "t-1").includes(`最后主张 done（${stamp(2)} · session-target`));
+	check("§9 U12: a task with no claim of any kind says 尚无主张（仅登记） instead of inventing one", lineOf(ledgerBlock, "t-3") === "- t-3 · 1 行 · 尚无主张（仅登记）");
+	check("§9 U12: each task's row count is the number of its rows in the scanned window", ledgerBlock.includes("- t-2 · 3 行 ·") && ledgerBlock.includes("- t-4 · 4 行 ·"));
+	check("§9 U12: a block is a claim too — the LAST claim row of t-4 is its block (#13), and the derived line names block rather than the earlier claim (#11)", ledgerRows[12].includes("| block | t-4 |") && lineOf(ledgerBlock, "t-4").startsWith(`- t-4 · 4 行 · 最后主张 block（${stamp(12)} · session-target`));
+	check("§9 U13: a doubt with nothing after it is rendered as ⚠ 未消解存疑 and is NOT adjudicated", lineOf(ledgerBlock, "t-2") === `- t-2 · 3 行 · 最后主张 claim（${stamp(6)} · session-target）· ⚠ 未消解存疑 1 条`);
+	check("§9 U13: a doubt answered by a later claim names the row that answered it — full-line equality, so the tail's own separator is pinned too", lineOf(ledgerBlock, "t-4") === `- t-4 · 4 行 · 最后主张 block（${stamp(12)} · session-target）· 存疑已由 #13 消解`);
+	check("§9 U13: ... and a withdrawal counts as an answer too (t-1's doubt is settled by #5) — full-line equality", lineOf(ledgerBlock, "t-1") === `- t-1 · 5 行 · 最后主张 done（${stamp(2)} · session-target · 已由 #5 撤回 · 撤回者 session-self）· 存疑已由 #5 消解`);
+	check("§9 U15: a retract does NOT erase the claim — it is still rendered, marked withdrawn, claimant kept", lineOf(ledgerBlock, "t-1").includes(`最后主张 done（${stamp(2)} · session-target · 已由 #5 撤回 · 撤回者 session-self）`));
+	check("§9 U15: when the withdrawer is not the claimant BOTH ids appear on the same line", lineOf(ledgerBlock, "t-1").includes("session-target") && lineOf(ledgerBlock, "t-1").includes("撤回者 session-self"));
+	check("§9 U15: the withdrawn claim survives as its own raw row — history is never rewritten", ledgerRows[2].includes("| done | t-1 |") && (await readFile(tasksPath, "utf8")).split("\n")[2] === ledgerRows[2]);
+	check("§9 U12: the derived view is ordered by task number and gives every task exactly one line", ledgerBlock.split("\n").filter((row) => /^- t-\d+ · /u.test(row)).map((row) => row.slice(2, row.indexOf(" ·"))).join(",") === "t-1,t-2,t-3,t-4");
+	check("§9 D1/D8: the 单行上限 guidance line enumerates all three blackboard files (the read face is not a two-file face any more)", tasksRead.includes("file=decisions 只追加") && tasksRead.includes("file=discipline 整文件替换") && tasksRead.includes("file=tasks 只追加一条主张"));
+
+// --- D5 / D6: the sub-cases §9.3.4 rule 1–2 now define (several retracts · mixed doubts)
+	// t-5: one doubt answered by a later claim AND one doubt nothing answered ⇒ the ⚠ wins.
+	// t-6: two doubts, both answered ⇒ #N is the FIRST answer to the LAST settled doubt.
+	// t-7: two withdrawals after one claim ⇒ the LAST one is named, and no count is printed.
+	await ledgerPlan("D6 ①：同一任务同时有未消解与已消解存疑");
+	await ledgerRow("claim", "t-5", "接了", boardEnv.targetAgent);
+	await ledgerRow("dispute", "t-5", "对第一条主张存疑", boardEnv.senderAgent);
+	await ledgerRow("done", "t-5", "声称完成（这一条消解了上面的存疑）", boardEnv.targetAgent);
+	await ledgerRow("dispute", "t-5", "对第二条主张也存疑（没人回答）", boardEnv.senderAgent);
+	await ledgerPlan("D6 ②：多条存疑都已消解");
+	await ledgerRow("claim", "t-6", "接了", boardEnv.targetAgent);
+	await ledgerRow("dispute", "t-6", "存疑甲", boardEnv.senderAgent);
+	await ledgerRow("done", "t-6", "回答甲", boardEnv.targetAgent);
+	await ledgerRow("dispute", "t-6", "存疑乙", boardEnv.senderAgent);
+	await ledgerRow("claim", "t-6", "回答乙（这是首个应答行）", boardEnv.targetAgent);
+	await ledgerRow("done", "t-6", "回答乙之后的又一条（不该被引用）", boardEnv.targetAgent);
+	await ledgerPlan("D5：一条主张之后被撤回两次");
+	await ledgerRow("claim", "t-7", "接了", boardEnv.targetAgent);
+	await ledgerRow("retract", "t-7", "撤回自己（第一条）", boardEnv.targetAgent);
+	await ledgerRow("retract", "t-7", "撤回（第二条，取的是它）", boardEnv.senderAgent);
+
+	const d56Read = await boardRead.execute({ team: "night-shift" }, execFor(boardEnv.senderAgent));
+	const d56Block = tasksBlockOf(d56Read);
+	const d56Rows = (await readFile(tasksPath, "utf8")).trim().split("\n");
+	const d56Stamp = (seq) => stampOfRow(d56Rows[seq - 1]);
+	check("§9 D6①: with one doubt settled and one still standing the line prints ⚠ (rule 2's if-branch wins over 已由 #N 消解) and never both", d56Block.includes(`- t-5 · 5 行 · 最后主张 done（${d56Stamp(17)} · session-target）· ⚠ 未消解存疑 1 条`) && !lineOf(d56Block, "t-5").includes("存疑已由"));
+	check("§9 D6②: with every doubt settled #N is the FIRST answer to the LAST settled doubt (#24) — not its second answer (#25) and not the earlier doubt's answer (#22)", d56Block.includes(`- t-6 · 7 行 · 最后主张 done（${d56Stamp(25)} · session-target）· 存疑已由 #24 消解`));
+	check("§9 D5: several withdrawals name the LAST one in #N and print no count segment at all (the undeclared 「此主张后共 N 条撤回行」 is gone)", d56Block.includes(`- t-7 · 4 行 · 最后主张 claim（${d56Stamp(27)} · session-target · 已由 #29 撤回 · 撤回者 session-self）`) && !d56Block.includes("此主张后共") && !d56Block.includes("条撤回行"));
+	check("§9.3.4 rule 4: the derived view never renders a claim as a fact — no 状态 wording anywhere in it", !/状态[＝=]/u.test(ledgerBlock) && !ledgerBlock.includes("已完成") && ledgerBlock.includes("最后主张"));
+// --- U17: the two boundary annotations ---------------------------------------
+	const bigLedger = [];
+	for (let n = 1; n <= 505; n += 1) bigLedger.push(`${n} | 2026-01-01T00:00:00.000Z | session-x | plan | t-${n} | 第 ${n} 件`);
+	bigLedger.push("这不是一行台账（不可解析）");
+	bigLedger.push("9 | 2026-01-01T00:00:00.000Z | session-x | 未知kind | t-99 | 坏行（kind 不在闭集）");
+	bigLedger.push("10 | 2026-01-01T00:00:00.000Z | session-x | done | 没有号 | 坏行（task 形状非法）");
+	await writeFile(tasksPath, `${bigLedger.join("\n")}\n`, "utf8");
+	const bigRead = await boardRead.execute({ team: "night-shift" }, execFor(boardEnv.senderAgent));
+	const bigBlock = tasksBlockOf(bigRead);
+	check("§9 U17: past the scan limit the read face states how many earlier rows took no part in the derivation", bigBlock.includes("（派生只扫描最近 500 行；更早的 8 行未参与派生）"));
+	check("§9 U17: unparsable rows are counted and excluded, never silently dropped", bigBlock.includes("（3 行无法解析，未参与派生）"));
+	check("§9 U17: the derivation covers only the scanned window — t-9 is in, t-8 fell outside", lineOf(bigBlock, "t-9") !== "" && lineOf(bigBlock, "t-8") === "");
+	check("§9 U17: the raw window is still the last 20 rows, independent of the derivation's 500", bigRead.includes(`共 ${bigLedger.length} 行，显示 20 条`) && bigRead.includes(bigLedger[bigLedger.length - 1]));
+// --- U14: the regression lock ------------------------------------------------
+// decisions / discipline 的行为与文案逐字不变：这一块量的是**整段返回文本**（=== 而
+// 不是 includes），任何一处文案漂移都会当场变红。本批唯一被允许的文案变更（白名单
+// 拒绝由两值改三值，§9.6⑤）在下面用源码级断言单独锁住 —— 它在运行期不可达（枚举
+// 先拒），所以只能这么锁，而那正是 file 这一直以来的纵深防御。
+	const u14Env = teamEnv({ teams: [teamRow({ writer: "any" })] });
+	const u14Append = u14Env.tool("team_link_team_append");
+	rmSync(decisionsPath, { force: true });
+	const u14DecisionBody = "统一用 team_link_send 汇报";
+	const u14Decisions = await u14Append.execute({ team: "night-shift", file: "decisions", line: u14DecisionBody }, execFor(u14Env.targetAgent));
+	check("§9 U14: the decisions success text is BYTE-IDENTICAL to the pre-batch copy", u14Decisions === [
+		`已追加 decisions #1（author=session-target）→ ${decisionsPath}`,
+		"行格式：seq | ISO 时间 | author-session-id | 正文（seq 由插件分配、单调递增；只追加不删除）。",
+		`单行上限 500 字符（本次 ${[...u14DecisionBody].length} 字符，§4.1）。`,
+		].join("\n"));
+	const u14DisciplineBefore = await readFile(disciplinePath, "utf8");
+	const u14DisciplineBody = "第一版：汇报走 team_link_send";
+	const u14Discipline = await u14Append.execute({ team: "night-shift", file: "discipline", line: u14DisciplineBody, baseHash: hashOf(u14DisciplineBefore) }, execFor(u14Env.senderAgent));
+	check("§9 U14: the discipline success text is BYTE-IDENTICAL to the pre-batch copy", u14Discipline === [
+		`已替换 discipline.md（author=session-self）→ ${disciplinePath}`,
+		`baseHash ${hashOf(u14DisciplineBefore)} → ${hashOf(u14DisciplineBody)}（下次替换必须携带新值）。`,
+		"共 1 行；单行上限 500 字符（§4.1）。",
+		].join("\n"));
+	const tasksSource = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
+	check("§9 U14 §9.6⑤: the whitelist refusal names all three files (the ONE copy change this batch may make)", tasksSource.includes("写入失败：file 必须是 decisions 或 discipline 或 tasks（白名单，不接受任何路径）。"));
+	check("§9 U14 §9.6⑤: the two-value whitelist refusal is gone — it can only come back from lib/index.js", !tasksSource.includes("写入失败：file 必须是 decisions 或 discipline（白名单"));
+
+// 收尾：把共享黑板还原成本节开始时的样子（两个旧文件逐字节写回、新文件删掉），后面
+// 任何一节都不会观察到本批的夹具。
+	await writeFile(decisionsPath, decisionsPristine, "utf8");
+	await writeFile(disciplinePath, disciplinePristine, "utf8");
+	rmSync(tasksPath, { force: true });
 
 // ---------------------------------------------------------------------------
 // M3 (§3.4): broadcast fan-out — one full gate pass per target
