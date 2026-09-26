@@ -128,7 +128,7 @@ R1 / R5 是同一个病：**把观测到的现象说成了因果结论**（R1：
 
 ### 🔁 同批同步的面
 
-`lib/index.js`（形态常量与渲染 / `normalizeTeams` 降级留痕 / 宿主探测 `probeAgentTeams` / 确认框 `askModeDialog` / `set-mode` 分支 / `roster get` 与 `team_link_status` 的形态段 / 两个工具的描述面）；`host-half.test.mjs`（41 条断言 ＋ 宿主 `agentTeams` 替身 ＋ `rosterCall` 的 Y7-safe 调用器 ＋ roster 参数键集锁）；`README.md`（三处读数 · roster 动词表与工具一览 · **新增「团队形态」段**（两档白话 + 三句要紧的话 + 能力矩阵）· 状态卡 ⑦ 段 · 设置键表与两处 yaml 样例 · 设计文档索引加本档一行）；本条目；`docs/verification-log.md`（本批一节）；`docs/team-mode-batch-design-2026-09-26.md`（状态行与 §8 假设 A1–A4 回填实测结论）；`docs/team-ledger-and-mode-design-2026-09-26.md`（§7 步 3 / 5 标 ✅ ＋ 指向本档的链接；提交哈希留「待父会话回填」）；`docs/observability-batch-design-2026-09-26.md`（§7 第 6 条改标「状态卡形态段由 B 批实施」）。
+`lib/index.js`（形态常量与渲染 / `normalizeTeams` 降级留痕 / 宿主探测 `probeAgentTeams` / 确认框 `askModeDialog` / `set-mode` 分支 / `roster get` 与 `team_link_status` 的形态段 / 两个工具的描述面）；`host-half.test.mjs`（41 条断言 ＋ 宿主 `agentTeams` 替身 ＋ `rosterCall` 的 Y7-safe 调用器 ＋ roster 参数键集锁）；`README.md`（三处读数 · roster 动词表与工具一览 · **新增「团队形态」段**（两档白话 + 三句要紧的话 + 能力矩阵）· 状态卡 ⑦ 段 · 设置键表与两处 yaml 样例 · 设计文档索引加本档一行）；本条目；`docs/verification-log.md`（本批一节）；`docs/team-mode-batch-design-2026-09-26.md`（状态行与 §8 假设 A1–A4 回填实测结论）；`docs/team-ledger-and-mode-design-2026-09-26.md`（§7 步 3 / 5 标 ✅ ＋ 指向本档的链接；提交哈希 `12f0874`（2026-09-27 由父会话回填））；`docs/observability-batch-design-2026-09-26.md`（§7 第 6 条改标「状态卡形态段由 B 批实施」）。
 
 ---
 
