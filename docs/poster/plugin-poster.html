@@ -68,6 +68,79 @@ footer a{color:var(--cyan);text-decoration:none}
   </div>
 </section>
 <section>
+<section>
+  <h2>两档拓扑<em>多会话档 ↔ agent-team 档（人确认后才切）</em></h2>
+  <div class="card" style="padding:18px">
+  <svg viewBox="0 0 1120 432" width="100%" role="img" aria-label="两档协作拓扑图">
+    <defs>
+      <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/>
+      </marker>
+      <marker id="arG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#34d399"/>
+      </marker>
+    </defs>
+    <rect x="8" y="8" width="648" height="416" rx="14" fill="#111a2c" stroke="#22304a"/>
+    <text x="30" y="40" fill="#22d3ee" font-size="13" font-family="ui-monospace,monospace" letter-spacing="1.5">多会话档 · 跨会话 / 跨进程</text>
+    <text x="30" y="60" fill="#93a4c4" font-size="12" font-family="ui-monospace,monospace">平级会话 · 本插件的身份与信任层</text>
+    <rect x="256" y="176" width="176" height="66" rx="10" fill="rgba(34,211,238,.10)" stroke="#22d3ee"/>
+    <text x="344" y="206" fill="#e8eefc" font-size="15" text-anchor="middle" font-family="ui-monospace,monospace">会话 A · 协调者</text>
+    <text x="344" y="226" fill="#93a4c4" font-size="11.5" text-anchor="middle" font-family="ui-monospace,monospace">roster 现任（创建即认领）</text>
+    <rect x="34" y="76" width="152" height="56" rx="10" fill="rgba(255,255,255,.03)" stroke="#22304a"/>
+    <text x="110" y="100" fill="#e8eefc" font-size="13.5" text-anchor="middle" font-family="ui-monospace,monospace">会话 B · worker1</text>
+    <text x="110" y="118" fill="#93a4c4" font-size="11" text-anchor="middle" font-family="ui-monospace,monospace">flash 档</text>
+    <rect x="486" y="76" width="152" height="56" rx="10" fill="rgba(255,255,255,.03)" stroke="#22304a"/>
+    <text x="562" y="100" fill="#e8eefc" font-size="13.5" text-anchor="middle" font-family="ui-monospace,monospace">会话 C · worker2</text>
+    <text x="562" y="118" fill="#93a4c4" font-size="11" text-anchor="middle" font-family="ui-monospace,monospace">flash 档</text>
+    <rect x="34" y="290" width="152" height="56" rx="10" fill="rgba(255,255,255,.03)" stroke="#22304a"/>
+    <text x="110" y="314" fill="#e8eefc" font-size="13.5" text-anchor="middle" font-family="ui-monospace,monospace">会话 D · worker3</text>
+    <text x="110" y="332" fill="#93a4c4" font-size="11" text-anchor="middle" font-family="ui-monospace,monospace">flash 档</text>
+    <path d="M256,196 C200,180 190,132 186,120" stroke="#22d3ee" stroke-width="1.4" fill="none" marker-end="url(#ar)"/>
+    <path d="M432,196 C490,180 500,132 504,120" stroke="#22d3ee" stroke-width="1.4" fill="none" marker-end="url(#ar)"/>
+    <path d="M256,222 C200,240 190,296 186,310" stroke="#22d3ee" stroke-width="1.4" fill="none" marker-end="url(#ar)"/>
+    <text x="150" y="150" fill="#93a4c4" font-size="11.5" font-family="ui-monospace,monospace">点对点</text>
+    <text x="500" y="150" fill="#93a4c4" font-size="11.5" font-family="ui-monospace,monospace">广播 team:&lt;n&gt;/*</text>
+    <text x="112" y="282" fill="#93a4c4" font-size="11.5" font-family="ui-monospace,monospace">配对（双向免确认）</text>
+    <rect x="256" y="276" width="380" height="126" rx="12" fill="rgba(245,158,11,.06)" stroke="#f59e0b" stroke-dasharray="4 4"/>
+    <text x="276" y="300" fill="#f59e0b" font-size="12.5" font-family="ui-monospace,monospace">黑板 &lt;workspace&gt;/team/&lt;name&gt;/</text>
+    <text x="276" y="324" fill="#e8eefc" font-size="12.5" font-family="ui-monospace,monospace">decisions.md　只追加裁决</text>
+    <text x="276" y="346" fill="#e8eefc" font-size="12.5" font-family="ui-monospace,monospace">discipline.md　乐观锁整文件替换</text>
+    <text x="276" y="368" fill="#e8eefc" font-size="12.5" font-family="ui-monospace,monospace">tasks.md　　　只追加台账 + 读时投影</text>
+    <text x="276" y="390" fill="#93a4c4" font-size="11" font-family="ui-monospace,monospace">最后主张 / 未消解存疑 —— 是读数，不是裁决</text>
+    <path d="M330,242 L330,272" stroke="#f59e0b" stroke-width="1.4" fill="none" marker-end="url(#ar)"/>
+    <path d="M430,242 L430,272" stroke="#f59e0b" stroke-width="1.4" fill="none"/>
+    <text x="440" y="262" fill="#93a4c4" font-size="11" font-family="ui-monospace,monospace">读写（谁都可写、无权限门；作者记在行内）</text>
+    <path d="M256,180 C120,120 120,60 300,52" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="5 5" fill="none"/>
+    <text x="196" y="52" fill="#fb7185" font-size="11.5" font-family="ui-monospace,monospace">换届 rotate：一次性令牌 30 分钟 → 继任者接任</text>
+    <rect x="672" y="8" width="440" height="416" rx="14" fill="#111a2c" stroke="#22304a"/>
+    <text x="694" y="40" fill="#34d399" font-size="13" font-family="ui-monospace,monospace" letter-spacing="1.5">agent-team 档 · 单会话内（宿主）</text>
+    <text x="694" y="60" fill="#93a4c4" font-size="12" font-family="ui-monospace,monospace">多会话通道不可用时的兜底档</text>
+    <rect x="698" y="84" width="388" height="264" rx="12" fill="rgba(52,211,153,.05)" stroke="#34d399" stroke-dasharray="4 4"/>
+    <text x="716" y="106" fill="#34d399" font-size="11.5" font-family="ui-monospace,monospace">一个会话（Lead 所在的那个）</text>
+    <rect x="806" y="120" width="176" height="56" rx="10" fill="rgba(52,211,153,.10)" stroke="#34d399"/>
+    <text x="894" y="146" fill="#e8eefc" font-size="14" text-anchor="middle" font-family="ui-monospace,monospace">Lead</text>
+    <text x="894" y="164" fill="#93a4c4" font-size="11" text-anchor="middle" font-family="ui-monospace,monospace">= 当前根会话</text>
+    <rect x="716" y="242" width="112" height="52" rx="9" fill="rgba(255,255,255,.03)" stroke="#22304a"/>
+    <text x="772" y="264" fill="#e8eefc" font-size="12" text-anchor="middle" font-family="ui-monospace,monospace">teammate 1</text>
+    <text x="772" y="282" fill="#93a4c4" font-size="10.5" text-anchor="middle" font-family="ui-monospace,monospace">子代理</text>
+    <rect x="838" y="242" width="112" height="52" rx="9" fill="rgba(255,255,255,.03)" stroke="#22304a"/>
+    <text x="894" y="264" fill="#e8eefc" font-size="12" text-anchor="middle" font-family="ui-monospace,monospace">teammate 2</text>
+    <text x="894" y="282" fill="#93a4c4" font-size="10.5" text-anchor="middle" font-family="ui-monospace,monospace">子代理</text>
+    <rect x="960" y="242" width="112" height="52" rx="9" fill="rgba(255,255,255,.03)" stroke="#22304a"/>
+    <text x="1016" y="264" fill="#e8eefc" font-size="12" text-anchor="middle" font-family="ui-monospace,monospace">teammate 3</text>
+    <text x="1016" y="282" fill="#93a4c4" font-size="10.5" text-anchor="middle" font-family="ui-monospace,monospace">子代理</text>
+    <path d="M868,176 L772,238" stroke="#34d399" stroke-width="1.3" fill="none" marker-end="url(#arG)"/>
+    <path d="M894,176 L894,238" stroke="#34d399" stroke-width="1.3" fill="none" marker-end="url(#arG)"/>
+    <path d="M920,176 L1016,238" stroke="#34d399" stroke-width="1.3" fill="none" marker-end="url(#arG)"/>
+    <text x="716" y="318" fill="#93a4c4" font-size="11.5" font-family="ui-monospace,monospace">任务板 · 邮箱（宿主提供；本插件只读、不代理）</text>
+    <text x="716" y="336" fill="#93a4c4" font-size="11.5" font-family="ui-monospace,monospace">本插件只记「本团队是 agent-team 档 + Lead 是谁」</text>
+    <rect x="698" y="366" width="388" height="42" rx="10" fill="rgba(251,113,133,.06)" stroke="#fb7185"/>
+    <text x="716" y="384" fill="#fb7185" font-size="11.5" font-family="ui-monospace,monospace">这一档用不上：投递 / 配对 / 换届+恢复 / 看门狗</text>
+    <text x="716" y="400" fill="#93a4c4" font-size="11" font-family="ui-monospace,monospace">切档不迁移信任、不建桥、不自动改投消息</text>
+  </svg>
+  <p class="cap" style="margin:14px 2px 0;color:#93a4c4;font-size:13px">两档可切：<b style="color:#e8eefc">形态</b>由人在对话里指定 → 弹一次确认框 → 落笔并记一行形态史。<b style="color:#e8eefc">绝不悄悄降级</b>；切回多会话档时信任要人重新批准。</p>
+  </div>
+</section>
   <h2>与宿主 Agent Teams 的关系<em>正交，不是竞争</em></h2>
   <table>
     <tr><th>维度</th><th>dsh-team-link</th><th>宿主 Agent Teams</th></tr>
