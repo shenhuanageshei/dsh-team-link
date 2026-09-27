@@ -6,7 +6,7 @@
 import { Context } from "@deepseek-ai/cordis";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { apply, __testing } from "./lib/index.js";
@@ -802,7 +802,54 @@ async function waitForChain(env, count) {
  * the DEFECT-1 degradation fixture: it is the ONE branch that may skip the preset
  * face, and it has to leave one warn per created session when it does.
  */
-function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, settingsUpdateThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0, connectionStub = undefined, omitConnection = false, connectionWithoutRejection = false, lateConnection = false, omitAgentsCreate = false, policyHome = undefined, policySeed = undefined } = {}) {	const ctx = new Context();
+function setup({
+	sessions = [],
+	eventsBySession = {},
+	askScript = [],
+	targetStatus = "idle",
+	contextText = "SNIPPET",
+	omitContext = false,
+	goals,
+	extraAgents = [],
+	selfStatus,
+	useSettings = false,
+	lateSettings = false,
+	lateWebServer = false,
+	noInject = false,
+	settingsSeed,
+	settingsRegisterThrows = false,
+	legacyRegisterThrows = false,
+	legacyGetThrows = false,
+	settingsUpdateThrows = false,
+	selfCwd,
+	omitUserQuestions = false,
+	surfaceReadHook,
+	webServerWithoutRegister = false,
+	omitCommands = false,
+	lateCommands = false,
+	omitAgentPresets = false,
+	omitWorkspaceRegistry = false,
+	omitSessionTitle = false,
+	sessionTitleOptions = undefined,
+	omitAgentDefaultModel = false,
+	agentDefaultModelOptions = undefined,
+	workspaceRegistryOptions = undefined,
+	failCreateAt = -1,
+	createdHook = undefined,
+	actionLog = [],
+	pendingSeed = undefined,
+	createDelayMs = 0,
+	omitResume = false,
+	resumeDelayMs = 0,
+	connectionStub = undefined,
+	omitConnection = false,
+	connectionWithoutRejection = false,
+	lateConnection = false,
+	omitAgentsCreate = false,
+	policyHome = undefined,
+	policySeed = undefined
+} = {}) {
+	const ctx = new Context();
 	// Every plugin log line lands in `log.lines` instead of the console: the
 	// service-attach red line (§5.3) is asserted on the lines themselves.
 	const log = makeLogger();
@@ -1110,7 +1157,8 @@ check("dsh:// in markdown destination injected", decision9.messages.length === 2
 // ---------------------------------------------------------------------------
 
 check("four tools registered", ["team_link_list_sessions", "team_link_export", "team_link_send", "team_link_watch"].every((name) => env.tool(name) !== undefined));
-check("export route registered", env.routes.length === 1 && env.routes[0].kind === "exact" && env.routes[0].path === "/team-link/export");
+check("export route registered", env.routes.filter((route) => route.kind === "exact" && route.path === "/team-link/export").length === 1);
+check("C 批 W1 前置: the read-only team panel route is registered beside it, on the same exact-path shape", env.routes.filter((route) => route.path === "/team-link/panel").length === 1);
 
 // ---------------------------------------------------------------------------
 // -pro: list tool
@@ -5169,7 +5217,7 @@ check("U9: the lazy retries stay silent — still one line per seam for the whol
 const lateWsEnv = setup({ sessions: [], lateWebServer: true });
 check("U9 对照 (webServer): with no active webServer the route is not mounted, and the degradation is announced instead of silent", lateWsEnv.routes.length === 0 && lateWsEnv.log.lines.warn.some((line) => line.includes("webServer service unavailable at activation")));
 await lateWsEnv.provideWebServer();
-check("U9 对照 (webServer): the same late-attach pattern mounts the export route once the provider appears", lateWsEnv.routes.length === 1 && lateWsEnv.routes[0].kind === "exact" && lateWsEnv.routes[0].path === "/team-link/export");
+check("U9 对照 (webServer): the same late-attach pattern mounts the export route once the provider appears", lateWsEnv.routes.filter((route) => route.kind === "exact" && route.path === "/team-link/export").length === 1);
 
 // Data consistency across the same window (§9.1.3 数据一致性, defensive redundancy):
 // the memory engine can only be written before the attach. If that happens, the
@@ -7131,7 +7179,7 @@ check("U4 前置: webServer alone is still not enough — the route waits for th
 	lateBothEnv.routes.length === 0 && lateBothWarns().length === 1);
 await lateBothEnv.provideConnection();
 check("U4: once BOTH services are up the route mounts (the late-attach pattern now waits for the pair, and the window still left exactly one line)",
-	lateBothEnv.routes.length === 1 && lateBothEnv.routes[0].path === "/team-link/export" && lateBothWarns().length === 1);
+	lateBothEnv.routes.some((route) => route.path === "/team-link/export") && lateBothWarns().length === 1);
 
 // §4.1 红线 B1: the fence rides the OPTIONAL service seam like `webServer` does —
 // putting it in the module-level array would gate the whole plugin on it.
@@ -8692,6 +8740,282 @@ check("🟡#2 detach 窗口判据: 折叠留痕如实说「provider 被 detach �
 // run but leaves the current run's two files behind — every suite run leaked two
 // gitignored files. The teardown below owns it now, together with the escape dir
 // and the three team fixtures. (The `.test-tmp*` names are all in .gitignore.)
+// ===========================================================================
+// C 批（客户端面 · C1）· §3.0 跨半边取数通道：只读路由 GET /team-link/panel
+// 设计档 docs/client-panel-batch-design-2026-09-27.md §3.0/§3.1/§3.2/§3.4；
+// 判据 W1–W3 · W5–W7 · W9（W4 = C2 阶段；W8 = 两套件逐条绿）。
+// 断言名以判据号开头：实现之前这一段整批 FAIL，就是本节的红相读数。
+// ===========================================================================
+
+const PN_TMP = path.join(TEAM_TMP, "panel");
+const PN_WS = path.join(PN_TMP, "ws");
+const PN_TEAM = "panel-team";
+const PN_LEAD = "session-pn-lead";
+const PN_CODER = "session-pn-coder";
+const PN_TOTEN = "9f8e7d6c-5b4a-3928-1706-ffe5dd4cc3bb";
+const PN_NOW_MS = Date.now();
+const PN_PEERS = Array.from({ length: 14 }, (_, index) => "session-pn-" + String(index).padStart(2, "0"));
+const PN_ALL = [PN_LEAD, PN_CODER, ...PN_PEERS];
+/** 读窗内的行要读得出**真 verdict**，所以每条 surface 都是「刚刚」的消息（静默 < 10min）。 */
+const pnRecentEvents = (id) => [
+	{ type: "user/message", seq: 1, time: PN_NOW_MS - 3 * 60000, data: { id: id + "-u", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "面板夹具 " + id }] } },
+	{ type: "assistant/message", seq: 2, time: PN_NOW_MS - 2 * 60000, data: { turn: 1, step: 1, message: { id: id + "-a", role: "assistant", source: { kind: "model", provider: "p", model: "m" }, content: [{ type: "text", text: "收到" }] } } },
+];
+/** 团队行：一个在任协调者 + **已过期**的在飞换届令牌 + 一个空缺角色。过期令牌是 W9 的
+ * 探针 —— `team_read` 的惰性清扫会把它清掉，所以「渲染前后字节与 mtime 不变」这句话
+ * 只有在清扫**没被走到**时才成立。 */
+const pnTeamRow = {
+	name: PN_TEAM,
+	createdAt: 1700000000000,
+	workspace: PN_WS,
+	policy: { writer: "coordinator" },
+	roles: [
+		{ role: "coordinator", current: "session-self", pending: { session: "session-pn-next", token: PN_TOTEN, team: PN_TEAM, role: "coordinator", createdAt: 1700000000000, expiresAt: PN_NOW_MS - 60000, migratedPairs: [] }, history: [{ session: "session-self", from: 1700000000000, until: null }] },
+		{ role: "worker", current: null, pending: null, history: [] },
+	],
+	mode: "sessions",
+	leadSessionId: "",
+};
+/** 种进 `policy.json` 的一份真状态：团队 + 看门狗 + 一条**已过期**的 provisional 配对
+ * （W9 的第二个探针：清扫同样会删它）。 */
+const pnSeedDoc = policyDoc({
+	teams: [pnTeamRow],
+	watchdogs: [{ id: "wd-panel", team: PN_TEAM, watcherSession: "session-self", targets: [PN_PEERS[0]], silentMinutes: 10, intervalMinutes: 5, createdAt: PN_NOW_MS, expiresAt: PN_NOW_MS + 3600000 }],
+	pairs: [{ a: "session-self", b: PN_PEERS[0], createdAt: 1, provisional: true, expiresAt: PN_NOW_MS - 1000 }],
+});
+function pnSetup(extra = {}) {
+	return setup({
+		sessions: PN_ALL.map((id, index) => ({ header: { id, createdAt: 1000 + index, cwd: PN_WS }, live: true, persisted: true })),
+		eventsBySession: Object.fromEntries(PN_ALL.map((id) => [id, pnRecentEvents(id)])),
+		extraAgents: PN_ALL.map((id) => ({ id, status: "idle", cwd: PN_WS })),
+		selfCwd: PN_WS,
+		useSettings: true,
+		policySeed: pnSeedDoc,
+		...extra,
+	});
+}
+const pnEnv = pnSetup();
+const pnChain = await waitForChain(pnEnv, 1);
+const pnFile = path.join(pnEnv.policyHome, "team-link", "policy.json");
+const pnTasksPath = path.join(PN_WS, "team", PN_TEAM, "tasks.md");
+await mkdir(path.dirname(pnTasksPath), { recursive: true });
+await writeFile(pnTasksPath, [
+	"1 | 2026-09-26T21:10:02.123Z | session-lead | plan | t-7 | 让 worker-b 复核 §3 的行号",
+	"2 | 2026-09-26T21:12:44.001Z | session-wb | claim | t-7 | 接了，预计 10 分钟",
+	"3 | 2026-09-26T21:19:31.552Z | session-wb | done | t-7 | 核出 3 处错（依据 lib/index.js:3548）",
+	"4 | 2026-09-26T21:21:08.900Z | session-lead | dispute | t-7 | 对 43 存疑：第 2 处的行号我读到的不一样",
+	"5 | 2026-09-26T21:24:55.310Z | session-wb | retract | t-7 | 撤回 43 的第 2 处",
+	"6 | 2026-09-26T21:30:00.000Z | session-lead | plan | t-8 | 第二件事",
+	"7 | 2026-09-26T21:31:00.000Z | session-wb | claim | t-8 | 接了",
+].join("\n") + "\n", "utf8");
+
+const pnRouteOf = (env) => env.routes.find((route) => route.path === "/team-link/panel");
+/** 驱动路由 handler 本身（与导出的既有夹具同一条缝）：绝不重新实现一份路由。 */
+async function pnCallOn(env, query = "", options = {}) {
+	const route = pnRouteOf(env);
+	if (route === undefined) return { missing: true, status: 0, headers: {}, json: null, body: "" };
+	const res = await callRoute(route, { method: options.method ?? "GET", url: "/team-link/panel" + query, headers: options.headers ?? {} });
+	let json = null;
+	try { json = JSON.parse(res.body); } catch { json = null; }
+	return { missing: false, status: res.statusCode, headers: res.headers ?? {}, json, body: res.body };
+}
+const pnCall = await pnCallOn(pnEnv, "?session=session-self");
+/** `setup` 只建 store，不建 `ns` 句柄（那是 `teamEnv` 的便利层）；这里按同一读法取。 */
+const pnNs = (env) => env.settings.namespaces.get("team-link");
+const pnSeg = (payload, key) => (payload === null || payload === undefined ? undefined : payload[key]);
+const pnRowsOf = (call) => (pnSeg(call === null || call === undefined ? null : call.json, "sessions")?.rows ?? []);
+
+check("W1 前置: 夹具真的折叠过（文件后端的团队已并入设置命名空间）—— 否则后面读到的是一份空状态", pnChain === 1 && (pnNs(pnEnv).data.teams ?? []).map((team) => team.name).join(",") === PN_TEAM);
+
+// --- W1：同一道栅栏（挂载期成对门 + 请求期逐例同判 + 非 GET 405 + 拒时零读）------
+const pnFenceEnv = pnSetup({ sessions: [{ header: { id: "session-fence", createdAt: 1, cwd: PN_WS }, live: true, persisted: true }], eventsBySession: { "session-fence": pnRecentEvents("session-fence") }, connectionStub: makeFencedConnection() });
+const pnFencePanelRoute = pnRouteOf(pnFenceEnv);
+const pnFenceExportRoute = pnFenceEnv.routes.find((route) => route.path === "/team-link/export");
+const pnFenceCases = [
+	{ label: "无 token（未登录浏览器）", headers: { host: "127.0.0.1:3080" }, expect: 401, word: "unauthorized" },
+	{ label: "Host 不符（DNS rebinding）", headers: { host: "evil.example:3080", cookie: "dsh_session=ok" }, expect: 403, word: "forbidden" },
+	{ label: "跨站 Origin", headers: { host: "127.0.0.1:3080", origin: "http://evil.example", cookie: "dsh_session=ok" }, expect: 403, word: "forbidden" },
+];
+/** Y7 安全调用：路由缺席（实现之前）时给一个「什么都没发生」的读数，而不是把整轮掀翻。 */
+const pnCallRouteSafe = async (route, options) => (route === undefined || route === null ? { statusCode: 0, body: "", headers: {} } : await callRoute(route, options));
+const pnFenceMark = pnFenceEnv.query.surfaceReads.length;
+const pnFenceRows = [];
+for (const fenceCase of pnFenceCases) {
+	const panelRes = await pnCallRouteSafe(pnFencePanelRoute, { method: "GET", url: "/team-link/panel?session=session-self", headers: fenceCase.headers });
+	const exportRes = await pnCallRouteSafe(pnFenceExportRoute, { method: "GET", url: "/team-link/export?session=session-fence&format=md", headers: fenceCase.headers });
+	pnFenceRows.push({ label: fenceCase.label, expect: fenceCase.expect, word: fenceCase.word, panel: panelRes.statusCode, export: exportRes.statusCode, panelBody: panelRes.body });
+}
+check("W1: 面板路由与导出路由在**同一道栅栏**下逐例同判（同一请求、同一裁决，面板的拒绝正文用平台那三个词）",
+	pnFenceRows.length === 3 && pnFenceRows.every((row) => row.panel === row.expect && row.export === row.expect && row.panelBody === row.word));
+check("W1: 被栅栏拒的面板请求**零数据外泄**（连一次 surface 读都没发生；导出路由那条缝的既有判据是 readSession 为零）—— 且那三条拒绝真的来自这条路由（路由缺席时不算通过）",
+	pnFenceEnv.query.surfaceReads.length === pnFenceMark && pnFenceRows.every((row) => row.panel !== 0));
+const pnFenceAllowed = await pnCallRouteSafe(pnFencePanelRoute, { method: "GET", url: "/team-link/panel?session=session-self", headers: { host: "127.0.0.1:3080", origin: "http://127.0.0.1:3080", cookie: "dsh_session=ok" } });
+check("W1 对照（★ 负相：不冒充）: 同一台栅栏、同一条路由，同源已登录时**照常服务** —— 上面三条拒绝因此不是「什么都拒」的空断言",
+	pnFenceAllowed.statusCode === 200 && pnFenceAllowed.body.includes("placementLine"));
+const pnPostPanel = await pnCallOn(pnEnv, "?session=session-self", { method: "POST", headers: { host: "127.0.0.1:3080", cookie: "dsh_session=ok" } });
+check("W1: 同源已登录的非 GET 请求照旧 405 + allow: GET（面板与导出同形，且发生在任何读之前）",
+	pnPostPanel.status === 405 && String(pnPostPanel.headers.allow) === "GET");
+const pnNoConnEnv = pnSetup({ omitConnection: true });
+const pnNoRejEnv = pnSetup({ connectionWithoutRejection: true });
+check("W1: 挂载期成对门也覆盖面板路由 —— 栅栏缺席 / 没有 requestRejection 时**一条路由都不存在**（不是「挂上了再在请求期补门」）；而两个服务都在时它确实在（所以这句不是「反正都没挂」）",
+	pnRouteOf(pnEnv) !== undefined && pnNoConnEnv.routes.length === 0 && pnNoRejEnv.routes.length === 0);
+
+// --- W2：落点行与宿主**同源**（同一函数，不是各写一份字符串） -------------------
+const pnPlacement = pnCall.json === null || pnCall.json === undefined ? "" : String(pnCall.json.placementLine ?? "");
+const pnRosterFirst = String(await pnEnv.tool("team_link_roster").execute({ action: "get", team: PN_TEAM }, execFor(pnEnv.senderAgent))).split("\n")[0];
+const pnStatusFirst = String(await pnEnv.tool("team_link_status").execute({ team: PN_TEAM }, execFor(pnEnv.senderAgent))).split("\n")[0];
+check("W2: 面板顶部那一行与 roster / status 两个读面的首行**逐字同一串**（三面共用 policy.placementLine()）",
+	pnPlacement !== "" && pnPlacement === pnRosterFirst && pnPlacement === pnStatusFirst && pnPlacement.includes("存储："));
+check("W2: ... 而客户端半边**一个字节都不自造**这个三态（lib/client.js 里没有「存储：」字面量，也没有第二条格式化逻辑）",
+	!clientSource.includes("存储：") && !clientSource.includes("仅进程内存（重启即失）"));
+
+// --- W3：六段齐全 + 每段的降级载体在数据里（R4 的正例与反例） -------------------
+const PN_SEGMENTS = ["teams", "pending", "watchdogs", "tasksTail", "sessions"];
+check("W3: 六段齐全 —— 落点行 + 五段；每一段都由宿主渲染好 lines，客户端只显示不重算",
+	typeof pnCall.json?.placementLine === "string" && PN_SEGMENTS.every((key) => pnSeg(pnCall.json, key)?.present === true && Array.isArray(pnSeg(pnCall.json, key)?.lines) && pnSeg(pnCall.json, key).lines.length > 0));
+check("W3: 每段都带降级字段（present / lines；缺失时是 unavailable.reason）—— R4 的载体是数据，不是文案",
+	PN_SEGMENTS.every((key) => typeof pnSeg(pnCall.json, key)?.present === "boolean" && Array.isArray(pnSeg(pnCall.json, key)?.lines)));
+check("W3: 团队段逐字复述宿主状态卡那一套（在位/空缺 + 版本史末条），换届段的 token 一律掩码",
+	(pnSeg(pnCall.json, "teams")?.lines ?? []).some((line) => line.includes("角色 coordinator：现任 session-self")) && (pnSeg(pnCall.json, "teams")?.lines ?? []).some((line) => line.includes("角色 worker：空缺（vacant）")) && (pnSeg(pnCall.json, "pending")?.lines ?? []).join("|").includes(__testing.maskToken(PN_TOTEN)) && !(pnSeg(pnCall.json, "pending")?.lines ?? []).join("|").includes(PN_TOTEN));
+const pnAnon = await pnCallOn(pnEnv, "");
+check("W3 反例（R4）: 面板拿不到会话身份时，「会话面/读窗」段如实说自己缺什么（present:false + unavailable.reason 点名会话身份），其余五段照常出",
+	pnAnon.json?.sessions?.present === false && typeof pnAnon.json?.sessions?.unavailable?.reason === "string" && pnAnon.json.sessions.unavailable.reason.includes("会话身份") && pnAnon.json.teams.present === true && pnAnon.json.placementLine === pnCall.json?.placementLine);
+check("W3 反例（对照）: 同一台宿主**有**会话身份时同一段是 present:true —— 上一句拒的是缺数据，不是「这一段本来就不给」",
+	pnSeg(pnCall.json, "sessions")?.present === true && pnRowsOf(pnCall).length === PN_ALL.length);
+
+// --- W5 / W9：零写（面板读路径绝不走 team_read 的惰性清扫） ---------------------
+const pnSettingsBefore = JSON.stringify(pnNs(pnEnv).data);
+const pnBytesBefore = await readFile(pnFile, "utf8");
+const pnMtimeBefore = (await stat(pnFile)).mtimeMs;
+const pnTasksBefore = await readFile(pnTasksPath, "utf8");
+const pnRender = await pnCallOn(pnEnv, "?session=session-self");
+const pnBytesAfter = await readFile(pnFile, "utf8");
+const pnMtimeAfter = (await stat(pnFile)).mtimeMs;
+check("W5/W9: 渲染一次面板前后 policy.json 的**字节与 mtime 都不变**，settings 命名空间也逐字节不变（夹具里带着**已过期**的换届令牌与**已过期**的 provisional 配对：惰性清扫若被走到，这里必红）",
+	pnRender.status === 200 && pnBytesAfter === pnBytesBefore && pnMtimeAfter === pnMtimeBefore && JSON.stringify(pnNs(pnEnv).data) === pnSettingsBefore);
+check("W9: 台账文件逐字节不变（面板只读黑板，不落任何东西）—— 以一次真的 200 渲染为前提，不是「什么都没调用所以什么都没变」",
+	pnRender.status === 200 && (await readFile(pnTasksPath, "utf8")) === pnTasksBefore);
+check("W9 ★ 病灶锁（结构锁）: 面板读路径的实现里没有惰性清扫调用 —— 不冒充红相，先把「判据真的成立于源码」钉住",
+	typeof __testing.buildPanelPayload === "function" && !String(__testing.buildPanelPayload).includes("sweep") && !String(__testing.buildPanelPayload).includes("expire"));
+const pnSweepEnv = pnSetup();
+await waitForChain(pnSweepEnv, 1);
+const pnSweepFile = path.join(pnSweepEnv.policyHome, "team-link", "policy.json");
+const pnSweepBefore = await readFile(pnSweepFile, "utf8");
+await pnSweepEnv.tool("team_link_team_read").execute({ team: PN_TEAM }, execFor(pnSweepEnv.senderAgent));
+const pnSweepAfter = await readFile(pnSweepFile, "utf8");
+check("W9 ★ 负相（控制项：本夹具真的能检出「读路径写了一次」）: 同一款夹具走**会写**的那条读路（team_read 的惰性清扫）时，过期令牌被清掉、落点文件随之改变 —— 上面那条「不变」因此不是因为夹具里没东西可清",
+	pnSweepAfter !== pnSweepBefore || (pnNs(pnSweepEnv).data.teams[0].roles[0].pending ?? null) === null);
+
+// --- W6：台账尾与派生读数与 team_read **同源同形** ----------------------------
+const pnReadOut = String(await pnEnv.tool("team_link_team_read").execute({ team: PN_TEAM }, execFor(pnEnv.senderAgent)));
+const pnTailSeg = pnSeg(pnCall.json, "tasksTail");
+const pnRawTailRows = (pnTailSeg?.lines ?? []).filter((line) => line.includes("| plan |") || line.includes("| claim |") || line.includes("| done |"));
+check("W6: 台账尾的原始行与 team_read 的原始行逐字同源（同一读法 blackboardLines + 同一批行）",
+	pnRawTailRows.length > 0 && pnRawTailRows.every((line) => pnReadOut.includes(line.trim())));
+check("W6: 派生读数**逐字同形** —— 面板每一行「最后主张 / 未消解存疑」都原样出现在 team_read 的输出里（同一渲染器 renderTaskView）",
+	Array.isArray(pnTailSeg?.derived) && pnTailSeg.derived.length > 0 && pnTailSeg.derived.every((line) => pnReadOut.includes(line)) && pnTailSeg.derived.some((line) => line.includes("最后主张")) && pnTailSeg.derived.some((line) => line.includes("未消解存疑")));
+check("W6 ★ 负相（不冒充）: 上面那句不是「因为两边都是空」—— team_read 自己确实给出了这一对措辞，面板给出的「最后主张」行也不止一行",
+	pnReadOut.includes("最后主张") && pnReadOut.includes("未消解存疑") && (pnTailSeg?.derived ?? []).filter((line) => line.includes("最后主张")).length >= 2);
+
+// --- W4（C2）：形态三态徽标 ＋ 档位结论；投影读不到**不冒充** -------------------
+const PN_MODE_TEAM = "pn-mode-team";
+const pnModeSeedDoc = policyDoc({
+	teams: [pnTeamRow, { ...pnTeamRow, name: PN_MODE_TEAM, mode: "agent-team", leadSessionId: PN_LEAD }],
+	pairs: pnSeedDoc.policy.pairs,
+});
+/** 宿主投影替身：**只给两个读方法**（写方法一被调用就抛错并记账 —— 红线「只读宿主」）。 */
+const pnModeTeams = makeAgentTeams({ members: [{ id: PN_LEAD, name: "lead", role: "lead", status: "running" }, { id: PN_CODER, name: "coder", role: "teammate", status: "inactive", model: "m" }] });
+const pnModeEnv = pnSetup({ policySeed: pnModeSeedDoc });
+await waitForChain(pnModeEnv, 1);
+pnModeEnv.ctx.provide("agentTeams", pnModeTeams.service);
+const pnModeCall = await pnCallOn(pnModeEnv, "?session=session-self");
+const pnNoHostEnv = pnSetup({ policySeed: pnModeSeedDoc });
+await waitForChain(pnNoHostEnv, 1);
+const pnNoHostCall = await pnCallOn(pnNoHostEnv, "?session=session-self");
+const pnRowOf = (call, id) => (pnSeg(call.json, "sessions")?.rows ?? []).find((row) => row.id === id);
+const pnBadgeOf = (call, id) => (pnRowOf(call, id) === undefined ? null : pnRowOf(call, id).badge ?? null);
+const pnBadgeText = (call, id) => (pnBadgeOf(call, id) === null ? "" : String(pnBadgeOf(call, id).label));
+
+check("W4: 三态徽标 —— Lead（settings 的 Lead 指针）/ 成员（宿主投影）/ 多会话（既非 Lead 也不在名册里）三态各就各位，且 form.badges 与行上的徽标同源同形",
+	pnBadgeText(pnModeCall, PN_LEAD) === "agent-team·Lead" && pnBadgeText(pnModeCall, PN_CODER) === "agent-team·成员" && pnBadgeText(pnModeCall, PN_PEERS[0]) === "多会话"
+		&& pnSeg(pnModeCall.json, "form")?.badges?.[PN_LEAD]?.state === "agent-team-lead" && pnSeg(pnModeCall.json, "form")?.badges?.[PN_CODER]?.state === "agent-team-member");
+check("W4: 段顶一句**档位结论**，措辞**复用** team-mode §4.3 的「单会话兜底档」（同一个常量 TEAM_MODE_CONCLUSION，不是第二份文案）",
+	typeof pnSeg(pnModeCall.json, "form")?.conclusion === "string" && pnSeg(pnModeCall.json, "form").conclusion.includes("单会话兜底档") && pnSeg(pnModeCall.json, "form").conclusion.includes(PN_MODE_TEAM) && pnSeg(pnModeCall.json, "form").lines[0] === pnSeg(pnModeCall.json, "form").conclusion);
+check("W4: 只读宿主 —— 形态段对宿主**零写调用**，同时投影确实被读了（否则这条只是「什么都没发生」）",
+	pnModeTeams.calls.writes.length === 0 && pnModeTeams.calls.tryMembership >= 1 && pnModeTeams.calls.listMembers >= 1);
+check("W4 反例（投影读不到**不冒充**）: 宿主投影缺席时，非 Lead 的会话**不**被写成「多会话」，而是如实说「档位未判定 ＋ 原因」；Lead 那一格仍由 settings 的指针给（不因投影缺席而少一格）",
+	pnBadgeText(pnNoHostCall, PN_PEERS[0]).includes("未判定") && pnBadgeText(pnNoHostCall, PN_PEERS[0]).includes("agentTeams") && pnBadgeText(pnNoHostCall, PN_PEERS[0]) !== "多会话" && pnBadgeText(pnNoHostCall, PN_LEAD) === "agent-team·Lead");
+check("W4 对照（★ 负相：不冒充）: 同一台宿主、投影可读时同一格是「多会话」—— 上面那句拒的是缺投影，不是「这一格本来就不给」",
+	pnBadgeText(pnModeCall, PN_PEERS[0]) === "多会话" && pnBadgeText(pnNoHostCall, PN_PEERS[0]) !== "多会话");
+
+// --- W7：读窗（未读行显示为未读）+ 只读翻页 -------------------------------------
+const pnRows = pnRowsOf(pnCall);
+const pnRowHas = (row, needle) => Array.isArray(row?.lines) && row.lines.some((line) => line.includes(needle));
+const pnVerdictRows = pnRows.filter((row) => pnRowHas(row, "verdict="));
+const pnUnreadRows = pnRows.filter((row) => pnRowHas(row, "未读"));
+// 预算不变量（§3.0 ④）：**一次渲染 = 一次路由调用 = 与工具面同一个「≤12 次面读」**。
+const pnBudgetMark = pnEnv.query.surfaceReads.length;
+await pnCallOn(pnEnv, "?session=session-self");
+const pnBudgetReads = pnEnv.query.surfaceReads.length - pnBudgetMark;
+check("W7: 读窗内的行有真 verdict、窗口外的行**显示为未读**（两集合都不空、不相交，合起来正是全部会话面行）；且这一次渲染的**面读预算恰 12 次**（16 个会话面行 ⇒ 与工具面同一个 ≤12 的不变量）",
+	pnVerdictRows.length === 12 && pnUnreadRows.length === PN_ALL.length - 12 && pnVerdictRows.every((row) => !pnRowHas(row, "未读")) && pnUnreadRows.every((row) => !pnRowHas(row, "verdict=")) && pnBudgetReads === 12);
+check("W7: 未读行那句「未读」点名的是**本面板**的窗口（不借列表工具的措辞，也不给一个没读过的 verdict）",
+	pnUnreadRows.length > 0 && pnUnreadRows.every((row) => row.lines.some((line) => line.includes("未读") && line.includes("本面板"))));
+const pnTail = pnSeg(pnCall.json, "sessions")?.tail;
+check("W7: 段尾给出**只读**翻页的确切参数（与列表工具同一段 listReadTail：未读行数 + offset）",
+	Array.isArray(pnTail) && pnTail.some((line) => line.includes("未读") && line.includes("offset=12")));
+const pnMark2 = pnEnv.query.surfaceReads.length;
+const pnPage2 = await pnCallOn(pnEnv, "?session=session-self&offset=12");
+const pnReads2 = pnEnv.query.surfaceReads.length - pnMark2;
+check("W7: 翻页只读 —— offset=k 只换一个读窗（第二页读到剩下的行、预算照旧 ≤12），且这一次同样零写",
+	pnPage2.status === 200 && pnReads2 === PN_ALL.length - 12 && pnRowsOf(pnPage2).filter((row) => pnRowHas(row, "verdict=")).length === PN_ALL.length - 12 && (await readFile(pnFile, "utf8")) === pnBytesBefore && (await stat(pnFile)).mtimeMs === pnMtimeBefore);
+const pnBadPage = await pnCallOn(pnEnv, "?session=session-self&offset=999");
+check("W7 边界: offset 越界 ⇒ 4xx + 可读的原因（面板会把它显示成「面板数据不可用」），而不是静默给一页空数据",
+	pnBadPage.status === 400 && typeof pnBadPage.json?.error === "string");
+
+// ===========================================================================
+// C 批 · C3（4 条 🔵 的 ②③④）：快路径归档留痕**条件化** · 「快路径 ＋ fold failed」
+// 新夹具 · `setup()` 形参排版。归属：docs/policy-persistence-design-2026-09-27.md §8。
+// ===========================================================================
+
+// C3-b —— 「快路径 ＋ fold failed」：这一支**此前没有任何判据**（旧判据只覆盖晚挂路径）。
+// 夹具：服务在 activation 就在场（快路径）＋ 命名空间为默认（文件那一份是唯一真值）
+// ＋ `scope.update` 抛错 ⇒ 折叠必失败。旧实现在折叠**之前**就归档并留痕说「随后文件会被
+// 改写成合并结果」，而链尾在 fold failed 时**根本不回写** ⇒ 那句承诺不兑现，还多出一份
+// 冗余归档（无数据丢失，主文件原样保留）。现在归档挪到 `update()` 成功之后：没有折叠落定
+// 就没有归档、也没有那句承诺。
+const c3SeedFoldedAt = "2026-09-01T00:00:00.000Z";
+const c3SeedDoc = policyDoc({ teams: [teamRow({ name: "c3-team" })] }, c3SeedFoldedAt);
+const c3Env = setup({ sessions: [], useSettings: true, settingsUpdateThrows: true, selfCwd: TEAM_WS, policySeed: c3SeedDoc });
+const c3File = path.join(c3Env.policyHome, "team-link", "policy.json");
+const c3SeedBytes = await readFile(c3File, "utf8");
+const c3Chain = await waitForChain(c3Env, 1);
+const c3Lines = [...c3Env.log.lines.info, ...c3Env.log.lines.warn];
+const c3Archives = readdirSync(path.join(c3Env.policyHome, "team-link")).filter((name) => name.indexOf("policy.superseded-") === 0);
+let c3Doc = null;
+try { c3Doc = JSON.parse(await readFile(c3File, "utf8")); } catch { c3Doc = null; }
+check("C3-b 快路径 + fold failed（新夹具）: 折叠失败 ⇒ ① 文件里那份**逐字节不变**（窗口数据仍在落点里）② foldedAt 不重盖 ③ 留痕说得出是 fold failed（夹具真落在那一支）④ **归档数目与留痕一致，且两者都必须是 0** —— 没有折叠落定就没有归档、也没有那句留痕（旧实现会在折叠**之前**先归档一份并留下「折叠存档」那行）",
+	c3Chain === 1 && c3Lines.some((line) => line.includes("memory window: fold failed")) && (await readFile(c3File, "utf8")) === c3SeedBytes && c3Doc !== null && c3Doc.foldedAt === c3SeedFoldedAt
+		&& c3Archives.length === 0 && c3Lines.filter((line) => line.includes("折叠存档")).length === c3Archives.length);
+check("C3-a 快路径归档留痕**条件化**: 没有折叠落定时**没有任何一行**承诺「随后文件会被改写成合并结果」（旧实现在折叠之前就打了那句，而这一支的回写被跳过 —— 承诺与实况相反）",
+	!c3Lines.some((line) => line.includes("随后文件会被改写成合并结果")));
+const c3OkEnv = setup({ sessions: [], useSettings: true, selfCwd: TEAM_WS, policySeed: c3SeedDoc });
+await waitForChain(c3OkEnv, 1);
+const c3OkLines = [...c3OkEnv.log.lines.info, ...c3OkEnv.log.lines.warn];
+const c3OkArchives = readdirSync(path.join(c3OkEnv.policyHome, "team-link")).filter((name) => name.indexOf("policy.superseded-") === 0);
+check("C3-a/b ★ 负相（控制项：不冒充）: 同一份种子、同一款夹具，`update` 不抛错时**照旧**归档并留下「折叠存档」那行（本轮只把它挪到 update 成功之后）—— 上面那条「零归档」拒的是「没折叠」，不是「这一段本来就不归档」",
+	c3OkArchives.length === 1 && c3OkLines.some((line) => line.includes("折叠存档")) && c3OkLines.some((line) => line.includes("随后文件会被改写成合并结果")));
+
+// C3-c —— `setup()` 形参排版（纯排版，行为一字不动）：判据取「签名区不是一整行 1900 字符」。
+// 判据要读的是**本套件自己**的源码（`setup()` 住在这里，不在 lib/index.js）。
+const c3TestSource = await readFile(fileURLToPath(new URL("./host-half.test.mjs", import.meta.url)), "utf8");
+const c3HostLines = c3TestSource.split("\n");
+const c3SetupStart = c3HostLines.findIndex((line) => line.indexOf("function setup({") === 0);
+const c3SetupEnd = c3HostLines.findIndex((line, index) => index >= c3SetupStart && c3SetupStart !== -1 && line.indexOf("} = {}) {") !== -1);
+const c3SetupSpan = c3SetupStart === -1 || c3SetupEnd === -1 ? [] : c3HostLines.slice(c3SetupStart, c3SetupEnd + 1);
+check("C3-c `setup()` 形参排版: 签名不再压成一整行 —— 形参一行一个（签名区 ≥ 20 行、每行 ≤ 120 字符）",
+	c3SetupSpan.length >= 20 && c3SetupSpan.every((line) => line.length <= 120));
+
 rmSync(escDir, { recursive: true, force: true });
 rmSync(tmpDir, { recursive: true, force: true });
 rmSync(TEAM_TMP, { recursive: true, force: true });

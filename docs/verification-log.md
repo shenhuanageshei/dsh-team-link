@@ -2007,3 +2007,52 @@ assertion total: 1214 (failed: 7)
 - 启动后文件内容复核：`teams` 仍是那 3 个（12 角色）· `pairs` 34 项 · `rememberTargets` 23 项 · `savedAt` 已被插件刷新（我写入的那个值不再保留，符合 §3.3「每次成功写入刷新」）
 
 **结论**：「团队重启即失忆」这条真机缺陷**闭环** —— 本部署没有可用的 `settings.register()`（`no-register`），状态改由插件自己的文件承载，重启后仍在。
+
+## 2026-09-27 C 批：客户端团队面板（跨半边取数通道）＋ 形态可视化 ＋ 3 条 🔵 收尾
+
+**设计档**：[`docs/client-panel-batch-design-2026-09-27.md`](client-panel-batch-design-2026-09-27.md)（评审 PASS，判据 W1–W9 ＋ C3-a/b/c）。
+**改了哪两个文件**：`lib/index.js`（新增只读路由 `GET /team-link/panel` ＋ 面板载荷构造器 ＋ 三处段体渲染器收敛为一处）· `lib/client.js`（新增面板分区；**本批首次动客户端半边**）。
+
+### 起点读数（实现前，基线复核）
+
+- `node host-half.test.mjs` → `ALL PASS` / `assertion total: 1264 (failed: 0)`（退出码 0）
+- `node client-half.test.mjs` → `ALL PASS` / `assertion total: 269 (failed: 0)`（退出码 0）
+- `git status --short` → 空（工作树干净）
+
+### 红相与绿相（逐条，均为实跑原文）
+
+**C1（W1–W3 · W5–W7 · W9）**
+
+- 红相：`node host-half.test.mjs` → `23 FAILURE(S)` / `assertion total: 1290 (failed: 23)`；红的 23 条全部落在本批新增段内（**W1 前缀 2 条**：路由不存在 · 栅栏逐例同判 · 拒时零面读 · 非 GET 405 · 挂载期成对门；**W2 1 条**：三面逐字同一串；**W3 4 条**：六段齐全 / 降级载体 / 段体同源 / R4 正反例；**W5·W9 3 条**：字节与 mtime 不变 / 台账不变 / 病灶结构锁；**W6 3 条**：原始行同源 / 派生读数逐字同形 / ★ 负相控制；**W7 5 条**：未读标注 / 本面板措辞 / 只读翻页参数 / 翻页只读 / offset 边界）。
+- 红相（客户端）：`node client-half.test.mjs` → `4 FAILURE(S)` / `assertion total: 275 (failed: 4)` —— **★ 覆盖缺口，如实标注不冒充**：被测面（`panelUrl` / `panelSections` / 降级句 / `readPanelState`）**尚不存在**，四条命名守卫各自报出缺哪一面；W2/W3/W5/W6/W7 的正相断言因面缺席而**整块未执行**（红线：不把「没实现」伪装成「块被跳过」）。
+- 绿相：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1290 (failed: 0)`；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 296 (failed: 0)`。
+- **★ 负相（控制项，红绿两相都成立）**：① **不冒充红相**：同一台栅栏、同一条路由，同源已登录时**照常 200**（三条拒绝因此不是「什么都拒」的空断言）；② 同一款夹具走**会写**的那条读路（`team_read` 的惰性清扫）时过期令牌被清掉、落点文件随之改变 —— 所以面板那条「字节与 mtime 不变」不是「夹具里没东西可清」；③ 未读行的两集合都不空、不相交（窗口内 12 条有真 verdict，窗口外 4 条只有「未读」）；④ `team_read` 自己确实给出「最后主张 / 未消解存疑」这对措辞（W6 的同形断言不是「两边都是空」）。
+
+**C2（W4）**
+
+- 红相：`node host-half.test.mjs` → `assertion total: 1295 (failed: 4)`（三态徽标各就位 · form.badges 与行上徽标同源 · 只读宿主零写调用 · 投影缺席**不冒充** ＋ 对照项）；`node client-half.test.mjs` → `assertion total: 299 (failed: 1)`（档位结论在「团队与角色」段**顶部**那一条；徽标渲染与「不冒充」两条已随 C1 的分区渲染就位，故不冒充红相）。
+- 绿相：host `1295 (failed: 0)` · client `299 (failed: 0)`。
+- **实测判据细节**：投影可读时 `session-pn-lead → agent-team·Lead` / `session-pn-coder → agent-team·成员` / 非成员 `session-pn-00 → 多会话`；投影缺席时非 Lead 一格 = `档位未判定（成员名册读不到：服务 agentTeams 当前不可见…）`、Lead 一格仍 = `agent-team·Lead`（settings 指针，不因投影缺席而少一格）。**★ 负相对照**：同一台宿主、投影可读时同一格是「多会话」⇒ 前者拒的是缺投影，不是「这一格本来就不给」。
+
+**C3（a/b/c）**
+
+- 红相：`node host-half.test.mjs` → `3 FAILURE(S)` / `assertion total: 1299 (failed: 3)` —— **C3-a**（没折叠落定时不得承诺「随后文件会被改写成合并结果」）· **C3-b**（快路径 ＋ fold failed 的归档数与留痕数必须一致且都为 0）· **C3-c**（`setup()` 签名不再压成一整行）。
+- 绿相：host `1299 (failed: 0)` · client `299 (failed: 0)`。
+- **★ 负相**：同一份种子、`update` 不抛错时**照旧**归档 1 份并留下「折叠存档」那行（本轮只把它挪到折叠成功之后）⇒ C3-b 的「零归档」拒的是「没折叠」，不是「这一段本来就不归档」。
+
+### 三处「一处事实一处渲染」的收敛（本批顺带，防漂移）
+
+`agentStateLabel()` / `sessionFaceLine()` / `teamRoleLines()` / `pendingLines()` / `watchdogLines()` / `tasksDerivedLines()` 从「状态卡 / 列表工具 / team_read 各自一份」收敛为**各一处**：状态卡的 ①②③④ 段与 `team_read` 的派生读数段改成调用它们，输出逐字不变（既有 1264 条断言全绿即证据），团队面板读的是**同一批字节**。
+
+### 同批文档
+
+- `docs/hardening-and-recovery-design-2026-09-21.md`：§4.3.2 结构行 ＋ 新增 **§4.3.8 团队面板分区**（入口口径的唯一事实源）；
+- `README.md`：§二 行为表新增「团队面板分区」行 · `:584` 的「没有任何跨半边取数通道」**前提更正**（结论不变、理由换成可核的那条）· 架构图补两条读路由与面板 · 设计索引 W1–W8 → **W1–W9** · tests 徽章 / 稳定性行 / §十「当前读数」三处读数 `1264 + 269 → 1299 + 299`；
+- `docs/client-panel-batch-design-2026-09-27.md`：§3.0.1 回填**实际响应形状**（每段是 `{present, lines, unavailable?}`；`form` / `sessions` 的字段级形状）；
+- `CHANGELOG.md`：新增「C 批」条目。
+- **未做（如实登记，需父侧处置）**：`docs/policy-persistence-design-2026-09-27.md` §8 表里 ②③④ 仍写「⏳ 后续项」—— 该档不在本批可改文件清单内。
+
+### 本批未重启、未 commit、未留临时文件
+
+工作树只含本批的可改文件；`git status --short` 的读数由宿主在交付后执行（见交付报告的 check summary 列）。
+

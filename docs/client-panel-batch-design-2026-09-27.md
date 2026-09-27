@@ -45,6 +45,19 @@
 5. **降级（R4）**：路由缺席 / 被栅栏拒 / 宿主 API 不可用 ⇒ 面板**照常打开**并显示 `⚠ 面板数据不可用：<原因>`（不静默留空、不假装「零团队」）。
 
 **与 §3.4 的关系**：这就是「与工具面同一批宿主 API」的落地方式 —— **同源靠「宿主渲染、客户端只显示」保证**，而不是靠两侧各写一份逻辑。
+
+**§3.0.1 实施形态（2026-09-27 落码时回填；本节只记**实际形状**，不改上面的裁定）**
+
+响应是一个 JSON 对象（HTTP 200；参数非法是 400 + `{ ok:false, error }`）：
+
+    { ok: true, generatedAt, placementLine, form, teams, pending, watchdogs, tasksTail, sessions }
+
+- **每一段**都是一个对象 `{ present: boolean, lines: string[], unavailable?: { reason } }`（文档上面的 `teams[]` 是简写：一段要能同时带「有内容」与「present:false ＋ 为什么」，一个裸数组放不下后者），`lines` 是**宿主渲染好的整串**；
+- `placementLine` = `policy.placementLine()`（与 roster / status 两个读面**同一个函数**，因此逐字同源）；
+- `form` = `{ present, lines, conclusion, badges }`：`conclusion` 复用 `TEAM_MODE_CONCLUSION`（「单会话兜底档」那句），`badges` 是「会话 id → 三态徽标」的投影（C2）；
+- `tasksTail.derived` 与 `team_link_team_read` 的派生读数**共用** `tasksDerivedLines()`（同一扫描窗、同一 `renderTaskView`）；
+- `sessions` 额外带 `rows`（每行 `{ id, badge, lines }`，未读行的那一行就是「未读」句）、`tail`（`listReadTail`：未读行数 ＋ `offset`）、`page`（`{ offset, size, total, nextOffset }`，翻页就是同一路由带上 `offset`）。
+
 ### 3.1 载体：**复用既有侧栏入口**（不新造 Modal）
 
 面板作为**侧栏「会话工具」入口**的一个分区（该入口 0.3.9 批 3 已落地）。
@@ -84,7 +97,7 @@
 | **W5** | 面板**零副作用**：渲染一次不改任何宿主状态（渲染前后 settings / `policy.json` 的 mtime 与字节不变） |
 | **W6** | 台账尾与派生读数与 `team_read` **同源同形**（「最后主张 / 未消解存疑」措辞逐字一致） |
 | **W7** | 读窗未读行**显示为未读**（不得含伪造的 verdict）；翻页**只读** |
-| **W8** | 客户端套件现有 **269 条全绿**；新增判据不降低既有覆盖 |
+| **W8** | 客户端套件现有 **269 条全绿**；新增判据不降低既有覆盖（落地后实测 **299 条全绿** —— host `1264 → 1299` / client `269 → 299`，读数见 README §十 与 `docs/verification-log.md` 末节） |
 | **W9** | **面板读路径零写**（评审 🟡#2）：**绝不**走 `team_read` 的惰性清扫；夹具带「过期 pending / 过期 provisional」时，渲染前后 `policy.json` **字节与 mtime 均不变** |
 
 ---

@@ -4,6 +4,27 @@
 
 格式：每个版本按 **修了什么 → 为什么 → 怎么验证** 组织。凡涉及行为修复的条目都附**变异验证**证据（修复前必红 / 修复后全绿），这是本仓库的验收文化。
 
+## 未发布 — C 批：客户端团队面板（跨半边取数通道）＋ 形态可视化 ＋ 3 条 🔵 收尾（2026-09-27）
+
+> 设计档 = [`docs/client-panel-batch-design-2026-09-27.md`](docs/client-panel-batch-design-2026-09-27.md)（评审 PASS）。本批**首次动客户端半边**：判据 W1–W9 ＋ C3-a/b/c；实现 2 个文件（`lib/index.js` 新增只读路由与面板载荷、`lib/client.js` 新增面板分区），新增断言 **65 条**（host +35 / client +30），另**改写既有期望值 4 条**（host 3 条路由计数断言、client 1 条段落类序断言 —— 都是「新增了一条路由/一个分区」逼出来的，断言本身照旧严格），**文档 5 个文件**（见下「同批文档」）。账本见 [`docs/verification-log.md`](docs/verification-log.md) 末节。
+
+### ✨ 改了什么
+
+**① 跨半边取数通道：`GET /team-link/panel`（只读，与导出路由同一道栅栏）。** 面板在浏览器半边、六段数据全在宿主半边 —— 此前 README §二 明确记着「本插件浏览器半边**没有任何跨半边取数通道**」（这正是状态点只做两态的原因）。通道其实一直在：`GET /team-link/export` 就是它。本批把**读路由**收成一对、**共用同一套门**：挂载期要 `webServer` ＋ `connection` 成对在场（缺一即一条路由都不注册），请求期一律先问 `connection.requestRejection`（无 token ⇒ 401 / Host-Origin 不符 ⇒ 403，裁决原样写回），**仅 GET**（其余 405 + `allow: GET`），被拒时**零数据外泄**（连一次 surface 读都不发生）。
+
+**② 面板分区（六段只读 ＋ 落点行）：宿主渲染、客户端只显示。** 面板是**既有侧栏「会话工具」入口**里的一个分区（**不新造 Modal、不新造入口** —— 宿主 Modal 有独占交互契约），排在会话列表之后、底部之前。响应 `{ placementLine, form, teams, pending, watchdogs, tasksTail, sessions }`，每段是 `{ present, lines, unavailable? }`：**落点行**取 `policy.placementLine()`（与 roster / status 两个读面**同一个函数**）、**台账派生读数**取 `tasksDerivedLines()`（与 `team_link_team_read` **同一份字节**）、**活性 verdict** 取 `livenessLine()` —— 「同源」由构造保证，客户端一个字段都不重算。**一次渲染 = 一次路由调用**（与工具面同一个「≤12 次面读」不变量），只在打开 / 手动刷新时拉，**不轮询**（无定时器）。**降级（R4）**：整条路由不可用 ⇒ 面板照常打开并显示「⚠ 面板数据不可用：<原因>」；单段取不到 ⇒ 该段 `present:false` ＋ `unavailable.reason`。**零写（W9）**：读路径走状态卡那一套 ＋ 纯派生扫描，**绝不**调用 `team_read` 的惰性清扫（那条会清 pending、删过期 provisional）—— 夹具里带着**已过期**的换届令牌与**已过期**的 provisional 配对，渲染前后 `policy.json` 字节与 mtime 均不变。
+
+**③ 形态可视化（C2）：三态徽标 ＋ 段顶档位结论，投影读不到「不冒充」。** 每个会话格一枚徽标：`agent-team·Lead`（取自 settings 的 Lead 指针 —— 与宿主投影**无关**，投影缺席时这一格照给）· `agent-team·成员`（取自宿主 `agentTeams` 投影）· `多会话`（投影**可读**且两处都不是 —— 这是读数，不是默认值）；投影**读不到**时给第四态 `档位未判定（成员名册读不到：<原因>）`，**绝不**写成「多会话」（把一个没读到的名册写成「不是成员」正是设计档禁止的编造）。「团队与角色」段顶部一句**档位结论**，措辞**复用** `TEAM_MODE_CONCLUSION`（「单会话兜底档」那句，同一个常量）。**不改**宿主会话列表 UI。
+
+**④ 3 条 🔵 收尾（C3-a/b/c）。** **a) 快路径归档留痕条件化**：`adoptMemoryWindow` 的归档原本在 `update()` **之前**，于是「快路径 ＋ fold failed」会先留下一句「随后文件会被改写成合并结果并盖 foldedAt」，而那一支的链尾**根本不回写** —— 承诺与实况相反，还多一份冗余归档。现在归档挪到**折叠成功之后**（`archiveMergedFile`）：没有折叠落定就没有归档、也没有那句承诺；文件逐字节不变（无数据丢失）。归档本身永不抛（自己的 `try/catch`），所以挪位不会把一次已落定的折叠误报成 `fold failed`。**b)** 补「**快路径 ＋ fold failed**」夹具（此前只覆盖晚挂路径）：文件逐字节不变 ＋ `foldedAt` 不重盖 ＋ 归档数与留痕一致且都必须为 0。**c)** `host-half.test.mjs` 的 `setup()` 形参从一整行 1109 字符改为一行一个（纯排版，行为一字未动）。
+
+### 🧪 怎么验证
+
+- **红相（实现前，实跑）**：`node host-half.test.mjs` → `23 FAILURE(S)` / `assertion total: 1290 (failed: 23)`；`node client-half.test.mjs` → `4 FAILURE(S)` / `assertion total: 275 (failed: 4)`（红的是四条命名守卫：面板面**尚不存在** ⇒ W2/W3/W5/W6/W7 的正相断言整块未执行，按 **★ 覆盖缺口** 如实标注、不冒充红相）。C2 阶段：host `1295 (failed: 4)`（四条徽标/不冒充判据）；C3 阶段：host `1299 (failed: 3)`（C3-a/b/c 各一条）。
+- **绿相（实现后，实跑）**：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1299 (failed: 0)`；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 299 (failed: 0)`（基线 host 1264 / client 269 ⇒ 本批 +35 / +30）。
+- **同批文档**：`docs/hardening-and-recovery-design-2026-09-21.md` §4.3.2 结构行 ＋ 新增 **§4.3.8 团队面板分区**（入口口径的唯一事实源）· README §二 行为表新增「团队面板分区」行、`:584` 的「没有任何跨半边取数通道」**前提更正**、架构图补两条读路由与面板、设计索引 W1–W8 → **W1–W9**、徽章 / 稳定性行 / §十读数三处 · 设计档 §3.0.1 回填**实际响应形状** · 账本末节新增本轮条目。
+- **未做（如实登记）**：`docs/policy-persistence-design-2026-09-27.md` §8 表里 ②③④ 仍写着「⏳ 后续项」—— 该档不在本批的可改文件清单内，**需要父侧同批改准**（否则状态行与事实不同步）。
+
 ---
 
 ## 未发布 — 代码评审第 3 轮：`fold failed` 后链尾不回写 / `detach()` 同步置窗口判据（2026-09-27）

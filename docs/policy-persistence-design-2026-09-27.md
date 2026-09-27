@@ -162,6 +162,6 @@
 | # | 条目 | 处置 |
 |---|---|---|
 | 1 | `syncFileFromService` 的 `foldHappened` **默认取真** = 脚枪（未来漏传即无声退回「无条件盖戳」，正是前两轮刚修掉的形态） | ✅ **已修**（父侧小修，评审后）：默认翻到安全侧 `=== true`；两处调用点本就显式传参 ⇒ 行为不变 |
-| 2 | 快路径归档留痕无条件承诺「随后文件会被改写成合并结果」；「快路径 + `fold failed`」组合里该承诺不兑现，且多出一份冗余 `superseded` 档案（**无数据丢失**，主文件原样保留） | ⏳ 后续项（措辞条件化，或把快路径归档挪到 `update` 成功之后） |
-| 3 | `fold failed` 判据只覆盖**晚挂**路径；「快路径 + fold failed」无判据 | ⏳ 后续项（补 `useSettings: true, settingsUpdateThrows: true` + `policySeed` 夹具） |
-| 4 | `host-half.test.mjs` 的 `setup()` 形参压成单行约 1900 字符 | ⏳ 后续项（排版） |
+| 2 | ✅ **已修（C 批 C3-a）**：快路径归档留痕无条件承诺「随后文件会被改写成合并结果」；「快路径 + `fold failed`」组合里该承诺不兑现，且多出一份冗余 `superseded` 档案（**无数据丢失**，主文件原样保留） | ⏳ 后续项（措辞条件化，或把快路径归档挪到 `update` 成功之后） |
+| 3 | ✅ **已修（C 批 C3-b）**：`fold failed` 判据只覆盖**晚挂**路径；「快路径 + fold failed」无判据 | ⏳ 后续项（补 `useSettings: true, settingsUpdateThrows: true` + `policySeed` 夹具） |
+| 4 | ✅ **已修（C 批 C3-c）**：`host-half.test.mjs` 的 `setup()` 形参压成单行约 1900 字符 | ⏳ 后续项（排版） |

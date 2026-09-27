@@ -1333,7 +1333,16 @@ if (sessionToolsSurfacePresent) {
 	const modal = treeByType(openedTree, "modal");
 	check("§4.3.2: the dialog is the official body-portaled Modal (an anchored panel would be clipped by the 56px rail)", modal !== null && modal.props.title === tZh("sessionTools") && modal.props.closeLabel === tZh("sessionToolsClose") && typeof modal.props.onClose === "function");
 	check("§4.3.2: ... carrying the description sentence, which states the non-goal (read/copy/export only)", modal.props.description === tZh("sessionToolsDescription") && modal.props.description.includes("不改名"));
-	check("§4.3.2: the body follows the design's order — header count, search, list/empty, bounded note, live line — with the footer last", JSON.stringify(allClasses(modal)) === JSON.stringify(["dshsl-st-count", "dshsl-st-search", "dshsl-st-empty", "dshsl-st-live", "dshsl-st-foot", "dshsl-st-range", "dshsl-st-close"]));
+	// C 批（§3.1）: 团队面板是**同一个入口里的分区**，排在会话列表之后、footer 之前（
+	// 面板还没取数时它渲染的是 loading 行 + 刷新按钮，所以这两个类是这一相里的固定成员）。
+	// C 批（§3.1）: 团队面板是**同一个入口里的分区**，排在会话列表之后、footer 之前。面板此刻
+	// 处于哪一相取决于这条 shell 有没有 fetch（loading / 取数失败），所以那一格按「二者之一」判，
+	// 其余每一格仍是逐字的严格相等。
+	const bodyClasses = allClasses(modal);
+	check("§4.3.2: the body follows the design's order — header count, search, list/empty, bounded note, live line, the read-only team panel, with the footer last",
+		bodyClasses.slice(0, 5).join(",") === "dshsl-st-count,dshsl-st-search,dshsl-st-empty,dshsl-st-live,dshsl-pn"
+			&& (bodyClasses[5] === "dshsl-pn-loading" || bodyClasses[5] === "dshsl-pn-fail")
+			&& bodyClasses.slice(6).join(",") === "dshsl-pn-refresh,dshsl-st-foot,dshsl-st-range,dshsl-st-close");
 	check("§4.3.2: the header carries the current count", treeText(treeByClass(openedTree, "dshsl-st-count")) === fill(tZh("sessionToolsCount"), "count", 0));
 	check("§4.3.2: the search box is a labelled search input", treeByClass(openedTree, "dshsl-st-search").props.type === "search" && treeByClass(openedTree, "dshsl-st-search").props["aria-label"] === tZh("sessionToolsSearch"));
 
@@ -1598,6 +1607,218 @@ check("U14: ... and the current session is untouched by a failed focus", current
 const codeLinesOf = (text) => text.split("\n").map((line) => line.trim()).filter((line) => line !== "" && line.indexOf("//") !== 0 && line.indexOf("*") !== 0);
 check("U14 病灶锁: the silent CALL is gone from the bundle's code (the sessions face has no open() to call)", !codeLinesOf(SOURCE).some((line) => line.indexOf("ctx.sessions.open(") !== -1));
 check("U14: ... and the focus goes through the published navigation action, taken at runtime with ctx.inject", SOURCE.includes('ctx.inject(["uiWorkspace"], focus)') && SOURCE.includes("navigation.openSession(id)"));
+
+// ---------------------------------------------------------------------------
+// C 批（客户端面 · C1）· §3.0 跨半边取数通道 ＋ 「会话工具」入口里的团队面板分区
+// 设计档 docs/client-panel-batch-design-2026-09-27.md §3.0/§3.1/§3.2/§3.4；
+// 判据 W1–W3 · W5–W7 · W9（客户端侧）；断言名以判据号开头 = 红相读数的名字。
+// ---------------------------------------------------------------------------
+
+const pnTools9 = moduleExports.__testing;
+const pnPure9 = (name) => (...args) => (typeof pnTools9?.[name] === "function" ? pnTools9[name](...args) : undefined);
+const panelUrlOf = pnPure9("panelUrl");
+const panelSectionsOf = pnPure9("panelSections");
+const panelUnavailableOf = pnPure9("panelUnavailableText");
+const panelSectionUnavailableOf = pnPure9("panelSectionUnavailableText");
+
+/** 宿主会给出的那一份响应（形状照 §3.0：placementLine + 五段，每段带 present/lines）。 */
+const PN_BADGE_LEAD = { state: "agent-team-lead", label: "agent-team·Lead" };
+const PN_BADGE_MEMBER = { state: "agent-team-member", label: "agent-team·成员" };
+const PN_BADGE_SESSIONS = { state: "sessions", label: "多会话" };
+const PN_UNREAD_NOTE = "未读（本面板只读了前 12 行）—— 本行未读取会话日志：verdict / 静默时长 / goal 均未判定（代理状态见上面那一行）。";
+const PN_VERDICT_LINE = "verdict=ok · 代理=idle · goal=无 · 静默 2min";
+const panelPayload = {
+	ok: true,
+	generatedAt: 1758900000000,
+	placementLine: "存储：设置服务（team-link 命名空间）",
+	form: { present: true, conclusion: "档位结论：当前没有团队处于 agent-team 档（都是多会话档）。结论：agent-team 档应叫「单会话兜底档」，不是「另一种平等的形态」—— 多会话不可用时才切，切过去就等于放弃跨会话的全部能力。", badges: { "session-pn-00": PN_BADGE_SESSIONS } },
+	teams: { present: true, lines: ["- panel-team — workspace=D:/ws · policy.writer=coordinator · 角色 2 个", "    角色 coordinator：现任 session-self（自 2023-11-14 22:13:20） · 版本史末条：session-self 2023-11-14 22:13:20 → 现任"] },
+	pending: { present: true, lines: ["- panel-team/coordinator → 继任者 session-pn-next · token tok-9f8e…c3bb（掩码——完整令牌只在 prepare 的一次性返回里给出） · 创建 2023-11-14 22:13:20 · 到期 2026-09-27 00:00:00 · 绑定 team=panel-team role=coordinator · 已迁移 0 条"] },
+	watchdogs: { present: true, lines: ["- wd-panel · team=panel-team · 观察者 session-self（空闲） → 目标 session-pn-00 · 静默阈 10min · 巡检 5min · 到期 2026-09-27 00:00:00"] },
+	tasksTail: {
+		present: true,
+		lines: ["- panel-team/tasks.md：共 7 行，显示 5 条 · baseHash=deadbeefdeadbeef（仅供参考/审计：tasks 只追加、不接受 baseHash 参数）", "    6 | 2026-09-26T21:30:00.000Z | session-lead | plan | t-8 | 第二件事"],
+		derived: ["（派生读数：扫描最近 500 行；逐任务给「最后主张」与「未消解存疑」——是读数，不是裁决）", "- t-7 · 4 行 · 最后主张 done（2026-09-26 21:19 · session-wb）· ⚠ 未消解存疑 1 条"],
+	},
+	sessions: {
+		present: true,
+		lines: [],
+		rows: [
+			{ id: "session-pn-00", badge: PN_BADGE_SESSIONS, lines: ["- session-pn-00 — ○ 空闲 · 创建于 2026-09-27 09:00:00", "活性：" + PN_VERDICT_LINE] },
+			{ id: "session-pn-12", badge: PN_BADGE_SESSIONS, lines: ["- session-pn-12 — ○ 空闲 · 创建于 2026-09-27 09:00:12", "活性：" + PN_UNREAD_NOTE] },
+		],
+		tail: ["读窗：默认前 12 行", "未读 4 行（读窗 12/共 16 行）：读第 13–24 行 → offset=12；或点名 → readIds=[" + '"session-pn-12", …]'],
+		page: { offset: 0, size: 12, total: 16, nextOffset: 12 },
+	},
+};
+/** 一条带缺口的响应：形态段缺席（R4 的正例）。 */
+const panelPayloadGapped = {
+	...panelPayload,
+	watchdogs: { present: false, lines: [], unavailable: { reason: "看门狗段读取失败：宿主 policy.get() 抛错" } },
+};
+
+const panelFetches = [];
+const panelClipboardMark = () => clipboardWrites.length;
+/** 一个**假** fetch：记录被取的 URL，按夹具给响应（或直接拒）。 */
+function panelFetchStub(payload, options = {}) {
+	return (url) => {
+		panelFetches.push(String(url));
+		if (options.reject === true) return Promise.reject(new Error("network down"));
+		const status = options.status ?? 200;
+		return Promise.resolve({
+			status,
+			ok: status === 200,
+			text: () => Promise.resolve(options.rawText ?? JSON.stringify(payload)),
+		});
+	};
+}
+/** 把入口当前那棵子树里的 dialog 重新挂一遍（stub 的 mount 只吃挂载那一刻的 props，
+ * 所以父组件重渲染之后要重新取一次）。 */
+function panelDialogOf9(entry) {
+	const element = entry.tree.children[1];
+	if (element === null || element === undefined) return null;
+	return mount(element.type, element.props);
+}
+const panelLines = (tree) => treeAllByClass(tree, "dshsl-pn-line").map((node) => treeText(node));
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+/** 面板与既有「会话工具」共用同一个入口/dialog（不新造 Modal）：这一条在红绿两相都该成立，
+ * 它是「面板没有另造一个载体」的负相控制项。 */
+check("W1 ★ 负相（控制项，红绿两相都该成立）: 侧栏入口仍然**只有一个**、插槽注册总数没变 —— 面板没有另造一个 Modal 或第二个入口",
+	registrations.filter((entry) => entry.options.name === "sidebar.footer.action").length === 1 && registrations.length === 6);
+// 覆盖面本身也要红：Y7 纪律 —— 缺哪一面就报哪一面的名字，绝不把「没实现」伪装成「块被跳过」。
+check("W1 红相守卫: 面板取数面存在（panelUrl）", typeof pnTools9?.panelUrl === "function");
+check("W1 红相守卫: 面板渲染模型存在（panelSections / PANEL_SECTION_KEYS）", typeof pnTools9?.panelSections === "function" && Array.isArray(pnTools9?.PANEL_SECTION_KEYS));
+check("W3 红相守卫: 面板降级句存在（panelUnavailableText / panelSectionUnavailableText）", typeof pnTools9?.panelUnavailableText === "function" && typeof pnTools9?.panelSectionUnavailableText === "function");
+check("W3 红相守卫: 响应解析面存在（readPanelState）", typeof pnTools9?.readPanelState === "function");
+const panelSurfacePresent = typeof pnTools9?.makeSessionToolsEntry === "function" && typeof pnTools9?.makeSessionToolsDialog === "function" && typeof pnTools9?.panelUrl === "function" && typeof pnTools9?.panelSections === "function" && typeof pnTools9?.readPanelState === "function" && typeof pnTools9?.panelUnavailableText === "function" && typeof pnTools9?.panelSectionUnavailableText === "function" && Array.isArray(pnTools9?.PANEL_SECTION_KEYS);
+check("★ 覆盖缺口（不冒充红相）: 被测面与 bundle 事实一致 —— 面板面缺席时源码里也确实没有这个分区（`dshsl-pn`），实现之后两者一起转真；半成品（导出面在、分区不渲染）在这里必红",
+	panelSurfacePresent === SOURCE.includes("dshsl-pn"));
+
+if (panelSurfacePresent) {
+	// --- W1：面板在**既有侧栏入口**里（不新造 Modal），入口缺席也不报错 --------------
+	windowStub.fetch = panelFetchStub(panelPayload);
+	const pnEntry = mount(makeSessionToolsEntry(scene(popularList, NO_WORKSPACES), primitivesStub), { wide: true, t: tZh });
+	const pnOpened = openDialog(pnEntry);
+	await settle();
+	const pnReadyDialog = panelDialogOf9(pnEntry);
+	const pnReadyTree = flatten(pnReadyDialog === null ? null : pnReadyDialog.tree);
+	check("W1: 面板是既有「会话工具」入口 dialog 里的一个分区（同一个 Modal，不新造一个）",
+		pnOpened !== null && treeByType(pnReadyTree, "modal") !== null && treeByClass(pnReadyTree, "dshsl-pn") !== null);
+	check("W1: 打开即拉一次 —— 一次渲染 = 一次路由调用（客户端只在打开/手动刷新时取数）",
+		panelFetches.length === 1 && panelFetches[0] === "/team-link/panel?session=session-cur");
+	check("W1: 客户端半边没有面板专用定时器（不轮询）—— 整个 bundle 里一次 setInterval 都没有",
+		!SOURCE.includes("setInterval"));
+	check("W1 降级: 入口缺席那一档是既有的 guardedSlot 守卫（面板不给它加第二个服务缺口）",
+		JSON.stringify(pure("sessionToolsGaps")(undefined, primitivesStub)) === JSON.stringify(["sessions", "workspaces", "uiWorkspace"])
+			&& JSON.stringify(pure("sessionToolsGaps")(scene(popularList, NO_WORKSPACES), primitivesStub)) === "[]");
+	check("W1 降级: 取数整条路都坏掉时面板**不抛**，只降级成一句话（宿主 API / fetch 缺席 / 非 JSON 都不许把会话带下水)",
+		(() => {
+			try {
+				windowStub.fetch = undefined;
+				const deadEntry = mount(makeSessionToolsEntry(scene(popularList, NO_WORKSPACES), primitivesStub), { wide: true, t: tZh });
+				openDialog(deadEntry);
+				const deadTree = flatten(panelDialogOf9(deadEntry).tree);
+				const text = treeText(treeByClass(deadTree, "dshsl-pn-fail"));
+				return text.indexOf("面板数据不可用") !== -1 && treeByType(deadTree, "modal") !== null;
+			} catch (error) {
+				return false;
+			} finally {
+				windowStub.fetch = panelFetchStub(panelPayload);
+			}
+		})());
+
+	// --- W2：落点行由宿主给整串，客户端只显示 ---------------------------------------
+	const pnClasses = allClasses(pnReadyTree);
+	const pnPanelAt = pnClasses.indexOf("dshsl-pn");
+	check("W2: 落点行逐字显示宿主给的那一串（客户端不重算、不拼接），且它就是面板自己的**第一行**",
+		treeText(treeByClass(pnReadyTree, "dshsl-pn-placement")) === panelPayload.placementLine && pnPanelAt !== -1 && pnClasses[pnPanelAt + 1] === "dshsl-pn-placement");
+	check("W2: 客户端源码里没有第二个三态格式化逻辑（「存储：」与「仅进程内存」两个字面量在 bundle 里一次都不出现）",
+		!SOURCE.includes("存储：") && !SOURCE.includes("仅进程内存"));
+
+	// --- W3：六段 = 落点行 + 五段；缺段如实说缺什么 ----------------------------------
+	check("W3: 五段的 key 只在 PANEL_SECTION_KEYS 一处声明，顺序 = 设计档 §3.2 的 2–6 段",
+		pnTools9.PANEL_SECTION_KEYS.join(",") === "teams,pending,watchdogs,tasksTail,sessions");
+	check("W3: 六段齐全（落点行 + 五段）—— 五段各自渲染出宿主给的行，段标题由本插件的字典给",
+		["teams", "pending", "watchdogs", "tasksTail", "sessions"].every((key) => treeByClass(pnReadyTree, "dshsl-pn-sec") !== null && treeAllByClass(pnReadyTree, "dshsl-pn-sec").map((node) => node.props["data-section"]).join(",") === "teams,pending,watchdogs,tasksTail,sessions")
+			&& treeAllByClass(pnReadyTree, "dshsl-pn-h").length === 5
+			&& treeAllByClass(pnReadyTree, "dshsl-pn-h").every((node) => typeof treeText(node) === "string" && treeText(node) !== "" && treeText(node).indexOf("panel") !== 0));
+	check("W3: 段里的每一行都是宿主给的字节（面板段的行在客户端一个字节都不重排）",
+		panelLines(pnReadyTree).indexOf(panelPayload.pending.lines[0]) !== -1 && panelLines(pnReadyTree).indexOf(panelPayload.teams.lines[0]) !== -1 && panelUnavailableOf("x") === "⚠ 面板数据不可用：x");
+	const gappedState = pnPure9("readPanelState") === undefined ? null : { phase: "ready", payload: panelPayloadGapped };
+	const gappedDialog = mount(makeSessionToolsDialog(scene(popularList, NO_WORKSPACES), primitivesStub), { t: tZh, onClose() {}, panel: gappedState, onRefresh() {}, onPage() {} });
+	const gappedTree = flatten(gappedDialog.tree);
+	check("W3 正例（R4）: 某一段 present:false ⇒ **那一段**如实说缺什么（原因逐字来自宿主），其余四段照常渲染",
+		treeText(treeByClass(gappedTree, "dshsl-pn-na")) === panelSectionUnavailableOf("看门狗段读取失败：宿主 policy.get() 抛错") && treeAllByClass(gappedTree, "dshsl-pn-sec").length === 5 && panelLines(gappedTree).indexOf(panelPayload.teams.lines[0]) !== -1);
+	check("W3 反例（R4）: 整条路由返回不可用的响应（ok != true）⇒ 只显示「面板数据不可用：<原因>」，不假装零团队",
+		(() => {
+			const failed = pnPure9("readPanelState")('{"ok":false,"error":"宿主 API 不可用"}');
+			const failedDialog = mount(makeSessionToolsDialog(scene(popularList, NO_WORKSPACES), primitivesStub), { t: tZh, onClose() {}, panel: failed, onRefresh() {}, onPage() {} });
+			const failedTree = flatten(failedDialog.tree);
+			return failed.phase === "error" && treeText(treeByClass(failedTree, "dshsl-pn-fail")) === panelUnavailableOf("宿主 API 不可用") && treeAllByClass(failedTree, "dshsl-pn-sec").length === 0;
+		})());
+	check("W3: 段标题与缺段句都由本插件自己的字典给（中英双份，绝不渲染出 key 名）",
+		["panelTeams", "panelPending", "panelWatchdogs", "panelTasksTail", "panelSessions", "panelLoading", "panelRefresh", "panelMore", "panelUnavailable", "panelSectionUnavailable"].every((key) => typeof localeDicts.get("zh")[key] === "string" && typeof localeDicts.get("en")[key] === "string" && localeDicts.get("zh")[key] !== key));
+
+	// --- W5/W9：取数只在打开与手动刷新时发生（无定时器、无轮询） --------------------
+	const pnBeforeRefresh = panelFetches.length;
+	treeByClass(pnReadyTree, "dshsl-pn-refresh").props.onClick();
+	await settle();
+	const pnAfterRefresh = panelDialogOf9(pnEntry);
+	const pnRefreshCalls = panelFetches.length - pnBeforeRefresh;
+	check("W5: 手动刷新是**第二次**取数（不在打开之后再自己拉：一次渲染 = 一次路由调用，无自动轮询）",
+		pnRefreshCalls === 1 && panelFetches.length === 2 && pnAfterRefresh !== null && treeText(treeByClass(flatten(pnAfterRefresh.tree), "dshsl-pn-placement")) === panelPayload.placementLine);
+
+	// --- W6：台账尾与派生读数**由宿主渲染**，客户端不自造措辞 ------------------------
+	check("W6: 「最后主张 / 未消解存疑」这两个词在客户端半边一次都不出现 —— 面板显示的是宿主 renderTaskView 给的字节",
+		!SOURCE.includes("最后主张") && !SOURCE.includes("未消解存疑") && panelPayload.tasksTail.derived.every((line) => panelLines(pnReadyTree).indexOf(line) !== -1));
+	check("W6: ... 台账尾的原始行同样逐字来自宿主（客户端不做「末 N 行」这个决定）",
+		panelPayload.tasksTail.lines.every((line) => panelLines(pnReadyTree).indexOf(line) !== -1));
+
+	// --- W7：未读行显示为未读；翻页只读 --------------------------------------------
+	const pnRowNodes = treeAllByClass(pnReadyTree, "dshsl-pn-row");
+	check("W7: 会话区的行按宿主的行显示 —— 有 verdict 的行照给，未读的行**显示为未读**（客户端不给它补一个 verdict）",
+		pnRowNodes.length === 2 && treeText(pnRowNodes[0]).indexOf(PN_VERDICT_LINE) !== -1 && treeText(pnRowNodes[1]).indexOf(PN_UNREAD_NOTE) !== -1 && treeText(pnRowNodes[1]).indexOf("verdict=") === -1);
+	check("W7: 段尾的翻页提示逐字来自宿主（客户端不自己数未读行）",
+		panelPayload.sessions.tail.every((line) => panelLines(pnReadyTree).indexOf(line) !== -1));
+	const pnClipboardBefore = panelClipboardMark();
+	const pnHrefBefore = windowStub.location.href;
+	const pnBeforePage = panelFetches.length;
+	treeByClass(pnReadyTree, "dshsl-pn-more").props.onClick();
+	await settle();
+	check("W7: 「读更多」是**只读**翻页 —— 它只再取一次同一个只读路由（带上 offset），不导航、不写剪贴板、不改任何宿主状态",
+		panelFetches.length - pnBeforePage === 1 && panelFetches[panelFetches.length - 1] === "/team-link/panel?session=session-cur&offset=12"
+			&& panelClipboardMark() === pnClipboardBefore && windowStub.location.href === pnHrefBefore);
+	check("W7: 翻页 URL 由纯函数给（session 与 offset 都编码，offset=0 不出现在 URL 里）",
+		panelUrlOf("session-cur", 0) === "/team-link/panel?session=session-cur" && panelUrlOf("session-cur", 12) === "/team-link/panel?session=session-cur&offset=12" && panelUrlOf(undefined, 12) === "/team-link/panel?offset=12");
+
+	// --- W4（C2）：三态徽标 ＋ 段顶档位结论 ----------------------------------------
+	const w4Rows = [
+		{ id: "session-pn-00", badge: PN_BADGE_LEAD, lines: ["- session-pn-00 — ▶ 运行中 · 创建于 2026-09-27 09:00:00", "活性：" + PN_VERDICT_LINE] },
+		{ id: "session-pn-01", badge: PN_BADGE_MEMBER, lines: ["- session-pn-01 — ○ 空闲 · 创建于 2026-09-27 09:00:01", "活性：" + PN_VERDICT_LINE] },
+		{ id: "session-pn-02", badge: PN_BADGE_SESSIONS, lines: ["- session-pn-02 — ○ 空闲 · 创建于 2026-09-27 09:00:02", "活性：" + PN_VERDICT_LINE] },
+		{ id: "session-pn-03", badge: { state: "unknown", label: "档位未判定（成员名册读不到：服务 agentTeams 当前不可见）" }, lines: ["- session-pn-03 — ○ 空闲 · 创建于 2026-09-27 09:00:03", "活性：" + PN_VERDICT_LINE] },
+	];
+	const w4Conclusion = "档位结论：团队 t-team 处于 agent-team 档。结论：agent-team 档应叫「单会话兜底档」，不是「另一种平等的形态」—— 多会话不可用时才切，切过去就等于放弃跨会话的全部能力。";
+	const w4Payload = { ...panelPayload, form: { present: true, conclusion: w4Conclusion, lines: [w4Conclusion] }, sessions: { ...panelPayload.sessions, rows: w4Rows, tail: [], page: null } };
+	const w4Dialog = mount(makeSessionToolsDialog(scene(popularList, NO_WORKSPACES), primitivesStub), { t: tZh, onClose() {}, panel: { phase: "ready", payload: w4Payload }, onRefresh() {}, onPage() {} });
+	const w4Tree = flatten(w4Dialog.tree);
+	const w4Badges = treeAllByClass(w4Tree, "dshsl-pn-badge");
+	check("W4: 三态徽标逐字由宿主给 —— agent-team·Lead / agent-team·成员 / 多会话，且每枚带自己的 state（可断言、可样式化）",
+		w4Badges.map((node) => node.props["data-badge"]).join(",") === "agent-team-lead,agent-team-member,sessions,unknown" && w4Badges.map((node) => treeText(node)).join("|") === [PN_BADGE_LEAD.label, PN_BADGE_MEMBER.label, PN_BADGE_SESSIONS.label, "档位未判定（成员名册读不到：服务 agentTeams 当前不可见）"].join("|"));
+	const w4TeamsSection = treeAllByClass(w4Tree, "dshsl-pn-sec").find((node) => node.props["data-section"] === "teams");
+	// 段元素的孩子是一层数组（`createElement(section, …, childrenArray)`）：取 [0] 拿到行列表。
+	const w4TeamsChildren = w4TeamsSection === undefined ? [] : w4TeamsSection.children[0];
+	check("W4: 「当前档位结论」在「团队与角色」段的**顶部**（段标题之后的第一行），逐字来自宿主",
+		w4TeamsChildren.length > 1 && w4TeamsChildren[1].props.className === "dshsl-pn-conclusion" && treeText(w4TeamsChildren[1]) === w4Conclusion);
+	check("W4 反例（不冒充）: 宿主给的「档位未判定」徽标被**原样显示** —— 客户端自己一个档位词都没有（多会话 / Lead / 成员 只出现在宿主给的字节里）",
+		treeText(w4Badges[3]) === "档位未判定（成员名册读不到：服务 agentTeams 当前不可见）" && !SOURCE.includes("agent-team") && !SOURCE.includes("多会话") && !SOURCE.includes("单会话兜底档"));
+
+	// --- 面板与既有列表的面共存（回归锁） ------------------------------------------
+	check("§4.3 零回归（面板同批）: 会话列表、搜索、范围切换与空态句一字未变",
+		treeAllByClass(pnReadyTree, "dshsl-st-row").length === 2 && treeText(treeByClass(pnReadyTree, "dshsl-st-count")) === fill(tZh("sessionToolsCount"), "count", 2) && treeByClass(pnReadyTree, "dshsl-st-search") !== null && treeByClass(pnReadyTree, "dshsl-st-range") !== null);
+	windowStub.fetch = undefined;
+}
 
 windowStub.location.pathname = pathnameBefore;
 
