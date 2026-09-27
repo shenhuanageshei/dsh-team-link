@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-team-link · 跨会话团队协作层</title>
+<style>
+:root{--ink:#0b1220;--ink2:#111a2c;--line:#22304a;--fg:#e8eefc;--dim:#93a4c4;--amber:#f59e0b;--cyan:#22d3ee;--green:#34d399;--rose:#fb7185}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ink);color:var(--fg);font-family:"Inter","Segoe UI",system-ui,-apple-system,"Microsoft YaHei",sans-serif;line-height:1.6}
+.grid-bg{background-image:linear-gradient(rgba(34,211,238,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(34,211,238,.05) 1px,transparent 1px);background-size:44px 44px}
+header{padding:56px 40px 32px;border-bottom:1px solid var(--line);background:radial-gradient(1200px 400px at 15% -10%,rgba(34,211,238,.16),transparent),radial-gradient(900px 400px at 85% 0,rgba(245,158,11,.12),transparent)}
+.brand{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:44px;font-weight:700;letter-spacing:-.5px;margin:0}
+.brand span{color:var(--cyan)}
+.tag{margin:10px 0 0;font-size:18px;color:var(--fg);max-width:900px}
+.meta{margin-top:18px;display:flex;flex-wrap:wrap;gap:10px}
+.chip{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:5px 12px;background:rgba(255,255,255,.02)}
+.chip b{color:var(--fg)}
+main{padding:8px 40px 48px;max-width:1180px;margin:0 auto}
+section{padding:30px 0;border-bottom:1px solid var(--line)}
+section:last-of-type{border-bottom:0}
+h2{font-size:13px;letter-spacing:.22em;text-transform:uppercase;color:var(--cyan);margin:0 0 18px;font-weight:600}
+h2 em{color:var(--dim);font-style:normal;letter-spacing:0;text-transform:none;margin-left:10px;font-size:13px}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.card{background:var(--ink2);border:1px solid var(--line);border-radius:14px;padding:18px 18px 16px}
+.card h3{margin:0 0 8px;font-size:16px}
+.card p{margin:0;color:var(--dim);font-size:14px}
+.num{font-family:ui-monospace,monospace;font-size:32px;font-weight:700;color:var(--amber);display:block;line-height:1.1}
+.num.cy{color:var(--cyan)}.num.gr{color:var(--green)}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--dim);font-weight:600;font-size:12.5px;letter-spacing:.06em}
+td code,li code,p code{font-family:ui-monospace,monospace;font-size:12.5px;color:var(--cyan);background:rgba(34,211,238,.08);padding:1px 5px;border-radius:5px}
+ul{margin:0;padding-left:20px;color:var(--dim);font-size:14px}
+ul b{color:var(--fg)}
+.ok{color:var(--green)}.warn{color:var(--amber)}.no{color:var(--rose)}
+footer{padding:26px 40px 44px;border-top:1px solid var(--line);color:var(--dim);font-size:13px;font-family:ui-monospace,monospace}
+footer a{color:var(--cyan);text-decoration:none}
+@media print{body{background:#fff;color:#111}.grid-bg{background-image:none}.card{background:#fafafa}header{background:none}}
+</style>
+</head>
+<body class="grid-bg">
+<header>
+  <h1 class="brand">dsh-<span>team-link</span></h1>
+  <p class="tag">跨会话团队协作层 —— 让多个 DSH 会话成为一支有<b>身份</b>、有<b>信任</b>、有<b>账</b>、有<b>形态</b>的队伍。</p>
+  <div class="meta">
+    <span class="chip">版本 <b>v0.4.0</b></span>
+    <span class="chip"><b>10</b> 个模型可见工具</span>
+    <span class="chip">断言 <b>1203 + 269</b></span>
+    <span class="chip">与宿主 Agent Teams <b>正交</b></span>
+  </div>
+</header>
+<main>
+<section>
+  <h2>它解决什么<em>三个痛点</em></h2>
+  <div class="cols">
+    <div class="card"><h3>会话之间没有身份</h3><p>谁是主管、谁是 worker、谁换了人、谁下岗了 —— 没有任何地方记着。</p></div>
+    <div class="card"><h3>会话之间没有信任</h3><p>能不能发消息？谁批准？发出去之后对方到底动了没有？</p></div>
+    <div class="card"><h3>会话会失忆</h3><p>主会话被压缩后，计划与结论散落在历史里，醒来只剩一句「继续」。</p></div>
+  </div>
+</section>
+<section>
+  <h2>三层结构<em>身份 / 黑板 / 可观测</em></h2>
+  <div class="cols">
+    <div class="card"><h3>① 身份与信任层</h3><p><code>roster</code> 名册（创建即认领 · 换任 · 退役 · 版本史）· 双门批准与<b>配对</b>（双向免确认）· <code>rotate</code> 换届与 <code>recover</code> 恢复。</p></div>
+    <div class="card"><h3>② 黑板层</h3><p><code>decisions</code> 只追加裁决 · <code>discipline</code> 乐观锁纪律 · <code>tasks</code> 只追加任务台账（<b>读时投影</b>：最后主张 / 未消解存疑，措辞禁用事实化）。</p></div>
+    <div class="card"><h3>③ 可观测与形态层</h3><p><code>list_sessions</code> 有界读窗（<b>点名读 + 分页</b>）· <code>team_link_status</code> 一屏状态卡 · <b>形态</b>：多会话档 ↔ agent-team 档。</p></div>
+  </div>
+</section>
+<section>
+  <h2>与宿主 Agent Teams 的关系<em>正交，不是竞争</em></h2>
+  <table>
+    <tr><th>维度</th><th>dsh-team-link</th><th>宿主 Agent Teams</th></tr>
+    <tr><td>边界</td><td>跨会话 / 跨进程</td><td>单会话内的父子（Lead + teammate）</td></tr>
+    <tr><td>身份</td><td>团队名册 + 版本史（谁换过任）</td><td>子代理生命周期</td></tr>
+    <tr><td>信任</td><td>独立模型：双门批准 · 配对 · 换届吊销</td><td>无独立信任模型</td></tr>
+    <tr><td>结论</td><td colspan="2"><b>两者可共存</b>：多会话时用前者，通道不可用时切到后者（形态开关，<b>人确认</b>后才切，绝不悄悄降级）。</td></tr>
+  </table>
+</section>
+<section>
+  <h2>实战数据<em>两个真实项目的长跑（已脱敏）</em></h2>
+  <div class="cols">
+    <div class="card"><span class="num">6</span><p>条工作线并发推进</p></div>
+    <div class="card"><span class="num cy">12</span><p>批闭环 / 一夜，夜间零人工介入</p></div>
+    <div class="card"><span class="num">216+</span><p>条黑板裁决（从 139 条增长）</p></div>
+    <div class="card"><span class="num gr">13</span><p>波推进 / 单日（4 个 worker 并行）</p></div>
+    <div class="card"><span class="num">20</span><p>条裁定（同日）</p></div>
+    <div class="card"><span class="num cy">14→19</span><p>条纪律（被事故逼着长出来的）</p></div>
+  </div>
+</section>
+<section>
+  <h2>纪律<em>本仓的验收文化</em></h2>
+  <ul>
+    <li><b>红相必红</b>：每个修复都要给出「修复前必红 / 修复后全绿」两次实测读数。</li>
+    <li><b>声称必须可核</b>：每条「有断言」的声称附可 grep 到的断言名；每条读数附命令与原文。</li>
+    <li><b>「0 命中」要用真能区分的检查得出</b>（假阴性比没检查更贵）。</li>
+    <li><b>三道门</b>：分歧审计 → 修复轮 → 代码评审；缺一不合并。</li>
+  </ul>
+</section>
+</main>
+<footer>
+  <div>github.com/shenhuanageshei/dsh-team-link · v0.4.0 · 2026-09-27</div>
+  <div>证据账本：docs/verification-log.md · 设计档：docs/（每批一档）</div>
+</footer>
+</body>
+</html>
