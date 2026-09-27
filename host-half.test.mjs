@@ -4,7 +4,7 @@
 // then exercises the three -pro tools against stubbed services.
 // Run after the node_modules junctions are in place (see README).
 import { Context } from "@deepseek-ai/cordis";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -46,6 +46,10 @@ function at(list, index, fallback = undefined) {
 // ---------------------------------------------------------------------------
 
 const CWD = "C:/dev/demo";
+
+/** Per-fixture policy-home counter (see setup): every fixture gets its own DSH_HOME so
+ * the file backend can never leak one fixture's roster into the next. */
+let policyHomeSeq = 0;
 
 function makeSenderAgent(status, cwd = CWD) {
 	const calls = { injected: [], steered: [], followedup: [] };
@@ -89,23 +93,35 @@ function makeTargetAgent(status = "idle") {
  * 评审 #4 (an unavailable legacy namespace must say so). `legacyGetThrows` is the
  * other half of that story (评审 round-2 🔵 #3): the legacy namespace registers
  * fine but cannot be READ, which is the branch that used to return with no log
- * at all.
+ * at all. `settingsUpdateThrows` (评审 round-3 🟡 #1) models a provider whose
+ * register SUCCEEDS but whose scope UPDATE fails — the one arrival that drives
+ * `adoptMemoryWindow` into its catch, i.e. the `fold failed` outcome: the window
+ * writes are still in the file backend, and the chain tail must not wash them
+ * away by writing the service view back over them.
  *
  * `markDead()` (评审 round-2 🟡 #1) models a provider that is gone: the scopes it
  * handed out stop serving. No test flips it by hand — the provider is mounted
  * through a real cordis plugin fiber (see `provideSettingsFiber`) and the fiber's
  * own teardown effect is what retires the stub.
  */
-function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false } = {}) {
+function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, settingsUpdateThrows = false } = {}) {
 	const namespaces = new Map();
 	let alive = true;
+	let refusing = Boolean(settingsRegisterThrows);
 	const guard = () => { if (!alive) throw new Error("settings provider disposed (its fiber was torn down)"); };
 	return {
 		namespaces,
 		markDead() { alive = false; },
+		/**
+		 * Code-review round 🔵#4 handle: a provider that refused `register` at activation and
+		 * starts answering later — the 「服务在场但拒注册、后来才挂上」 window. Flipping this is
+		 * what lets the next lazy `get()`/`update()` retry attach for real; without it the store
+		 * would refuse forever and the fold branch would never run.
+		 */
+		stopRefusing() { refusing = false; },
 		service: {
 			register(namespace, _schema, options = {}) {
-				if (settingsRegisterThrows) throw new Error("register refused by stub");
+				if (refusing) throw new Error("register refused by stub");
 				if (legacyRegisterThrows && String(namespace) === "session-link-pro") throw new Error("legacy namespace refused by stub");
 				guard();
 				const isLegacy = String(namespace) === "session-link-pro";
@@ -117,7 +133,13 @@ function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegiste
 						if (isLegacy && legacyGetThrows) throw new Error("legacy namespace unreadable by stub");
 						return { ...structuredClone(state.base), ...structuredClone(state.data) };
 					},
-					async update(patch) { guard(); Object.assign(state.data, structuredClone(patch)); },
+					async update(patch) {
+					guard();
+					// 评审 round-3 🟡 #1: register 成功但 update 抛错 —— 折叠必失败的唯一到达路径。
+					// 状态**先不动**（不 Object.assign）：折叠失败后窗口数据必须仍在文件那一侧。
+					if (settingsUpdateThrows) throw new Error("settings update refused by stub");
+					Object.assign(state.data, structuredClone(patch));
+					},
 				};
 			},
 		},
@@ -747,6 +769,16 @@ async function callRoute(route, options) {
 const tick = () => new Promise((resolve) => { setTimeout(resolve, 0); });
 
 /**
+ * Bounded wait for the attach-time chain to log its outcome line (🔵 #3 的三处判据都用它)。
+ * 策略持久化自持化 §3.1 档 4 让这条链多做一次**真实 fs I/O**（折叠落定后把合并结果原子写回
+ * 文件），所以「猜几个 tick」变成了一场竞态 —— 等的是**那行日志本身**，仍然是有界的。
+ */
+async function waitForChain(env, count) {
+	for (let i = 0; i < 500 && env.log.lines.info.filter((line) => line.includes("post-attach policy chain finished")).length < count; i += 1) await tick();
+	return env.log.lines.info.filter((line) => line.includes("post-attach policy chain finished")).length;
+}
+
+/**
  * Build a full plugin environment on a fresh cordis Context.
  *
  * `lateSettings` exists for U9 (§9.1.3/§9.1.4): the settings stub is created but
@@ -770,7 +802,7 @@ const tick = () => new Promise((resolve) => { setTimeout(resolve, 0); });
  * the DEFECT-1 degradation fixture: it is the ONE branch that may skip the preset
  * face, and it has to leave one warn per created session when it does.
  */
-function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0, connectionStub = undefined, omitConnection = false, connectionWithoutRejection = false, lateConnection = false, omitAgentsCreate = false } = {}) {	const ctx = new Context();
+function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStatus = "idle", contextText = "SNIPPET", omitContext = false, goals, extraAgents = [], selfStatus, useSettings = false, lateSettings = false, lateWebServer = false, noInject = false, settingsSeed, settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, settingsUpdateThrows = false, selfCwd, omitUserQuestions = false, surfaceReadHook, webServerWithoutRegister = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, createdHook = undefined, actionLog = [], pendingSeed = undefined, createDelayMs = 0, omitResume = false, resumeDelayMs = 0, connectionStub = undefined, omitConnection = false, connectionWithoutRejection = false, lateConnection = false, omitAgentsCreate = false, policyHome = undefined, policySeed = undefined } = {}) {	const ctx = new Context();
 	// Every plugin log line lands in `log.lines` instead of the console: the
 	// service-attach red line (§5.3) is asserted on the lines themselves.
 	const log = makeLogger();
@@ -858,7 +890,7 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	resumeRecords.push(...sessions, ...[senderAgent, targetAgent, runnerAgent, ...extraAgentObjects].map((agent) => ({ header: { id: agent.id, cwd: agent.session?.header?.cwd ?? CWD }, live: !hidden.has(agent.id), persisted: true })));
 	const uq = makeUserQuestions([...askScript]);
 	const settings = useSettings || lateSettings
-		? makeSettings(pendingSeed === undefined ? settingsSeed : { ...(settingsSeed ?? {}), "team-link": { ...((settingsSeed ?? {})["team-link"] ?? {}), pendingCreates: [...((settingsSeed ?? {})["team-link"]?.pendingCreates ?? []), ...(Array.isArray(pendingSeed) ? pendingSeed : [pendingSeed])] } }, { settingsRegisterThrows, legacyRegisterThrows, legacyGetThrows })
+		? makeSettings(pendingSeed === undefined ? settingsSeed : { ...(settingsSeed ?? {}), "team-link": { ...((settingsSeed ?? {})["team-link"] ?? {}), pendingCreates: [...((settingsSeed ?? {})["team-link"]?.pendingCreates ?? []), ...(Array.isArray(pendingSeed) ? pendingSeed : [pendingSeed])] } }, { settingsRegisterThrows, legacyRegisterThrows, legacyGetThrows, settingsUpdateThrows })
 		: undefined;
 	ctx.provide("sessionReferenceResolver", resolver);
 	ctx.provide("tools", { register(tool) { registeredTools.push(tool); return () => {}; } });
@@ -928,7 +960,28 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	// 可用的 provider/model」那一档。
 	const agentDefaultModel = makeAgentDefaultModel(agentDefaultModelOptions ?? {});
 	if (!omitAgentDefaultModel) ctx.provide("agentDefaultModel", agentDefaultModel.service);
+	// --- 策略持久化自持化（设计档 §3.2）: 每个夹具一个**私有** DSH_HOME ---------
+	// 文件后端在 settings 缺席时接管落点，所以夹具必须各占一个 home —— 共用一个会
+	// 让后建的夹具读到前一个夹具的 teams（真机上正是「换个工作区团队就没了」的反面）。
+	// 目录落在 `.test-tmp-team/policy/` 下，随本套件末尾的 `rmSync(TEAM_TMP)` 一起清掉；
+	// `policyHome: false` 是 U7 的第三支：既无 DSH_HOME 也无 homedir ⇒ 路径解析失败。
+	policyHomeSeq += 1;
+	const policyDir = policyHome === false ? null : path.resolve(".test-tmp-team", "policy", String(policyHomeSeq));
+	// 守卫判 **`policyDir`** 而不是入参 `policyHome`（代码评审修复轮 🔵#6）：`policyHome: false`
+	// 时 `policyDir` 才是 null，而旧守卫 `policyHome !== null` 在这一支是**真**（`false !== null`），
+	// 于是「既无路径又给了种子」会一路走到 `path.join(null, …)` 抛 TypeError。现在两种输入在
+	// setup 里就明确互斥：没有路径就没有落点可种，种子被跳过。
+	if (policyDir !== null && policySeed !== undefined) {
+		mkdirSync(path.join(policyDir, "team-link"), { recursive: true });
+		// `policySeed` 也可以是**原文**（字符串）：U11 的损坏档夹具要的正是**一份坏 JSON**，而
+		// 这一步发生在 `apply(ctx)` 之前 —— 只有这样 `loadPolicyFile` 才读得到它。
+		writeFileSync(path.join(policyDir, "team-link", "policy.json"), typeof policySeed === "string" ? policySeed : JSON.stringify(policySeed, null, 2), "utf8");
+	}
+	__testing.setPolicyHomeInject(policyDir === null ? { env: {}, homedir: () => "" } : { env: { DSH_HOME: policyDir }, homedir: () => policyDir });
 	apply(ctx);
+	// 夹具之后的**任何** store（例如 `__testing.rotationFor(ctx, extras)` 现场新建的那一个）
+	// 都必须解析不出路径 —— 测试进程永远不许碰到真实的 ~/.dsh。
+	__testing.setPolicyHomeInject({ env: {}, homedir: () => "" });
 	const tool = (name) => registeredTools.find((candidate) => candidate.name === name);
 	/** U9 handle: the settings provider going active AFTER the plugin loaded. */
 	const provideSettings = async () => {
@@ -975,7 +1028,7 @@ function setup({ sessions = [], eventsBySession = {}, askScript = [], targetStat
 	const invoke = (rawInput, agent = senderAgent) => ({ commandId: "cmd-test", agent, rawInput, attachments: [], signal: new AbortController().signal });
 	/** G2 handle: the provider-side peak of concurrent `agents.create` calls. */
 	const maxCreateInFlight = () => createInFlight.max;
-	return { ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideConnection, connection, provideCommands, agentPresets, workspaceRegistry, sessionTitle, agentDefaultModel, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
+	return { policyHome: policyDir, ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideConnection, connection, provideCommands, agentPresets, workspaceRegistry, sessionTitle, agentDefaultModel, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
 }
 
 function execFor(agent) {
@@ -3481,6 +3534,18 @@ const timeoutReadingOf = (text) => {
 		&& reading.includes("人类") && reading.includes("设置 UI");
 };
 
+/**
+ * 「批准状态：」那行里，从「——这不是「调用失败」」往后的**同一段话**。
+ *
+ * 两次 claim 相隔几毫秒，而回退窗口的到期时刻是**秒精度** —— 跨过秒边界时两行的时刻
+ * 就不同，于是「只差『发生了什么』那半句」这条逐字比对会假红（24 次跑批实测 2 次）。
+ * 这里把时刻本身归一化成占位符：判据要比的是「除了原因那半句两行一字不差」，时刻
+ * 不同正是那条断言**不**要看的东西。
+ */
+const approvalTailOf = (text) => {
+	const line = reportLine(text, "批准状态：");
+	return line.slice(line.indexOf("——这不是「调用失败」")).replace(expiryBefore(text) ?? "\u0000", "<到期时刻>");
+};
 const dialogAbortEnv = rotateEnv({ pairs: [rotPair("session-worker-a"), rotPair("session-worker-b")] });
 const dialogAbortToken = tokenOf(await dialogAbortEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: SUCCESSOR }, execFor(dialogAbortEnv.senderAgent)));
 const dialogAbortController = new AbortController();
@@ -3527,7 +3592,7 @@ try {
 check("缺口1 超时读数自报真实后果（计时器到点）: 同一个读数构造器、同三段后果——计时器入口与调用方中止入口在读数上只差「发生了什么」那半句",
 	dialogTimeoutEnv.role().current === SUCCESSOR && timeoutReadingOf(dialogTimeoutOut)
 		&& reportLine(dialogTimeoutOut, "批准状态：").includes("分钟内未获应答")
-		&& reportLine(dialogTimeoutOut, "批准状态：").slice(reportLine(dialogTimeoutOut, "批准状态：").indexOf("——这不是「调用失败」")) === reportLine(dialogAbortOut, "批准状态：").slice(reportLine(dialogAbortOut, "批准状态：").indexOf("——这不是「调用失败」")));
+		&& approvalTailOf(dialogTimeoutOut) === approvalTailOf(dialogAbortOut));
 
 // 与「真的失败」分流：同一条无应答形状里只有 abort/timeout 算超时；一次**自己抛错**的对话框
 // 仍逐字走既有失败文案，且两条读数不相等、超时那三个判据词一个都不出现在失败读数里。
@@ -5113,7 +5178,8 @@ const memWindowEnv = setup({ sessions: [], lateSettings: true, lateCommands: tru
 const memWindowOut = await memWindowEnv.tool("team_link_roster").execute({ action: "upsert-team", team: "night-shift" }, execFor(memWindowEnv.senderAgent));
 check("U9 对照 (数据一致性): a write inside the startup window is served by the memory engine (no settings namespace exists yet)", memWindowOut.includes("已创建团队 night-shift") && memWindowEnv.settings.namespaces.size === 0);
 await memWindowEnv.provideSettings();
-check("U9 对照 (数据一致性): the window's write is folded into the settings namespace at attach instead of being dropped, with one line saying so", (memWindowEnv.settings.namespaces.get("team-link")?.data.teams ?? []).length === 1 && memWindowEnv.log.lines.warn.some((line) => line.includes("memory-only startup window")) && memWindowEnv.log.lines.info.filter((line) => line.includes("policy store attached")).length === 1);
+process.stderr.write("DBG memWindow ALL=" + JSON.stringify({ warn: memWindowEnv.log.lines.warn, info: memWindowEnv.log.lines.info.map((l) => l.slice(0, 160)) }, null, 1) + "\n");
+check("U9 对照 (数据一致性): the window's write is folded into the settings namespace at attach instead of being dropped, with one line saying so", (memWindowEnv.settings.namespaces.get("team-link")?.data.teams ?? []).length === 1 && memWindowEnv.log.lines.warn.some((line) => line.includes("unattached startup window")) && memWindowEnv.log.lines.info.filter((line) => line.includes("policy store attached")).length === 1);
 
 // 差异审计修复轮 · 🟡-1: the SAME fold, on the ONE policy key the ② round added.
 // `policyIsAtDefaults` (lib/index.js) names all eight `DEFAULT_POLICY` keys, so it
@@ -5137,7 +5203,7 @@ check("U9 对照 (pendingCreates) 前置: worker-b's create fails, so its intent
 await pendingFoldEnv.provideSettings();
 await tick();
 const pendingFoldNs = pendingFoldEnv.settings.namespaces.get("team-link");
-check("U9 对照 (pendingCreates) 前置: the fold itself happened — the window's roster write reached the namespace (so a missing intent below cannot be blamed on a fold that never ran)", (pendingFoldNs?.data.teams ?? []).map((team) => team.name).join(",") === "night-shift" && pendingFoldEnv.log.lines.warn.some((line) => line.includes("memory-only startup window")));
+check("U9 对照 (pendingCreates) 前置: the fold itself happened — the window's roster write reached the namespace (so a missing intent below cannot be blamed on a fold that never ran)", (pendingFoldNs?.data.teams ?? []).map((team) => team.name).join(",") === "night-shift" && pendingFoldEnv.log.lines.warn.some((line) => line.includes("unattached startup window")));
 check("U9 对照 (pendingCreates): a §10.2.6 intent written inside the startup window SURVIVES the fold into the settings namespace — the durable orphan record the next boot's sweep reports is not dropped by adopting the window", (pendingFoldNs?.data.pendingCreates ?? []).length === 1 && (pendingFoldNs?.data.pendingCreates ?? [])[0].sessionId === pendingFoldId && (pendingFoldNs?.data.pendingCreates ?? [])[0].role === "worker-b" && (pendingFoldNs?.data.pendingCreates ?? [])[0].team === "night-shift");
 check("U9 对照 (pendingCreates): the folded rows are the window's own normalized rows — every field of the intent survived, not just its presence", (pendingFoldNs?.data.pendingCreates ?? []).length === 1 && (pendingFoldNs?.data.pendingCreates ?? []).every((entry) => entry.createdAt > 0 && entry.expiresAt > entry.createdAt && entry.by === "session-self" && Object.keys(entry).sort().join(",") === "by,createdAt,expiresAt,role,sessionId,team"));
 check("U9 对照 (pendingCreates): the fold is the wholesale write {@link policyIsAtDefaults} licenses, so it carries all EIGHT policy keys — the new one beside the seven that pre-date ②, with the window's roster and the pair granted for the one worker that WAS created inside them", sameJson(Object.keys(pendingFoldNs?.data ?? {}).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"]) && (pendingFoldNs?.data.teams ?? []).length === 1 && (pendingFoldNs?.data.pairs ?? []).length === 1 && at(pendingFoldNs?.data.pairs, 0, {}).b === at(pendingFoldEnv.creates, 0, {}).sessionId);
@@ -5261,7 +5327,10 @@ check("🟡 #1 前置: with the provider up the store attaches on the late path 
 
 await firstProvider.dispose();
 await tick();
-check("🟡 #1: disposing the provider's fiber releases the scope — one line says the store is memory-only again", deadEnv.log.lines.info.some((line) => line.includes("settings scope released with its owner fiber") && line.includes("memory-only")));
+// 策略持久化自持化（设计档 §3.1）改了这条行的**对象**：provider 掉线后 store 回落的不再是
+// 「纯内存」，而是文件后端（能解析出路径时）。措辞与断言**同改**（本仓纪律 ⑤：描述面不许
+// 与实现面矛盾）—— 锁的仍然是「掉线就说一行、且这一行必须点名回落落点」。
+check("🟡 #1: disposing the provider's fiber releases the scope — one line names the 回落落点 (the file backend, not bare process memory)", deadEnv.log.lines.info.some((line) => line.includes("settings scope released with its owner fiber") && line.includes("回落落点：文件后端") && line.includes(path.join("team-link", "policy.json"))));
 
 const whileDetached = await deadRoster.execute({ action: "upsert-team", team: "detached-team" }, execFor(deadEnv.senderAgent));
 check("🟡 #1: after the provider is gone the store is UNATTACHED rather than attached-to-a-dead-scope — the write is served by the memory engine instead of failing against the dead scope", whileDetached.includes("已创建团队 detached-team") && !whileDetached.includes("写入设置失败"));
@@ -5280,6 +5349,7 @@ check("🟡 #1: ... and writes follow the live provider too (persistence is not 
 // Every attach states what happened to the memory-only window, including the
 // case where it is deliberately NOT adopted — a window write that settings
 // outranks is named, not dropped in silence (🔵 #3).
+await waitForChain(deadEnv, 2);
 check("🔵 #3: every attach reports the window outcome — the un-adopted window write is named, not silently dropped", deadEnv.log.lines.info.filter((line) => line.includes("post-attach policy chain finished")).length === 2 && deadEnv.log.lines.info.some((line) => line.includes("memory window: not folded (settings namespace already in use)")));
 
 // --- 评审 round-3 🟡 #1: the one-shot gate counts WINDOWS, not the process ----
@@ -5311,9 +5381,14 @@ check("🟡 #1: ... and window 2 is still exactly ONE warn — the lazy retries 
 // flag's lifetime claimed a window that had already been resolved.
 const refoldEnv = setup({ sessions: [], lateSettings: true, selfCwd: TEAM_WS });
 await refoldEnv.tool("team_link_roster").execute({ action: "upsert-team", team: "window-one" }, execFor(refoldEnv.senderAgent));
-const refoldFolds = () => refoldEnv.log.lines.warn.filter((line) => line.includes("memory-only startup window"));
+// 策略持久化自持化（设计档 §3.1 档 4）把这个标记从「memory-only startup window」改成
+// 「unattached startup window」：未挂载设置服务的那个窗口如今由**文件后端**支撑，
+// 继续叫它 memory-only 会与实现面矛盾（本仓纪律 ⑤）。判据（折叠一次、只一行 warn、
+// 匹配 chain token）一字未松。
+const refoldFolds = () => refoldEnv.log.lines.warn.filter((line) => line.includes("unattached startup window"));
 const refoldProvider = await refoldEnv.provideSettingsFiber();
-await tick();
+
+await waitForChain(refoldEnv, 1);
 check("🔵 #3 前置: window 1's memory write is folded into the namespace exactly once, with one warn and the matching chain token", (refoldEnv.settings.namespaces.get("team-link")?.data.teams ?? []).map((team) => team.name).join(",") === "window-one" && refoldFolds().length === 1 && refoldEnv.log.lines.info.some((line) => line.includes("memory window: folded into settings")));
 await refoldProvider.dispose();
 await tick();
@@ -5322,6 +5397,7 @@ await tick();
 const refoldFresh = makeSettings();
 await refoldEnv.provideSettingsFiber(refoldFresh);
 await tick();
+await waitForChain(refoldEnv, 2);
 check("🔵 #3: the flag does not outlive its window — the new provider is NOT re-fed the resolved state (no second fold, no second 「理论不可达」 warn)", refoldFresh.namespaces.has("team-link") && (refoldFresh.namespaces.get("team-link")?.data.teams ?? []).length === 0 && refoldFolds().length === 1 && (refoldEnv.log.lines.info.filter((line) => line.includes("post-attach policy chain finished")).at(-1) ?? "").includes("memory window: none (no writes while unattached)"));
 
 // --- 评审 round-3 🔵 #5: 「旧命名空间被拒」≠「根本没有旧命名空间」 ---------
@@ -6639,12 +6715,14 @@ check("DEFECT-2 源码锁: 全模块 `.attachSession(` / `.detachSession(` 各**
 // 两种拼法，所以「换个写法再开第二个取用点」也躲不过；注释里因此不写这两种字面量。
 check("DEFECT-4 源码锁: `ctx.get(\"sessionTitle\")` 恰一处、`.rename(` 恰一处（② 与 ③a 共用同一个注入点，不存在各写一遍的第二处）", (hostSource.match(/ctx\.get\??\.\("sessionTitle"\)/gu) ?? []).length === 1 && (hostSource.match(/\.rename\(/gu) ?? []).length === 1);
 const importList = [...hostSource.matchAll(/^import .*? from "([^"]+)";$/gmu)].map((match) => match[1]);
-const HOST_IMPORTS = ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "schemastery", "node:crypto", "node:fs/promises", "node:path"];
+// 策略持久化自持化（设计档 §3.2/§3.4）新增两个**已审计**模块：`node:fs`（同步读 policy.json）与 `node:os`（homedir 兜底）—— 两者都不是会话日志写入面，U19 的红线（不得自己长出日志写入 API）不受影响；
+// 同一次改动把清单从六个模块变成八个，列表与文案里的计数**同改**（本仓纪律 ①）。
+const HOST_IMPORTS = ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "schemastery", "node:crypto", "node:fs/promises", "node:fs", "node:os", "node:path"];
 // `appendFile(`/`writeFile(` are deliberately NOT in this list: they are the
 // blackboard's own file writes (`team/<name>/decisions.md`), not session log
 // writes — the red line is about event types, not about the plugin touching disk.
 check("U19 日志事件: the host module itself never appends or emits a session-log event — no `ctx.session` write seam (the only `ctx.*` session contact is the read-only `sessionQuery`, `sessionReferenceResolver` and `agents`), no `session.append` / appendEvent / writeEvent / logEvent / `ctx.emit` anywhere in the module (源码级锁；插件间接写会话只经上游的 `agents.create` / `agent.followup`)", !/ctx\.session(?![A-Za-z])/u.test(hostSource) && !/\.append(Event)?\(/u.test(hostSource) && !/\b(appendEvent|writeEvent|logEvent|emitEvent)\b/u.test(hostSource) && !/\bctx\.emit\(/u.test(hostSource) && !/\bsession\.append/u.test(hostSource));
-check("U19 日志事件: ... and the module's whole import surface is the six audited modules — a whitelist, so a new dependency cannot slip a log-write API in (`@deepseek-ai/dsh-session-reference` is upstream's deep-link parser, not a session-log writer)", sameJson(importList, HOST_IMPORTS) && importList.every((specifier) => HOST_IMPORTS.includes(specifier)));
+check("U19 日志事件: ... and the module's whole import surface is the eight audited modules — a whitelist, so a new dependency cannot slip a log-write API in (`@deepseek-ai/dsh-session-reference` is upstream's deep-link parser, not a session-log writer)", sameJson(importList, HOST_IMPORTS) && importList.every((specifier) => HOST_IMPORTS.includes(specifier)));
 // The runtime half, on a REAL batch (2 workers, the §10.2.6 default shape): drive
 // the command, then replay its own `agent/pre-step` listener. The listener is the
 // one seam that could inject a session-log event; it must only hand the payload
@@ -8090,6 +8168,525 @@ check("R5 无会话身份（状态卡 ⑦ 段）: 同一条纪律收敛到状态
 		&& stNoIdentity.includes("多会话通道看起来不可用") === false);
 check("R5 反面对照（有身份时判据照样生效）: 同一个夹具**带**会话身份时诊断行照旧出现 —— 「不判」只针对**没有身份**那一支，不是把判据整体关掉",
 	st3SoleOut.includes("多会话通道看起来不可用") && st3SoleStatus.includes("多会话通道看起来不可用"));
+// ---------------------------------------------------------------------------
+// 策略持久化自持化（设计档 docs/policy-persistence-design-2026-09-27.md）
+// S1 文件后端：§3.2 路径解析 / §3.3 文件 schema / §3.4 原子写 / §3.1 第 2、3 档落点。
+// 判据：U1（无服务时写→读回一致且文件存在）· U2（半写 .tmp 不影响读取）·
+// U7（DSH_HOME 缺失退回 homedir；两者皆缺 ⇒ 内存 + 一行 warn）。
+// ---------------------------------------------------------------------------
+
+// U1 —— 无 settings 服务时的第 2 档落点：写进文件、读得回来。
+const u1Env = setup({ sessions: [], selfCwd: TEAM_WS });
+const u1Roster = u1Env.tool("team_link_roster");
+const u1Out = await u1Roster.execute({ action: "upsert-team", team: "threat-intel" }, execFor(u1Env.senderAgent));
+const u1File = path.join(u1Env.policyHome, "team-link", "policy.json");
+let u1Doc = null;
+try { u1Doc = JSON.parse(await readFile(u1File, "utf8")); } catch { u1Doc = null; }
+check("U1 文件后端: 无 settings 服务时一次写入落在 <DSH_HOME>/team-link/policy.json（不是工作区）",
+	u1Out.includes("已创建团队 threat-intel") && existsSync(u1File) && !existsSync(path.join(TEAM_WS, "team-link", "policy.json")));
+check("U1 文件后端: 文件 schema 是 {schema,savedAt,foldedAt,policy}，policy 键集**镜像** settings 命名空间的八个键",
+	u1Doc !== null && u1Doc.schema === 1 && typeof u1Doc.savedAt === "string" && Number.isFinite(Date.parse(u1Doc.savedAt))
+		&& u1Doc.foldedAt === null && u1Doc.policy !== null
+		&& Object.keys(u1Doc.policy).sort().join(",") === ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"].sort().join(","));
+check("U1 文件后端: 读回一致 —— 磁盘上的 roster 与本次 `roster get` 看到的是同一份",
+	u1Doc !== null && Array.isArray(u1Doc.policy.teams) && u1Doc.policy.teams.length === 1 && u1Doc.policy.teams[0].name === "threat-intel"
+		&& (await u1Roster.execute({ action: "get" }, execFor(u1Env.senderAgent))).includes("threat-intel"));
+check("U1 文件后端: 落点目录在**全局** home 下（团队按名字全局寻址，不随工作区搬家）",
+	existsSync(TEAM_WS) && u1File.startsWith(u1Env.policyHome + path.sep) && !u1File.startsWith(TEAM_WS + path.sep)
+		&& !existsSync(path.join(TEAM_WS, "team-link")));
+
+// U2 —— 原子写：读只认 `policy.json`，半写的 `.tmp` 不参与。
+const u2Env = setup({ sessions: [], selfCwd: TEAM_WS });
+const u2Dir = path.join(u2Env.policyHome, "team-link");
+mkdirSync(u2Dir, { recursive: true });
+const u2Stray = path.join(u2Dir, "policy.json.tmp");
+writeFileSync(u2Stray, "{\"schema\":1,\"policy\":{\"teams\":[{\"name\":\"HALF-WRITTEN", "utf8");
+const u2Roster = u2Env.tool("team_link_roster");
+const u2Seed = await u2Roster.execute({ action: "upsert-team", team: "night-shift" }, execFor(u2Env.senderAgent));
+const u2File = path.join(u2Dir, "policy.json");
+let u2Doc = null;
+try { u2Doc = JSON.parse(await readFile(u2File, "utf8")); } catch { u2Doc = null; }
+check("U2 原子写: 半写的 policy.json.tmp 不影响读取 —— 读只认 policy.json（真值是完整的）",
+	u2Seed.includes("已创建团队 night-shift") && u2Doc !== null && u2Doc.policy.teams.length === 1
+		&& u2Doc.policy.teams[0].name === "night-shift"
+		&& !(await u2Roster.execute({ action: "get" }, execFor(u2Env.senderAgent))).includes("HALF-WRITTEN"));
+check("U2 原子写: 一次成功写入之后不留 .tmp 残骸（写完即 rename）", !existsSync(u2Stray));
+
+// U7 —— 路径解析的三支：DSH_HOME → homedir → 内存 + warn。
+const u7FromEnv = __testing.resolvePolicyFilePath({ env: { DSH_HOME: "C:/dsh-home" }, homedir: () => "C:/Users/whoever" });
+const u7MissingEnv = __testing.resolvePolicyFilePath({ env: {}, homedir: () => "C:/Users/whoever" });
+const u7MissingHome = __testing.resolvePolicyFilePath({ env: {}, homedir: () => "" });
+check("U7 路径: DSH_HOME 在场时优先用它（homedir 不参与）",
+	u7FromEnv.ok === true && u7FromEnv.file === path.join("C:/dsh-home", "team-link", "policy.json")
+		&& !u7FromEnv.file.includes("whoever"));
+check("U7 路径: DSH_HOME 缺失时退回 homedir/.dsh/team-link/policy.json",
+	u7MissingEnv.ok === true && u7MissingEnv.file === path.join("C:/Users/whoever", ".dsh", "team-link", "policy.json"));
+check("U7 路径: 两者皆缺 ⇒ 解析失败（第 3 档，进程内存 + warn），不猜任何目录",
+	u7MissingHome.ok === false && u7MissingHome.reason === "路径解析失败" && typeof u7MissingHome.file === "undefined");
+// 同样三支的 **store 级**读数：夹具声明「既无 DSH_HOME 也无 homedir」。
+const u7NoPathEnv = setup({ sessions: [], selfCwd: TEAM_WS, policyHome: false });
+const u7NoPathWarns = u7NoPathEnv.log.lines.warn;
+const u7NoPathGet = await u7NoPathEnv.tool("team_link_roster").execute({ action: "get" }, execFor(u7NoPathEnv.senderAgent));
+check("U7 路径: 解析失败时 warn 说出原因，且没有任何一行再宣称落点或持久化",
+	u7NoPathWarns.filter((line) => line.includes("路径解析失败")).length === 1
+		&& !u7NoPathWarns.some((line) => line.includes("落点：文件后端"))
+		&& !u7NoPathWarns.some((line) => line.includes("no persistence meanwhile")));
+check("U7 路径: 解析失败时读面照常可用（不拒绝，只是没有落点可指）", u7NoPathGet.includes("共 0 个团队"));
+// ---------------------------------------------------------------------------
+// 策略持久化自持化 S2 折叠与可核：§3.1 档 4 折叠 + §3.3 裁决 + §3.4 只写一处 + §3.5 三态落点行。
+// 判据：U3（文件有数据 → 并入服务）· U4（两边都有 → 服务胜 + 归档 + 留痕）·
+// U5（roster get / status 的首行三态）· U6（服务在场时文件一个字节都不动）。
+// ---------------------------------------------------------------------------
+
+/** A policy file document as §3.3 defines it (normalizePolicy fills the rest). */
+const policyDoc = (policy, foldedAt = null) => ({ schema: 1, savedAt: "2026-09-27T00:00:00.000Z", foldedAt, policy });
+
+// U3 —— 文件里已有状态 + 设置服务晚挂 ⇒ 折叠并入服务（§3.1 档 4 的正例）。
+const u3Env = setup({ sessions: [], lateSettings: true, selfCwd: TEAM_WS, policySeed: policyDoc({ teams: [teamRow({ name: "file-team" })] }) });
+const u3Before = await u3Env.tool("team_link_roster").execute({ action: "get" }, execFor(u3Env.senderAgent));
+check("U3 折叠: 服务缺席时读面看到的是**文件里**那一份（不是内存默认值）", u3Before.includes("file-team"));
+await u3Env.provideSettingsFiber();
+await waitForChain(u3Env, 1);
+const u3Ns = (u3Env.settings.namespaces.get("team-link")?.data.teams ?? []).map((team) => team.name);
+const u3After = await u3Env.tool("team_link_roster").execute({ action: "get" }, execFor(u3Env.senderAgent));
+const u3Doc = JSON.parse(await readFile(path.join(u3Env.policyHome, "team-link", "policy.json"), "utf8"));
+check("U3 折叠: 文件里那一份在服务晚挂后并入了设置命名空间（档 4 的正例）", u3Ns.join(",") === "file-team" && u3After.includes("file-team"));
+check("U3 折叠: 折叠后文件里是**合并后**的那一份，并盖上 foldedAt（下次重启读到的就是它）",
+	u3Doc.policy.teams.map((team) => team.name).join(",") === "file-team" && typeof u3Doc.foldedAt === "string" && u3Doc.foldedAt !== null);
+check("U3 折叠: 折叠只留一行 warn（不搞 warn 风暴，§5.3 红线）", u3Env.log.lines.warn.filter((line) => line.includes("unattached startup window")).length === 1);
+check("U3 折叠: 落点已切到服务（设置服务在场时文件不再落点）", u3After.split("\n")[0] === "存储：设置服务（team-link 命名空间）");
+
+// U4 —— 两边都非默认 ⇒ §3.3 裁决：服务胜 + 文件归档 + 一行留痕，**不静默合并**。
+const u4Env = setup({
+	sessions: [],
+	lateSettings: true,
+	selfCwd: TEAM_WS,
+	settingsSeed: { "team-link": { teams: [teamRow({ name: "service-team" })] } },
+	policySeed: policyDoc({ teams: [teamRow({ name: "file-team" })] }),
+});
+const u4SeedBytes = await readFile(path.join(u4Env.policyHome, "team-link", "policy.json"), "utf8");
+await u4Env.provideSettingsFiber();
+await waitForChain(u4Env, 1);
+const u4Ns = (u4Env.settings.namespaces.get("team-link")?.data.teams ?? []).map((team) => team.name);
+const u4Dir = path.join(u4Env.policyHome, "team-link");
+const u4Archives = readdirSync(u4Dir).filter((name) => /^policy\.superseded-.*\.json$/u.test(name));
+const u4Doc = JSON.parse(await readFile(path.join(u4Dir, "policy.json"), "utf8"));
+check("U4 裁决: 服务非默认时服务胜出，文件那一份**不**被并入（没有静默合并）", u4Ns.join(",") === "service-team");
+check("U4 裁决: 被胜出的那一份被归档成 policy.superseded-<ts>.json，且内容逐字是原来那份",
+	u4Archives.length === 1 && (await readFile(path.join(u4Dir, u4Archives[0]), "utf8")) === u4SeedBytes
+		&& JSON.parse(u4SeedBytes).policy.teams.map((team) => team.name).join(",") === "file-team");
+check("U4 裁决: 归档之后主文件立刻改成服务的视图并盖 foldedAt（不留过期快照）",
+	u4Doc.policy.teams.map((team) => team.name).join(",") === "service-team" && typeof u4Doc.foldedAt === "string");
+check("U4 裁决: 留痕一行说清「服务胜出 + 文件归档了」",
+	u4Env.log.lines.info.some((line) => line.includes("折叠裁决") && line.includes(u4Archives[0]) && line.includes("服务胜出"))
+		&& u4Env.log.lines.info.some((line) => line.includes("memory window: not folded (settings namespace already in use)")));
+
+// U5 —— §3.5 三态首行：roster get 与 team_link_status 都要说得出状态存在哪。
+const u5ServiceEnv = teamEnv([teamRow({ name: "served-team" })]);
+const u5ServiceRoster = (await u5ServiceEnv.tool("team_link_roster").execute({ action: "get" }, execFor(u5ServiceEnv.senderAgent))).split("\n");
+const u5ServiceStatus = (await statusCall(u5ServiceEnv, {})).split("\n");
+const u5FileRoster = (await u1Env.tool("team_link_roster").execute({ action: "get" }, execFor(u1Env.senderAgent))).split("\n");
+const u5FileStatus = (await statusCall(u1Env, {})).split("\n");
+const u5MemoryRoster = (await u7NoPathEnv.tool("team_link_roster").execute({ action: "get" }, execFor(u7NoPathEnv.senderAgent))).split("\n");
+const u5MemoryStatus = (await statusCall(u7NoPathEnv, {})).split("\n");
+check("U5 落点行: 服务在场 ⇒ 两个读面的**首行**都是「存储：设置服务（team-link 命名空间）」",
+	u5ServiceRoster[0] === "存储：设置服务（team-link 命名空间）" && u5ServiceStatus[0] === "存储：设置服务（team-link 命名空间）");
+check("U5 落点行: 文件后端在场 ⇒ 首行是「存储：文件 <绝对路径>」",
+	u5FileRoster[0] === `存储：文件 ${u1File}` && u5FileStatus[0] === `存储：文件 ${u1File}` && path.isAbsolute(u1File));
+check("U5 落点行: 落点未定/不可用 ⇒ 首行是 ⚠ 三态行，且**带原因码**（R2 可核，红线）",
+	u5MemoryRoster[0] === "⚠ 存储：仅进程内存（重启即失）—— 原因：路径解析失败"
+		&& u5MemoryStatus[0] === "⚠ 存储：仅进程内存（重启即失）—— 原因：路径解析失败");
+check("U5 落点行: 首行之下就是各自原来的第一行（落点行是新增，不是替换）",
+	u5ServiceRoster[1].startsWith("团队注册表") && u5FileRoster[1].startsWith("团队注册表") && u5ServiceStatus[1].includes("团队状态卡"));
+// 分歧审计修复轮 🔵#9：段①标题那一处「来源：…」也报落点，而它此前是**写死**的「设置
+// team-link 的 teams 键」—— 文件后端部署里于是出现两个互相打架的落点（首行「存储：文件
+// …」、下一段「来源：设置 …」）。判据与首行同源，三态各说一句。
+check("U5 落点行: 状态卡段①的「来源」**跟随落点** —— 设置 / 文件 / 内存三态各说一句（🔵#9）",
+	u5ServiceStatus.some((line) => line === "--- 团队与角色（共 0 个团队；来源：设置 team-link 的 teams 键）---")
+		&& u5FileStatus.some((line) => line === `--- 团队与角色（共 1 个团队；来源：文件 ${u1File} 的 teams 键）---`)
+		&& u5MemoryStatus.some((line) => line === "--- 团队与角色（共 0 个团队；来源：进程内存的 teams 键（重启即失））---"));
+check("U5 落点行: 落点不是设置服务时，段①**不再**说「来源：设置」（首行与段①不许互相打架）",
+	!u5FileStatus.some((line) => line.includes("来源：设置")) && !u5MemoryStatus.some((line) => line.includes("来源：设置")));
+
+// U6 —— 只写一处：服务在场时文件**一个字节都不动**（不读、不写、不建）。
+const u6Env = setup({ sessions: [], useSettings: true, selfCwd: TEAM_WS });
+await u6Env.tool("team_link_roster").execute({ action: "upsert-team", team: "service-only" }, execFor(u6Env.senderAgent));
+check("U6 只写一处: 设置服务在场时**不建** team-link 目录、不建 policy.json（状态只在设置服务）",
+	!existsSync(path.join(u6Env.policyHome, "team-link")) && u6Env.settings.namespaces.get("team-link") !== undefined);
+const u6Env2 = setup({
+	sessions: [],
+	useSettings: true,
+	selfCwd: TEAM_WS,
+	settingsSeed: { "team-link": { teams: [teamRow({ name: "service-team" })] } },
+	policySeed: policyDoc({ teams: [teamRow({ name: "file-team" })] }),
+});
+const u6File = path.join(u6Env2.policyHome, "team-link", "policy.json");
+const u6Before = await readFile(u6File, "utf8");
+await u6Env2.tool("team_link_roster").execute({ action: "upsert-team", team: "service-added" }, execFor(u6Env2.senderAgent));
+const u6After = await readFile(u6File, "utf8");
+const u6Ns = (u6Env2.settings.namespaces.get("team-link")?.data.teams ?? []).map((team) => team.name);
+check("U6 只写一处: 服务在场时文件**一个字节都没动**（连读都不读 —— 否则文件那一侧会被并进来）",
+	u6After === u6Before && u6Ns.join(",") === "service-team,service-added" && !u6Ns.includes("file-team"));
+// ---------------------------------------------------------------------------
+// 策略持久化自持化 S3 迁移与可核：§3.6 一次性迁移。
+// 判据：U8（遗留命名空间迁移**一行不动** —— 文件后端不得改写它的判定）·
+// U9（导入之后「团队在 + 落点行指向文件」两件事同时可核）。
+// 代码**从不**读宿主配置：迁移的输入是人工放进 <home>/team-link/policy.json 的那份文档，
+// 下面两个夹具就是它的可复现等价物（真机上的等价命令见 CHANGELOG 的本节）。
+// ---------------------------------------------------------------------------
+
+// U8 —— 遗留命名空间（session-link-pro）的迁移不因文件后端而改变。
+// 注意旧命名空间的词汇是**信任数据**（pairs / trustedSenders / blockedSenders /
+// rememberTargets / receiveMode）—— teams 不在迁移范围里，这是既有实现（见 migrateLegacyPolicy）。
+// ① 文件先折叠进服务之后，旧命名空间那份**照旧迁移**（这一步没被折叠挡掉）。
+const u8Env = setup({
+	sessions: [],
+	lateSettings: true,
+	selfCwd: TEAM_WS,
+	settingsSeed: { "session-link-pro": { trustedSenders: ["session-legacy-sender"], pairs: [rotPair("session-worker-a")] } },
+	policySeed: policyDoc({ teams: [teamRow({ name: "file-team" })] }),
+});
+await u8Env.provideSettingsFiber();
+await waitForChain(u8Env, 1);
+const u8Chain = u8Env.log.lines.info.find((line) => line.includes("post-attach policy chain finished")) ?? "";
+const u8Ns = u8Env.settings.namespaces.get("team-link")?.data ?? {};
+const u8Legacy = u8Env.settings.namespaces.get("session-link-pro")?.data ?? {};
+const u8Doc = JSON.parse(await readFile(path.join(u8Env.policyHome, "team-link", "policy.json"), "utf8"));
+check("U8 遗留命名空间: 文件后端不挡掉迁移 —— 链上两件事都发生（折叠并入 + 旧命名空间迁移）",
+	u8Chain.includes("memory window: folded into settings") && u8Chain.includes("legacy migration: migrated"));
+check("U8 遗留命名空间: 迁移进来的信任数据与折叠进来的 roster 都在服务命名空间里（两边各管各的，没有互相踩）",
+	(u8Ns.teams ?? []).map((team) => team.name).join(",") === "file-team"
+		&& (u8Ns.trustedSenders ?? []).join(",") === "session-legacy-sender" && (u8Ns.pairs ?? []).length === 1);
+check("U8 遗留命名空间: 一次性迁移的收尾照旧（旧命名空间归零）—— 这一步「一行不动」",
+	(u8Legacy.trustedSenders ?? []).length === 0 && (u8Legacy.pairs ?? []).length === 0 && u8Env.settings.namespaces.has("session-link-pro"));
+check("U8 遗留命名空间: 折叠后的文件里是**合并后**的那一份（信任数据也一并落下），并盖上 foldedAt",
+	(u8Doc.policy.teams ?? []).map((team) => team.name).join(",") === "file-team"
+		&& (u8Doc.policy.trustedSenders ?? []).join(",") === "session-legacy-sender" && typeof u8Doc.foldedAt === "string");
+
+// ② 反面：服务侧**信任数据已在用**时，旧命名空间那份按既有规则「留在原处」并留痕。
+const u8bEnv = setup({
+	sessions: [],
+	lateSettings: true,
+	selfCwd: TEAM_WS,
+	settingsSeed: { "session-link-pro": { trustedSenders: ["session-legacy-sender"] } },
+	policySeed: policyDoc({ teams: [teamRow({ name: "file-team" })], trustedSenders: ["session-file-sender"] }),
+});
+await u8bEnv.provideSettingsFiber();
+await waitForChain(u8bEnv, 1);
+const u8bChain = u8bEnv.log.lines.info.find((line) => line.includes("post-attach policy chain finished")) ?? "";
+const u8bNs = u8bEnv.settings.namespaces.get("team-link")?.data ?? {};
+const u8bLegacy = u8bEnv.settings.namespaces.get("session-link-pro")?.data ?? {};
+check("U8 遗留命名空间: 文件与服务都已有信任数据时不静默合并 —— 旧命名空间那份被「已在用」挡住、留在原处、并在链上留痕",
+	u8bChain.includes("legacy migration: kept (current namespace in use)")
+		&& (u8bNs.trustedSenders ?? []).join(",") === "session-file-sender"
+		&& (u8bLegacy.trustedSenders ?? []).join(",") === "session-legacy-sender"
+		&& u8bEnv.log.lines.info.some((line) => line.includes("legacy policy namespace") && line.includes("kept untouched")));
+// U9 —— 一次性迁移**可核**：把那份文档放进 <home>/team-link/policy.json 之后，
+//「团队在」与「落点指向那个文件」两件事都必须当场读得出来。
+const u9SeedDoc = policyDoc({ teams: [teamRow({ name: "threat-intel" })] });
+const u9Env = setup({ sessions: [], selfCwd: TEAM_WS, policySeed: u9SeedDoc });
+const u9File = path.join(u9Env.policyHome, "team-link", "policy.json");
+const u9Roster = (await u9Env.tool("team_link_roster").execute({ action: "get" }, execFor(u9Env.senderAgent))).split("\n");
+const u9Status = (await statusCall(u9Env, {})).split("\n");
+check("U9 迁移可核: 导入之后 `roster get` 真的看得见 threat-intel（不是「已导入」的承诺，是当场读数）",
+	u9Roster.some((line) => line.startsWith("- threat-intel ")) && u9Status.some((line) => line.includes("threat-intel")));
+check("U9 迁移可核: 落点行 = 「存储：文件 <绝对路径>」，两个读面都指同一个真文件（可核 = 能顺着它去看）",
+	u9Roster[0] === `存储：文件 ${u9File}` && u9Status[0] === `存储：文件 ${u9File}` && existsSync(u9File));
+check("U9 迁移可核: 仅仅**导入**不产生任何写 —— 磁盘上仍是人工放进去的那一份（savedAt 一字未动）",
+	JSON.parse(await readFile(u9File, "utf8")).savedAt === u9SeedDoc.savedAt
+		&& (await readdirSync(path.join(u9Env.policyHome, "team-link"))).length === 1);
+
+// U10 —— **快路径折叠**（分歧审计修复轮 🟡#5；设计档 §3.1 档 4 + §4）。
+// 现象：`loadPolicyFile()` 过去只有一处调用（`if (scope === null)`），所以设置服务在
+// activation 就已在场时**文件从不被读** —— 文件后端时期写下的团队在「服务一开始就在场」
+// 的下一次启动里不可见（正是设计档 §1 现象的形状），而 U6 第二条断言把它锁成了规格。
+// 裁定：快路径也要折叠，规则与档 4 完全同一条、走同一条代码路径。
+//
+// 第二条边界（服务非默认 ⇒ 文件逐字节不变）**不另造**：那就是 U6 第二条断言本身
+// （`u6Env2` 夹具：服务非默认 + 文件有状态），此处只做交叉引用。
+const u10FoldSeedDoc = policyDoc({ teams: [teamRow({ name: "file-team" })] });
+const u10FoldEnv = setup({ sessions: [], useSettings: true, selfCwd: TEAM_WS, policySeed: u10FoldSeedDoc });
+const u10FoldFile = path.join(u10FoldEnv.policyHome, "team-link", "policy.json");
+const u10FoldChain = await waitForChain(u10FoldEnv, 1);
+const u10FoldRoster = (await u10FoldEnv.tool("team_link_roster").execute({ action: "get" }, execFor(u10FoldEnv.senderAgent))).split("\n");
+const u10FoldDoc = JSON.parse(await readFile(u10FoldFile, "utf8"));
+const u10FoldArchives = readdirSync(path.join(u10FoldEnv.policyHome, "team-link")).filter((name) => /^policy\.superseded-.+\.json$/u.test(name));
+check("U10 快路径折叠: 服务在 activation 就已挂上且为默认时，文件里那一份照样并入命名空间（修复前文件从不被读 ⇒ 团队不可见）",
+	u10FoldChain === 1 && u10FoldRoster.some((line) => line.startsWith("- file-team "))
+		&& (u10FoldEnv.settings.namespaces.get("team-link")?.data.teams ?? []).map((team) => team.name).join(",") === "file-team");
+check("U10 快路径折叠: 折叠后落点是设置服务（首行如实说是服务，不是文件）",
+	u10FoldRoster[0] === "存储：设置服务（team-link 命名空间）");
+check("U10 快路径折叠: 并入之前文件那一侧被**原样归档**（policy.superseded-*.json 逐字是导入那一份）",
+	u10FoldArchives.length === 1 && await readFile(path.join(u10FoldEnv.policyHome, "team-link", u10FoldArchives[0]), "utf8") === JSON.stringify(u10FoldSeedDoc, null, 2));
+check("U10 快路径折叠: 折叠后文件里是**合并后**的那一份并盖上 foldedAt（下次服务缺席时读到的是它）",
+	u10FoldDoc.policy.teams[0]?.name === "file-team" && typeof u10FoldDoc.foldedAt === "string" && Number.isFinite(Date.parse(u10FoldDoc.foldedAt)));
+check("U10 快路径折叠: 留痕两行 —— 折叠那一行只出现一次（§5.3 不搞 warn 风暴）+ 链上「folded into settings」",
+	u10FoldEnv.log.lines.warn.filter((line) => line.includes("policy store attached on the fast path with a state from the file backend")).length === 1
+		&& u10FoldEnv.log.lines.info.some((line) => line.includes("post-attach policy chain finished") && line.includes("memory window: folded into settings"))
+		&& u10FoldEnv.log.lines.info.some((line) => line.includes("折叠存档") && line.includes(u10FoldArchives[0])));
+
+// ---------------------------------------------------------------------------
+// 代码评审修复轮（2026-09-27）判据：U11 损坏档守卫 · U12 写失败 warn 按段复位 ·
+// 🔵#3 `foldedAt` 盖戳门 · 🔵#4 `refused` 是一个真实的未挂载窗口。
+// ---------------------------------------------------------------------------
+
+// U11 —— 损坏档守卫（🟡#1）：载入判定为损坏 ⇒ **一律不覆盖**那份文件。
+// 现象：`loadPolicyFile` 解析失败时不写并留了一行 warn 说「本次不会覆盖该文件」，但
+// `persistPolicyFile` 毫无守卫 ⇒ 文件后端下**下一次任何写入**都会用原子 rename 把损坏文件
+// 整个替换掉，落点行还会从「⚠ 仅进程内存」翻成「存储：文件」（`policyPlacement` 只看
+// `fileUsable`）。这里 seed 的是**半截 JSON**（原文写盘，夹具在 `apply` 之前落盘）。
+const u11BrokenBytes = '{ "schema": 1, "policy": { "teams": [';
+const u11Env = setup({ sessions: [], selfCwd: TEAM_WS, policySeed: u11BrokenBytes });
+const u11File = path.join(u11Env.policyHome, "team-link", "policy.json");
+const u11SeedBytes = await readFile(u11File, "utf8");
+const u11RosterTool = u11Env.tool("team_link_roster");
+const u11Out = await u11RosterTool.execute({ action: "upsert-team", team: "after-corruption" }, execFor(u11Env.senderAgent));
+await u11RosterTool.execute({ action: "upsert-team", team: "after-corruption-2" }, execFor(u11Env.senderAgent));
+const u11AfterBytes = await readFile(u11File, "utf8");
+const u11Roster = (await u11RosterTool.execute({ action: "get" }, execFor(u11Env.senderAgent))).split("\n");
+const u11Status = (await statusCall(u11Env, {})).split("\n");
+check("U11 损坏档: 载入判坏之后触发写入，磁盘上那份文件**逐字节不变**（修复前：原子 rename 把它整个替换成合并结果）",
+	u11SeedBytes === u11BrokenBytes && u11AfterBytes === u11BrokenBytes
+		&& u11Out.includes("已创建团队 after-corruption"));
+check("U11 损坏档: 落点行报**第 5 个原因**「文件损坏（不覆盖；请人工处理）」—— 不翻成「存储：文件」",
+	u11Roster[0] === "⚠ 存储：仅进程内存（重启即失）—— 原因：文件损坏（不覆盖；请人工处理）"
+		&& u11Status[0] === u11Roster[0]);
+check("U11 损坏档: 判坏在载入留痕里说出口，且写路径**每一次**写都再如实留一行（不静默、也不吞掉第二次以后）",
+	u11Env.log.lines.warn.some((line) => line.includes("is not valid JSON") && line.includes("文件损坏（不覆盖；请人工处理）"))
+		&& u11Env.log.lines.warn.filter((line) => line.includes("was judged corrupt at load") && line.includes("该文件**未被覆盖**")).length === 2
+		&& u11Env.log.lines.warn.filter((line) => line.includes("policy file write failed")).length === 0);
+check("U11 损坏档: 状态本身不受影响（写进内存、读面看得见两个团队），只有落点降级 —— 段①也如实说「进程内存」",
+	u11Roster.some((line) => line.startsWith("- after-corruption "))
+		&& u11Status.some((line) => line === "--- 团队与角色（共 2 个团队；来源：进程内存的 teams 键（重启即失））---"));
+
+// U12 —— 写失败 warn **按段复位**（🟡#2）：`fileWriteWarned` 过去是进程级一次性门，第一段
+// 失败 warn 过之后**再下一次失败完全静默**（与 `attachWarned` 按窗口复位的范式不一致）。
+// 夹具用「把 policy.json 变成一个非空目录」让 `rename(tmp, file)` 必失败，解开即写成功。
+const u12Env = setup({ sessions: [], selfCwd: TEAM_WS });
+const u12File = path.join(u12Env.policyHome, "team-link", "policy.json");
+const u12Block = () => { rmSync(u12File, { recursive: true, force: true }); mkdirSync(u12File, { recursive: true }); writeFileSync(path.join(u12File, "blocker"), "x", "utf8"); };
+const u12Unblock = () => rmSync(u12File, { recursive: true, force: true });
+const u12WriteWarns = () => u12Env.log.lines.warn.filter((line) => line.includes("policy file write failed"));
+const u12RosterTool = u12Env.tool("team_link_roster");
+u12Block();
+await u12RosterTool.execute({ action: "upsert-team", team: "u12-fail-1" }, execFor(u12Env.senderAgent));
+await u12RosterTool.execute({ action: "upsert-team", team: "u12-fail-2" }, execFor(u12Env.senderAgent));
+const u12WarnsInOneSegment = u12WriteWarns().length;
+// 同一时刻的落点行 —— 证明那两次写**真的失败了**（控制项的前提，不然「只报一行」是空转的绿）。
+const u12FailPlacement = (await u12RosterTool.execute({ action: "get" }, execFor(u12Env.senderAgent))).split("\n")[0];
+u12Unblock();
+await u12RosterTool.execute({ action: "upsert-team", team: "u12-ok" }, execFor(u12Env.senderAgent));
+let u12OkDoc = null;
+try { u12OkDoc = JSON.parse(await readFile(u12File, "utf8")); } catch { u12OkDoc = null; }
+u12Block();
+await u12RosterTool.execute({ action: "upsert-team", team: "u12-fail-3" }, execFor(u12Env.senderAgent));
+check("U12 ★ 负相（控制项：这道门本来就有，红相里这条本就绿 —— 覆盖缺口类，不冒充红相）: 同一段里连续两次失败只报一行 warn",
+	u12WarnsInOneSegment === 1 && u12FailPlacement === "⚠ 存储：仅进程内存（重启即失）—— 原因：文件不可写");
+check("U12 写失败: 中间那次**写入成功**之后新的一段失败**又报一行**（修复前这道门是进程级一次性的 ⇒ 第二次失败完全静默）",
+	u12OkDoc !== null && u12OkDoc.policy.teams.map((team) => team.name).join(",") === "u12-fail-1,u12-fail-2,u12-ok"
+		&& u12WriteWarns().length === 2);
+
+// 🔵#3 —— `foldedAt` 盖戳门：`syncFileFromService` 过去**无条件**盖新戳，于是
+// 「最近一次 attach 时刻」冒充「折叠落定时刻」。这里的启动链上**没有折叠发生**（未挂载期间
+// 无写入 ⇒ memory window: none），所以 foldedAt 必须逐字节保持上一次真正落定的那个值。
+const b3SeedFoldedAt = "2026-09-01T00:00:00.000Z";
+const b3Env = setup({ sessions: [], lateSettings: true, selfCwd: TEAM_WS, policySeed: policyDoc({ teams: [] }, b3SeedFoldedAt) });
+await b3Env.provideSettingsFiber();
+const b3ChainCount = await waitForChain(b3Env, 1);
+const b3ChainLine = b3Env.log.lines.info.find((line) => line.includes("post-attach policy chain finished")) ?? "";
+const b3Doc = JSON.parse(await readFile(path.join(b3Env.policyHome, "team-link", "policy.json"), "utf8"));
+const b3Roster = (await b3Env.tool("team_link_roster").execute({ action: "get" }, execFor(b3Env.senderAgent))).split("\n");
+check("🔵#3 foldedAt 盖戳门: 本次链上没有折叠发生（memory window: none）时**不重盖** foldedAt —— 它继续指上一次真正落定的折叠，不是「最近一次 attach」（修复前：无条件盖新戳）",
+	b3ChainCount === 1 && b3Doc.foldedAt === b3SeedFoldedAt);
+check("🔵#3 ★ 负相（控制项：不冒充红相）: 上面那条的夹具确实落在「没有折叠」这一支上（链上 memory window: none、落点已切到服务）—— 判据是活的，不是恒假",
+	b3ChainLine.includes("memory window: none (no writes while unattached)")
+		&& b3Roster[0] === "存储：设置服务（team-link 命名空间）");
+
+// 🔵#4 —— `refused` 也是**真实的未挂载窗口**：服务在场但**拒绝注册**、后来才挂上。
+// 旧判据 `activationReason !== "attached" && activationReason !== "refused"` 把它排除出去，
+// 于是留痕说成「服务从一开始就在场」（快路径措辞）并顺手给本进程自己写的镜像多归档一份。
+const b4Env = setup({ sessions: [], useSettings: true, settingsRegisterThrows: true, selfCwd: TEAM_WS });
+const b4RosterTool = b4Env.tool("team_link_roster");
+const b4Out = await b4RosterTool.execute({ action: "upsert-team", team: "refused-window-team" }, execFor(b4Env.senderAgent));
+// 这个窗口里的写入走的是**文件后端**（服务还在拒注册）：先把这一点钉住，再让同一个服务
+// 「改口」—— 下一读触发惰性重试，链上才真的有折叠可并入。
+const b4WindowRoster = (await b4RosterTool.execute({ action: "get" }, execFor(b4Env.senderAgent))).split("\n");
+b4Env.settings.stopRefusing();
+await b4RosterTool.execute({ action: "get" }, execFor(b4Env.senderAgent));
+const b4ChainCount = await waitForChain(b4Env, 1);
+const b4FoldWarns = b4Env.log.lines.warn.filter((line) => line.includes("policy store attached"));
+const b4Archives = readdirSync(path.join(b4Env.policyHome, "team-link")).filter((name) => /^policy\.superseded-.+\.json$/u.test(name));
+check("🔵#4 ★ 负相（控制项：夹具必须真的挂上了，否则下面两条是空转的红 —— 本条在红相里也绿）: 拒注册之后新到的服务挂上、窗口里的写入折叠并入命名空间",
+	b4Out.includes("已创建团队 refused-window-team") && b4ChainCount === 1
+		&& b4WindowRoster[0].includes("存储：文件")
+		&& (b4Env.settings.namespaces.get("team-link")?.data.teams ?? []).map((team) => team.name).join(",") === "refused-window-team");
+check("🔵#4 refused 窗口: 折叠留痕如实说「服务在场但拒绝注册」—— 不说成「服务从一开始就在场」的那句快路径措辞（修复前：走的是快路径措辞）",
+	b4FoldWarns.length === 1
+		&& b4FoldWarns[0].includes("after the active provider REFUSED the register")
+		&& b4FoldWarns[0].includes("不是「服务从一开始就在场」")
+		&& b4FoldWarns[0].includes("attached on the fast path") === false);
+check("🔵#4 refused 窗口: 不给本进程自己写的镜像多归档一份（判据与「只有真·快路径才存档」同源 —— 修复前会多出一份 superseded）",
+	b4Archives.length === 0);
+// ---------------------------------------------------------------------------
+// 代码评审**第 2 轮**（2026-09-27）判据：🟡#1 attach 后置链 catch 支的盖戳门 ·
+// 🔵#2 `policy: []` 也算损坏档 · 🔵#3 两因并存时并陈。
+// 判据分工：每条一个红相 + 一条 ★ 负相（控制项：钉住夹具真的落在那一支上，
+// 免得红相是空转的）。
+// ---------------------------------------------------------------------------
+
+// 🟡#1 —— 链在 `memoryOutcome` 产出**之前**断掉时，catch 那一支**不得**盖新 `foldedAt`。
+// 旧实现那里是无参的 `syncFileFromService()`，而盖戳门是 `options.foldHappened !== false`
+// （对 `undefined` 取真）⇒ 照盖，于是 `foldedAt` 冒充「最近一次 attach 时刻」。
+//
+// 夹具怎么让链真的断掉：链上每一步都吞掉了自己的错误（`adoptMemoryWindow` 有内部 catch、
+// `migrateLegacyPolicy` 有内部 catch），所以第一段 promise 只可能**它自己那两行留痕抛出去**
+// 才拒绝。这里注入一个「前两行 warn 会抛」的日志槽（正是日志出口坏掉的形状）：折叠那行
+// warn 先抛 → 被 `adoptMemoryWindow` 的内部 catch 接住并再报一行 → 那一行又抛 ⇒ promise
+// 拒绝 ⇒ 走链的 catch 支。留痕恢复正常后，catch 支与随后的回写照常跑完。
+const h1SeedFoldedAt = "2026-09-01T00:00:00.000Z";
+const h1Env = setup({ sessions: [], lateSettings: true, selfCwd: TEAM_WS, policySeed: policyDoc({ teams: [teamRow({ name: "file-team" })] }, h1SeedFoldedAt) });
+const h1File = path.join(h1Env.policyHome, "team-link", "policy.json");
+const h1RealWarn = h1Env.log.service.warn;
+let h1Armed = 2;
+h1Env.log.service.warn = (message) => {
+	if (h1Armed > 0) {
+		h1Armed -= 1;
+		throw new Error("policy log sink blew up (test injection)");
+	}
+	h1RealWarn(message);
+};
+await h1Env.provideSettingsFiber();
+for (let i = 0; i < 500 && h1Env.log.lines.warn.filter((line) => line.includes("post-attach policy chain failed")).length < 1; i += 1) await tick();
+// 回写是 fire-and-forget：等它**真的落到磁盘上**再读。判据用 `savedAt` —— 种子档的
+// savedAt 是 policyDoc() 里那个固定时刻，回写必刷新它；内容本身两侧相同（折叠进去的就是
+// 文件里那一份），所以拿内容当「写过了」的证据会立刻假绿。
+// 代码评审第 3 轮实测补的守卫（夹具自身的竞速，不是插件缺陷）：轮询读与链尾回写在同一
+// 窗口并发时，Windows 会偶发把回写那次原子 `rename` 拒成 EPERM（目标文件正被本循环的
+// readFile 句柄持有）⇒ 回写被拒、`savedAt` 永不刷新、两条断言假红。所以**回写在飞
+// （`policy.json.tmp` 在场）时不打开目标文件**：先等 `.tmp` 出现、再等它消失，只在回写
+// 肯定不在飞的时候读（前 10 拍只 stat 不 open —— 回写紧跟「chain failed」那一行启动，
+// 那时它要么已在飞、要么已完成，两条都安全）。
+let h1SawTmp = false;
+for (let i = 0; i < 500; i += 1) {
+	if (existsSync(`${h1File}.tmp`)) {
+		h1SawTmp = true;
+		await tick();
+		continue;
+	}
+	if (h1SawTmp || i >= 10) {
+		let probe = null;
+		try { probe = JSON.parse(await readFile(h1File, "utf8")); } catch { probe = null; }
+		if (probe !== null && probe.savedAt !== "2026-09-27T00:00:00.000Z") break;
+	}
+	await tick();
+}
+let h1Doc = null;
+try { h1Doc = JSON.parse(await readFile(h1File, "utf8")); } catch { h1Doc = null; }
+check("🟡#1 catch 支盖戳门: 链在折叠结果产出**之前**断掉时**不盖新 foldedAt** —— 文件里那个戳逐字节保留（修复前：catch 支无参调用 ⇒ 照盖新戳，把「最近一次 attach 时刻」冒充「折叠落定时刻」）",
+	h1Doc !== null && h1Doc.savedAt !== "2026-09-27T00:00:00.000Z" && h1Doc.foldedAt === h1SeedFoldedAt);
+check("🟡#1 ★ 负相（控制项：不冒充红相）: 上面那条的夹具确实走的是**链的 catch 支**（那一行 warn 在、链尾那行「chain finished」不在），且回写照跑 —— 合并结果已落盘（判据是活的，不是恒假）",
+	h1Env.log.lines.warn.filter((line) => line.includes("post-attach policy chain failed")).length === 1
+		&& h1Env.log.lines.info.filter((line) => line.includes("post-attach policy chain finished")).length === 0
+		&& h1Doc !== null && h1Doc.savedAt !== "2026-09-27T00:00:00.000Z" && h1Doc.policy.teams.map((team) => team.name).join(",") === "file-team");
+
+// 🔵#2 —— `{"schema":1,"policy":[]}` 也是损坏档：数组不是命名空间镜像（`normalizePolicy`
+// 会把它读成一份全默认的空视图）。旧的判据 `typeof doc.policy !== "object"` 对数组不设防
+// （`typeof [] === "object"`）⇒ 它被当成合法空档、`fileUsable` 置真、落点行翻成
+// 「存储：文件 …」，**下一次任何写入**都用原子 rename 把它整个替换掉 —— 正是 U11 要防的
+// 「损坏档被覆盖」。
+const b2SeedBytes = `{ "schema": 1, "policy": [] }`;
+const b2Env = setup({ sessions: [], selfCwd: TEAM_WS, policySeed: b2SeedBytes });
+const b2File = path.join(b2Env.policyHome, "team-link", "policy.json");
+const b2SeedOnDisk = await readFile(b2File, "utf8");
+const b2Out = await b2Env.tool("team_link_roster").execute({ action: "upsert-team", team: "after-array-policy" }, execFor(b2Env.senderAgent));
+const b2RosterLines = (await b2Env.tool("team_link_roster").execute({ action: "get" }, execFor(b2Env.senderAgent))).split("\n");
+const b2AfterBytes = await readFile(b2File, "utf8");
+check("🔵#2 数组 policy: `{\"schema\":1,\"policy\":[]}` 判为损坏档 ⇒ 落点行报**第 5 个原因**（修复前：`typeof [] === \"object\"` ⇒ 被当合法空档，落点翻成「存储：文件」）",
+	b2RosterLines[0] === `⚠ 存储：仅进程内存（重启即失）—— 原因：文件损坏（不覆盖；请人工处理）`
+		&& b2Out.includes("已创建团队 after-array-policy"));
+check("🔵#2 数组 policy: 判坏之后一次写，磁盘上那份文件**逐字节不变**（不覆盖 —— 修复前那次 upsert 直接用原子 rename 把它整个替换掉了）",
+	b2AfterBytes === b2SeedBytes);
+check("🔵#2 ★ 负相（控制项：不冒充红相）: 夹具真的把那份数组档原样落在磁盘上（读到的就是 seed 那几字节），且团队状态本身照常可写可读 —— 判坏的只是**落点**，不是状态",
+	b2SeedOnDisk === b2SeedBytes
+		&& b2RosterLines.some((line) => line.startsWith("- after-array-policy ")));
+
+// 🔵#3 —— 两因并存时**并陈**：服务在场却注册不出本命名空间（`no-register`）**且**文件侧也
+// 出过事（这里是损坏）。旧形状是 `no-register` 单方面胜出，用户看不到「你的文件坏了、
+// 需要人工处理」这条**唯一的行动信号**。
+const twoEnv = setup({ sessions: [], useSettings: true, settingsRegisterThrows: true, selfCwd: TEAM_WS, policySeed: b2SeedBytes });
+const twoRosterLines = (await twoEnv.tool("team_link_roster").execute({ action: "get" }, execFor(twoEnv.senderAgent))).split("\n");
+const twoStatusLines = (await statusCall(twoEnv, {})).split("\n");
+check("🔵#3 两因并存: 服务在场却拒注册 **且** 文件损坏 ⇒ 落点行**并陈**两条原因，roster 与 status 逐字同形（修复前：`no-register` 独占一行，把「文件损坏、请人工处理」整条吞掉）",
+	twoRosterLines[0] === `⚠ 存储：仅进程内存（重启即失）—— 原因：no-register；另：文件损坏（不覆盖；请人工处理）`
+		&& twoStatusLines[0] === twoRosterLines[0]);
+const oneEnv = setup({ sessions: [], useSettings: true, settingsRegisterThrows: true, selfCwd: TEAM_WS });
+const oneNoRegisterLines = (await oneEnv.tool("team_link_roster").execute({ action: "get" }, execFor(oneEnv.senderAgent))).split("\n");
+const onePathLines = (await u7NoPathEnv.tool("team_link_roster").execute({ action: "get" }, execFor(u7NoPathEnv.senderAgent))).split("\n");
+const oneUnwritableLines = (await u12Env.tool("team_link_roster").execute({ action: "get" }, execFor(u12Env.senderAgent))).split("\n");
+const oneCorruptLines = (await u11Env.tool("team_link_roster").execute({ action: "get" }, execFor(u11Env.senderAgent))).split("\n");
+check("🔵#3 ★ 负相（控制项：不冒充红相）: 并陈**只**发生在两因并存时 —— 四种单因形态逐字不变（no-register / 路径解析失败 / 文件不可写 / 文件损坏 各一行，无「另：」）",
+	oneNoRegisterLines[0] === `⚠ 存储：仅进程内存（重启即失）—— 原因：no-register`
+		&& onePathLines[0] === `⚠ 存储：仅进程内存（重启即失）—— 原因：路径解析失败`
+		&& oneUnwritableLines[0] === `⚠ 存储：仅进程内存（重启即失）—— 原因：文件不可写`
+		&& oneCorruptLines[0] === `⚠ 存储：仅进程内存（重启即失）—— 原因：文件损坏（不覆盖；请人工处理）`);
+// ---------------------------------------------------------------------------
+// 代码评审**第 3 轮**（2026-09-27）判据：🟡#1 `fold failed` 之后链尾不回写 ·
+// 🟡#2 `detach()` 同步置「未挂载窗口」判据。
+// ---------------------------------------------------------------------------
+
+// 🟡#1 —— `adoptMemoryWindow` 的 catch 支（`fold failed`）**不抛** ⇒ `.then` 链继续走到
+// `syncFileFromService`，其门在文件后端部署里全过 ⇒ 内存被整份替换成**服务视图**（折叠失败
+// ⇒ 服务里没有窗口数据）并写回文件 —— 窗口数据从内存与文件**两边同时消失**，且无归档、还盖
+// 新 `foldedAt`（与 §3.4「宁可漏盖不冒盖」相反）。夹具让 `scope.update` 在 register 成功后
+// 抛错（`settingsUpdateThrows`）⇒ 折叠必失败；判据钉三件事：① 文件里那份**逐字节不变**
+// ② `foldedAt` 不重盖 ③ 留痕说「仍在落点里、未并入」与文件实况一致 —— 链上
+// `memory window: fold failed` 与「窗口数据仍在文件里」一起作控制，钉住夹具真落在那一支。
+const g1SeedFoldedAt = "2026-09-01T00:00:00.000Z";
+const g1Env = setup({ sessions: [], lateSettings: true, settingsUpdateThrows: true, selfCwd: TEAM_WS, policySeed: policyDoc({ teams: [teamRow({ name: "file-team" })] }, g1SeedFoldedAt) });
+const g1File = path.join(g1Env.policyHome, "team-link", "policy.json");
+const g1SeedBytes = await readFile(g1File, "utf8");
+await g1Env.provideSettingsFiber();
+const g1ChainCount = await waitForChain(g1Env, 1);
+const g1ChainLine = g1Env.log.lines.info.find((line) => line.includes("post-attach policy chain finished")) ?? "";
+const g1AfterBytes = await readFile(g1File, "utf8");
+let g1Doc = null;
+try { g1Doc = JSON.parse(g1AfterBytes); } catch { g1Doc = null; }
+check("🟡#1 fold failed 不回写: 折叠失败（scope.update 抛错）后链尾**不把服务视图写回文件** —— ① 文件里那份逐字节不变（窗口数据仍在落点里）② foldedAt 不重盖 ③ 留痕说「仍在落点里、未并入」与文件实况一致（修复前：内存与文件两边同时抹掉窗口数据，且无归档、还盖新 foldedAt）",
+	g1ChainCount === 1 && g1ChainLine.includes("memory window: fold failed")
+		&& g1AfterBytes === g1SeedBytes
+		&& g1Doc !== null && g1Doc.foldedAt === g1SeedFoldedAt
+		&& g1Doc.policy.teams.map((team) => team.name).join(",") === "file-team"
+		&& g1Env.log.lines.warn.some((line) => line.includes("failed to fold the unattached startup window") && line.includes("仍在落点") && line.includes("本次未能并入设置命名空间")));
+
+// 🟡#2 —— `detach()` 重开了 warn 门（`attachWarned`），却没重开「未挂载窗口」判据
+// （`unattachedWindowKind` / `enteredUnattachedWindow` 只在 activation 写一次）。于是
+// 「provider 掉线触发 detach → 窗口内有写入 → provider 回来再 attach」这条链上，折叠留痕
+// 用的还是 activation 那一次写下的措辞（对一个真实发生过的 detach 窗口是假陈述），归档判据
+// `!enteredUnattachedWindow` 读的也是 activation 的旧值。夹具走真实 cordis：provider fiber
+// dispose ⇒ scope 随其 owner fiber 释放 ⇒ 窗口写入落文件后端 ⇒ 新 provider（空命名空间）
+// 回来 ⇒ 折叠发生。判据钉两件事：折叠留痕如实说「provider 被 detach 后又回来」（不说快路径
+// 措辞、也不说成 startup window）＋ 不给本进程自己写的镜像多归档一份（与 🔵#4 同一条裁定）。
+const g2Env = setup({ sessions: [], lateSettings: true, selfCwd: TEAM_WS });
+const g2Provider1 = await g2Env.provideSettingsFiber();
+await g2Provider1.dispose();
+await tick();
+const g2DetachedWrite = await g2Env.tool("team_link_roster").execute({ action: "upsert-team", team: "detach-window-team" }, execFor(g2Env.senderAgent));
+const g2Provider2 = makeSettings();
+await g2Env.provideSettingsFiber(g2Provider2);
+const g2ChainCount = await waitForChain(g2Env, 2);
+// 措辞四支的前缀两种都认：晚挂/拒注册支是 "policy store attached …"，detach 支是
+// "policy store re-attached …"（第 3 轮 🟡#2 的新前缀）。
+const g2FoldWarns = g2Env.log.lines.warn.filter((line) => line.includes("policy store attached") || line.includes("policy store re-attached"));
+const g2Archives = readdirSync(path.join(g2Env.policyHome, "team-link")).filter((name) => /^policy\.superseded-.+\.json$/u.test(name));
+check("🟡#2 detach 窗口判据: 折叠留痕如实说「provider 被 detach 后又回来」—— 不说快路径措辞、也不说成 startup window（修复前：判据不随 detach 复位，走的还是 activation 写下的那一句）；且不给本进程自己写的镜像多归档一份（detach 也是未挂载窗口，判据与 🔵#4 同源）",
+	g2DetachedWrite.includes("已创建团队 detach-window-team") && g2ChainCount === 2
+		&& (g2Provider2.namespaces.get("team-link")?.data.teams ?? []).map((team) => team.name).join(",") === "detach-window-team"
+		&& g2FoldWarns.length === 1
+		&& g2FoldWarns[0].includes("re-attached after its settings owner was detached")
+		&& g2FoldWarns[0].includes("provider 被 detach 后又回来")
+		&& g2FoldWarns[0].includes("attached on the fast path") === false
+		&& g2FoldWarns[0].includes("startup window") === false
+		&& g2Archives.length === 0);
 // B6（③b 差异审计）: `tmpDir` is the export block's output directory and it is
 // re-created at the END of the run, so `rmSync` at import time cleans the PREVIOUS
 // run but leaves the current run's two files behind — every suite run leaked two
