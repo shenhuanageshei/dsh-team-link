@@ -275,6 +275,8 @@ sequenceDiagram
 | 想做什么 | 对模型说 | 背后工具 |
 | --- | --- | --- |
 | 看团队与活性 | 「现在团队状态如何 / 列一下其他会话」 | `team_link_list_sessions` |
+| **看团队一屏现状** | 「出一张**团队状态卡**」（可加「只看 night」） | `team_link_status`（六段＋⑦形态；全只读） |
+| **读到第 13 行 / 点名读某人** | 「列会话，**从第 13 行起**读」/「**点名读** <会话 id> 的活性」 | `team_link_list_sessions` 的 `offset` / `readIds`（单次 ≤12 次面读） |
 | 广播 | 「广播全队：<内容>」（仅现任协调者） | `send` + `targets=["team:<n>/*"]` |
 | 点对点 | 「发给 worker1：<内容>」 | `send` + `targets=["team:<n>/worker1"]` |
 | 按优先级/性质发 | 「以 P0 裁决回复 W1，引用我上条消息」 | `send` 的 `meta` 信封 |
@@ -282,8 +284,10 @@ sequenceDiagram
 | 改纪律 | 「更新纪律条款」 | `team_link_team_append`（`discipline`，带 baseHash） |
 | 派活落账 | 「派给 W1 复核 §3 的行号，记一笔」 | `team_link_team_append`（`tasks` + `kind=plan`，返回 `t-<n>`） |
 | 回报状态 | 「记一笔：t-7 我接了 / 声称完成 / 卡住了 / 存疑」 | `team_link_team_append`（`tasks` + `kind=claim/done/block/dispute` + `task=t-7`） |
+| **看某个任务回过什么** | 「**t-7 收到过谁的回报**？我发出去之后对方动了没有？」 | `team_link_team_read` 的**收件视图** ＋ **派生回执**（默认只读自己的会话面） |
 | 盯人 | 「盯住 W1/W2，静默 15 分钟叫我」 | `team_link_watch` |
 | 交班 | 「我下岗，让 session-X 接任」 | `team_link_rotate`（两阶段） |
+| **切形态**（多会话 ↔ agent-team） | 「把团队切到 **agent-team 档**」/「**切回多会话档**」 | `team_link_roster` `action=set-mode`（**双重门**：writer gate ＋ 人类确认框；缺一即零写入） |
 | 归档 | 「导出这个会话」 | `team_link_export` / 头部 ⬇ |
 
 ---
