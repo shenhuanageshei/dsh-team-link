@@ -1855,6 +1855,32 @@ check("the name charset is lowercase-only as specified", upperName.includes("非
 const noAgentCreate = await createRoster.execute({ action: "upsert-team", team: "day-shift" }, { signal: new AbortController().signal });
 check("upsert-team without a live agent is refused — the workspace must come from a real agentCwd", noAgentCreate.includes("需要可交互的活动代理") && teamStore(createEnv).length === 1);
 
+// --- L2（真机冒烟修复轮）：镜像与新建路径都不许渲染 undefined --------------------
+// 现象（真机实测）：`team_link_roster action=upsert-team` 新建的团队，它的 roster.md 里两行是
+//   - 形态（mode）：undefined（闭集 sessions / agent-team；默认 sessions）
+//   - Lead 会话（leadSessionId）：undefined
+// 根因（本轮核实）：镜像渲染器读的是**未归一化**的团队对象，而新建那条路当时没把这两个字段
+// 写进记录（既有团队走归一化读面，所以旧团队看不出来）。处置：① 渲染器永不打印 undefined
+// （渲染归一化值）；② `upsert-team` 新建时**显式写入**两个默认值，让 settings 与镜像一致。
+check("L2 ①: 镜像渲染器永不打印 undefined —— 一个两个形态字段都没有的团队对象（手写的 settings 行 / 新建路径归一化之前的样子）渲染出的是**归一化值** sessions ＋ 空 Lead",
+	(() => {
+		const bare = __testing.renderRosterMirror({ name: "bare-team", createdAt: 0, workspace: "", policy: { writer: "coordinator" }, roles: [], rotationBackup: null });
+		return bare.includes(`- 形态（mode）：sessions（闭集 sessions / agent-team；默认 sessions）`) && bare.includes("- Lead 会话（leadSessionId）：（空；") && !bare.includes("undefined");
+	})());
+check("L2 ①（闭集外的值）: 同一渲染器对**闭集外**的形态值也按读面的规则落到默认档 —— 镜像里绝不会出现一个读面不会说的档位名",
+	(() => {
+		const stray = __testing.renderRosterMirror({ name: "stray-team", createdAt: 0, workspace: "", policy: { writer: "coordinator" }, roles: [], rotationBackup: null, mode: "agentTeam" });
+		return stray.includes("- 形态（mode）：sessions（") && !stray.includes("agentTeam");
+	})());
+check("L2 ②: `upsert-team` 新建时**显式写入**两个形态字段的默认值（不是靠 schema 兜底、也不是靠读面归一化）—— 写进 settings 的团队行本身就是完整形状",
+	Object.hasOwn(teamStore(createEnv)[0], "mode") && teamStore(createEnv)[0].mode === "sessions" && teamStore(createEnv)[0].leadSessionId === "");
+check("L2 ②（新建路径的镜像）: 新建团队后**不经过 set-mode**，镜像里就已经是 sessions 与空 Lead —— 一个 undefined 都没有",
+	mirrorText.includes(`- 形态（mode）：sessions（闭集 sessions / agent-team；默认 sessions）`) && mirrorText.includes("- Lead 会话（leadSessionId）：（空；") && !mirrorText.includes("undefined"));
+const l2Get = await createRoster.execute({ action: "get", team: "night-shift" }, execFor(createEnv.senderAgent));
+const l2Status = await createEnv.tool("team_link_status").execute({ team: "night-shift" }, execFor(createEnv.senderAgent));
+check("L2 ★ 负相（覆盖缺口类）: 两个读面（roster get 的形态段 / 状态卡 ⑦ 段）同样**零 undefined 泄漏**，形态照出 sessions —— 它们读的是归一化后的团队行（新字段之前的团队也走这条路），所以本条在旧实现上本就绿：它是给「同类泄漏」上的护栏，**不冒充红相**",
+	!l2Get.includes("undefined") && l2Get.includes("- night-shift：形态=sessions") && !l2Status.includes("undefined") && l2Status.includes("- night-shift：形态=sessions"));
+
 // §9.2.2 同步项: the U4 「空缺 → 全拒」 semantics is expressed by a HAND-WRITTEN
 // vacant row (what the settings UI produces). A tool-created team can no longer
 // reach that state, so the old fixture (create a team, then write to it) would
@@ -2268,7 +2294,15 @@ check("team_append refuses the same way without a workspace root", noWsAppend.in
 	const tasksRead = await boardRead.execute({ team: "night-shift" }, execFor(boardEnv.senderAgent));
 	const ledgerRows = (await readFile(tasksPath, "utf8")).trim().split("\n");
 	const ledgerBlock = tasksBlockOf(tasksRead);
-	const stampOfRow = (row) => [...row.split("|")[1].trim()].slice(0, 16).join("").replace("T", " ");
+	// L1（真机冒烟修复轮）：派生视图的时间戳是**本地时基**，与本屏末尾「（读数 …）」同一套
+	// 本地格式化 —— 期望值因此必须从行里**那个瞬间**独立算出来（本地墙钟），而不是把插件
+	// 同样会切的那条 ISO 串再切一遍：后者的期望值与实现同一个来源，任何时基改动都测不出来。
+	const localMinute = (value) => {
+		const at = new Date(value);
+		const pad = (n) => String(n).padStart(2, "0");
+		return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+	};
+	const stampOfRow = (row) => localMinute(row.split("|")[1].trim());
 	const stamp = (index) => stampOfRow(ledgerRows[index]);
 	const lineOf = (block, task) => block.split("\n").find((row) => row.startsWith(`- ${task} ·`)) ?? "";
 
@@ -2330,6 +2364,33 @@ check("team_append refuses the same way without a workspace root", noWsAppend.in
 	check("§9 U17: unparsable rows are counted and excluded, never silently dropped", bigBlock.includes("（3 行无法解析，未参与派生）"));
 	check("§9 U17: the derivation covers only the scanned window — t-9 is in, t-8 fell outside", lineOf(bigBlock, "t-9") !== "" && lineOf(bigBlock, "t-8") === "");
 	check("§9 U17: the raw window is still the last 20 rows, independent of the derivation's 500", bigRead.includes(`共 ${bigLedger.length} 行，显示 20 条`) && bigRead.includes(bigLedger[bigLedger.length - 1]));
+// --- L1（真机冒烟修复轮）：派生视图的时基 --------------------------------------
+// 现象（真机实测）：同屏两处时间差 8 小时 —— 派生视图写「最后主张 done（… 01:45 …）」，
+// 而屏末写「（读数 … 09:45:31）」，因为前者把行里的 UTC ISO 串切了前 16 位、后者走本地
+// 格式化。处置：**渲染出来的时间统一到本地时基**（派生视图改走与 `readStamp` 同一套本地
+// 格式化），而**原始行**逐字保留 `toISOString()` 的 UTC 值（事实源不动）。
+// 下面两条判据与机器时区无关：t-1 / t-2 两行的时间列**前 16 位完全相同**（旧实现渲染出
+// 同一条串），但它们是相差 5 小时的两个瞬间（新实现必然渲染成两条串）—— 在 UTC 机器上同样
+// 成立。第二行刻意用 `+05:00` 而不是本机时区 +08:00：用一个**恰好等于本机偏移**的值会让
+// 那条断言在旧实现上「因为巧合而绿」，新断言就不该有这样的运气。
+	const l1Rows = [
+		"1 | 2026-09-27T01:45:31.010Z | session-x | plan | t-1 | 派活甲",
+		"2 | 2026-09-27T01:45:31.010Z | session-x | claim | t-1 | 接活甲",
+		"3 | 2026-09-27T01:45:31.010Z | session-x | plan | t-2 | 派活乙",
+		"4 | 2026-09-27T01:45:31.010+05:00 | session-x | claim | t-2 | 接活乙",
+		"5 | 手写的坏时间戳 | session-x | claim | t-3 | 接活丙（时间列不是日期）",
+	];
+	await writeFile(tasksPath, `${l1Rows.join("\n")}\n`, "utf8");
+	const l1Read = await boardRead.execute({ team: "night-shift" }, execFor(boardEnv.senderAgent));
+	const l1Block = tasksBlockOf(l1Read);
+	/** The claim stamp rendered on one derived line — the segment between 「最后主张 <kind>（」
+	 * and the following 「 · 」. */
+	const l1StampOf = (task) => /最后主张 [a-z]+（(.*?) · /u.exec(lineOf(l1Block, task))?.[1] ?? "";
+	check("L1: 派生视图的时间戳是**本地时基**（与本屏末尾「读数」同一套本地格式化），不是行里 UTC ISO 串的前 16 位 —— t-1 的接活瞬间（01:45:31Z）在这里读成本地墙钟", l1StampOf("t-1") === localMinute("2026-09-27T01:45:31.010Z"));
+	check("L1: 同一判据在**带偏移**的时间列上照样成立 —— t-2 的接活行写着 +05:00（刻意不用本机偏移），渲染的是那一刻的瞬间；旧实现只切串，偏移被整个忽略 ⇒ 任何机器上都必红", l1StampOf("t-2") === localMinute("2026-09-27T01:45:31.010+05:00"));
+	check("L1 ★ 判别钉子（与机器时区无关）：两行时间列的前 16 位一模一样，却是相差 5 小时的两个瞬间 ⇒ 渲染必须不同（旧实现：同一条串）", l1StampOf("t-1") !== "" && l1StampOf("t-1") !== l1StampOf("t-2"));
+	check("L1 ★ 负相（覆盖缺口类）：时间列不是日期时**不编造时间**、也不打印 NaN 串 —— 照原样回显该列", l1StampOf("t-3") === "手写的坏时间戳");
+	check("L1 ★ 负相（覆盖缺口类）：**原始行**逐字保留 UTC ISO（事实源不动）—— 本轮的时基统一只动渲染，行一个字节没动", l1Read.includes(l1Rows[1]) && l1Read.includes(l1Rows[3]) && (await readFile(tasksPath, "utf8")).includes(l1Rows[3]));
 // --- U14: the regression lock ------------------------------------------------
 // decisions / discipline 的行为与文案逐字不变：这一块量的是**整段返回文本**（=== 而
 // 不是 includes），任何一处文案漂移都会当场变红。本批唯一被允许的文案变更（白名单
@@ -7153,7 +7214,7 @@ check("D5 readIds 非数组: 工具面直接拒绝（数组是硬形状，不是
 // --- U12: 既有四块零回归（唯一新增是收件视图 / 派生回执块）-----------------------
 const trHeaders = ["--- roster（概要；事实源 = 设置 team-link 的 teams 键）---", "--- decisions.md（只追加；此处显示末 20 条）---", "--- discipline.md（整文件替换，带 baseHash 乐观锁）---", "--- tasks.md（只追加台账；显示末 20 条）---", "--- 收件视图（按任务号；", "--- 派生回执（我发出去之后，对方动了没有；"];
 check("U12 零回归: 既有四块（roster / decisions / discipline / tasks）仍在且顺序不变，新块**唯一新增**并排在 tasks 之后", trHeaders.every((needle, index) => trOut.includes(needle) && (index === 0 || trOut.indexOf(needle) > trOut.indexOf(trHeaders[index - 1]))) && (trOut.match(/baseHash=[0-9a-f]{16}/gu) ?? []).length === 3 && trOut.includes("（原始行）"));
-check("U12 零回归: 派生读数（最后主张 / 未消解存疑）与原始行窗口一字未动地留在 tasks 块里", trOut.includes("（派生读数：扫描最近 500 行；逐任务给「最后主张」与「未消解存疑」——是读数，不是裁决）") && trOut.includes("- t-7 · 2 行 · 最后主张 claim（2026-09-26 21:12 · session-worker-b）") && trOut.includes("| plan | t-7 | 让 worker-b 复核 §3 的行号"));
+check("U12 零回归: 派生读数（最后主张 / 未消解存疑）与原始行窗口一字未动地留在 tasks 块里", trOut.includes("（派生读数：扫描最近 500 行；逐任务给「最后主张」与「未消解存疑」——是读数，不是裁决）") && trOut.includes(`- t-7 · 2 行 · 最后主张 claim（${localMinute("2026-09-26T21:12:44.001Z")} · session-worker-b）`) && trOut.includes("| plan | t-7 | 让 worker-b 复核 §3 的行号"));
 
 // ===========================================================================
 // A 批（可观测批）· 阶段 2：只读团队状态卡 team_link_status（六段 + 参数边界 + U13）

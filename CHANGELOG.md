@@ -6,6 +6,38 @@
 
 ---
 
+## 未发布 — 真机冒烟修复轮（L1 时基 / L2 镜像）（2026-09-27）
+
+> 这一轮修的是**真机冒烟**抓到的两条：夹具与审计都抓不到，它们**只在真实运行环境里才看得见**。**不夹带新功能、不扩范围**：A 批设计 §7 与 B 档 §7「明确不做」继续有效；`docs/observability-batch-design-2026-09-26.md` 本轮一字未动；**不碰部署面**；**不动 `<repo>\team\smoke-test\`**（真机冒烟的数据，留着当证据）。逐条读数与红/负相拆分见 [`docs/verification-log.md`](docs/verification-log.md) 的同名一节。
+
+### ✨ 修了什么
+
+**① L1 —— 同屏混用两个时基且未标注**（真机实测：派生视图写 `最后主张 done（2026-09-27 01:45 · session-…）`，而**同一屏**末尾写 `（读数 2026-09-27 09:45:31，>2min 作废）` —— 差 8 小时；原始行是 `2026-09-27T01:45:31.010Z`）。根因：`taskStamp(iso)` 把 ISO 串**切前 16 位**（UTC），`readStamp(now)` 走 `localStamp(new Date(...))`（本地）。处置（父侧裁定：**渲染出来的时间统一到本地时基**）：派生视图的时间戳改走**同一套本地格式化**（`localStamp(date, withSeconds = false)`，分钟精度不变），时间的**瞬间**由 `new Date(<ISO 列>)` 解析而不再做字符串切分；**原始行**仍逐字保留 `toISOString()` 的 UTC 值（事实源不动）。时间列解析不出日期的手写行**照原样回显该列** —— 原先只切串、换成解析后必须显式兜住这一支，否则会打印出 `NaN-NaN-NaN NaN:NaN`（既不编造时间，也不吐「不是值的值」）。`taskStamp` 的调用点只有派生视图那一处（已核）。
+
+**② L2 —— 镜像在「新建团队」这条路上渲染 `undefined`**（真机实测：`team_link_roster action=upsert-team` 新建的团队，其 `roster.md` 里两行是 `- 形态（mode）：undefined（闭集 sessions / agent-team；默认 sessions）` 与 `- Lead 会话（leadSessionId）：undefined`）。根因（本轮核实并如实报告）：镜像渲染器读的是**未归一化**的团队对象，而 `applyTeamUpsert` **新建**时构造的行**没把这两个新字段写进记录** —— 既有团队走归一化读面（`normalizeTeams` 每次读都补），所以旧团队看不出这个问题；`/team rotate` 的批量建队走同一个函数，属同一病灶。处置：① 渲染器**永不打印 `undefined`**（两字段按 `normalizeTeams` 的**同一套缺字段语义** —— 空串 / 非字符串 = 字段缺席 —— 加闭集规则归一化）；② `upsert-team` **显式写入**两个默认值（schema 的默认值只有**读面**会补，而镜像读的是**写进去**的那一行）；③ 断言补住**新建路径的镜像**与**两个读面（roster get 形态段 / 状态卡 ⑦ 段）的零 `undefined` 泄漏**（后者如实标 ★ 负相：它们本就读归一化行）。
+
+### 💡 为什么
+
+两条的共性是**同一份事实被两种方式算了两遍**：L1 里「同一个瞬间」被渲染器切串（UTC）、被同一屏的读数行本地格式化 —— 于是同屏两处可以相差一个时区；L2 里「字段缺席」在**写路径**没归一化、在**读路径**归一化 —— 于是同一个团队在 settings / 读面 / 镜像三处可以长得不一样。处置都收在同一个方向：**一处算、一处用**（L1 同出一套本地格式化；L2 写路径也写全 ＋ 渲染器自带兜底），并且**渲染面永不吐出 `undefined` / `NaN` 这类「不是值的值」**。
+
+### 🚫 明确不做（本轮）
+
+不加新工具 / 新参数 / 新事件类型 / 新持久状态；不改投递层与黑板三件套的语义；渲染面**只改时基与 `undefined` 两处**，不重排任何既有文案；不动 `docs/observability-batch-design-2026-09-26.md`；**不碰部署面**（`profile/profiles/web/...` 与用户目录里的插件副本）；**不动 `<repo>\team\smoke-test\`**。相邻发现的一条（`renderRosterMirror` 对**缺 `rotationBackup` 键**的裸对象会取 `undefined.at` 抛错）**本轮不改、仅留档**：该形状在所有调用点都不可达，且不属 L1/L2 的判据面。
+
+### 🧪 怎么验证
+
+- **命令**：`node host-half.test.mjs && node client-half.test.mjs`；
+- **绿相（实跑两行原文）**：`node host-half.test.mjs` → `ALL PASS / assertion total: 1203 (failed: 0)`（退出码 0）；`node client-half.test.mjs` → `ALL PASS / assertion total: 269 (failed: 0)`（退出码 0）。基线 `1193` / `269` ⇒ **新增 10 条宿主断言**（`1203 = 1193 + 10`）＋ **改写 10 条**；**浏览器半边本轮一字未改**（仍 `269`）；
+- **红相（本轮修复前的实现 ＋ 本轮的新断言/改写断言；测试先行）**：`assertion total: 1203 (failed: 17)`（`17 FAILURE(S)`，`nodeExit=1`）—— **17 条真红** ＝ **7 条新断言**（L1 三条 ＋ L2 四条）＋ **10 条改写的期望值**（9 条 `§9 U12/U13/U15/D5/D6` 的 `stampOfRow` 期望 ＋ TR 夹具那条把 UTC 截断值写死的 `U12 零回归`）；
+- **★ 负相 3 条**（两种实现上都绿，**不冒充红相**）：`L1 坏时间戳原样回显` · `L1 原始行逐字 UTC ISO` · `L2 两个读面零 undefined 泄漏`（覆盖缺口类 / 反向护栏）；
+- **夹具不再自证**：`stampOfRow` 从「切行里的 ISO 串」改为「把那个瞬间按**本地墙钟**独立算出来」⇒ 任何时基改动都会当场变红；判据的**机器无关性**见验证档（前 16 位相同的两行、相差 5 小时的两个瞬间必须渲染不同）。
+
+### 🔁 同批同步的面
+
+`lib/index.js`（`localStamp` / `taskStamp` / `applyTeamUpsert` / `renderRosterMirror`）；`host-half.test.mjs`（10 条新断言 ＋ 10 条改写的期望值）；`README.md`（三处读数 `1193 → 1203` · §四**时间基**一条 · 团队形态表的**镜像**行 · 实现约定里的时间戳条目）；`docs/team-mode-batch-design-2026-09-26.md`（状态行读数 · §4.1 镜像范围）；`docs/team-ledger-and-mode-design-2026-09-26.md`（§9.3.3 时间基 · 状态段与 §7 步 3 读数）；本条目；`docs/verification-log.md`（本轮一节）。
+
+---
+
 ## 未发布 — 部署脚本与真机冒烟（2026-09-27）
 
 ### ✨ 新增
@@ -17,9 +49,9 @@
 - 两个壳各跑一遍：`powershell -File deploy-desktop.ps1 -DryRun`（exit 0，四文件报告 `already in sync`，两侧 sha256 打印一致）；坏路径参数 `-Clone C:\nope` ⇒ 明确报错 + exit 1（fail-fast）。
 - 干跑前后：仓库 `git status` 与部署克隆 HEAD **未变**（零副作用）。
 
-### 📌 同批记录（真机冒烟的两条发现，修复另立条目）
+### 📌 同批记录（真机冒烟的两条发现 —— 修复见上面「未发布 — 真机冒烟修复轮（L1 时基 / L2 镜像）」一节）
 
-在**运行中的壳**里对台账做写入冒烟（建临时团队 → `plan/claim/done/dispute` 四种行 → 读回派生视图）时，抓到两条**夹具测不出**的问题：① 派生视图的时间戳是 UTC（切 ISO 串）而同屏「读数」是本地时间，**同屏混用两个时基且未标注**（真机差 8 小时）；② `roster.md` 镜像在 `upsert-team` 新建那条路上把 `形态（mode）` / `Lead 会话（leadSessionId）` 渲染成 `undefined`。两条都另立修复条目。
+在**运行中的壳**里对台账做写入冒烟（建临时团队 → `plan/claim/done/dispute` 四种行 → 读回派生视图）时，抓到两条**夹具测不出**的问题：① 派生视图的时间戳是 UTC（切 ISO 串）而同屏「读数」是本地时间，**同屏混用两个时基且未标注**（真机差 8 小时）；② `roster.md` 镜像在 `upsert-team` 新建那条路上把 `形态（mode）` / `Lead 会话（leadSessionId）` 渲染成 `undefined`。两条已另立修复条目（见上面「未发布 — 真机冒烟修复轮（L1 时基 / L2 镜像）」一节：L1 渲染统一到本地时基、L2 镜像与新建路径去 `undefined`）。
 
 ---
 
