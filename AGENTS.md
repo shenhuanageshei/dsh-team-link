@@ -84,3 +84,12 @@
 
 > 夹具里已有这条路径的**可复现等价物**（`U9 迁移可核:` 三条断言）：`setup({ policySeed: policyDoc({ teams: [teamRow({ name: "threat-intel" })] }) })`
 > 之后断言「团队看得见」＋「首行 = `存储：文件 <绝对路径>`」＋「磁盘上仍是你放进去的那一份」。改迁移逻辑时先改这条。
+
+## 八、两条 2026-09-27 事故/后果备忘
+
+- **DSH 重启会打断在飞的 `eng_coder` 后台作业**，而它的**半成品会留在工作区**（本轮 `eng-dsh-7` 就被重启打断在「判据已写、实现未做」的红状态）。
+  ⇒ **重启前先确认没有在跑的作业**；一旦被打断，按平台规则**不要自动重派**（评估工作区 → 交用户裁决）。另外：**动手前先给未提交的工作上保险**
+  （`git stash create` + `git update-ref refs/wip/<名字>` 不碰工作树 ✓）。
+- **本部署的状态事实源是 `policy.json`，不是设置 UI 的 `teams` 键**：宿主没有可用的 `settings.register()`（落点行原因码 `no-register`），
+  插件的状态落在 `<DSH_HOME>/team-link/policy.json`。**改团队状态请用工具**（`team_link_roster` 等）；
+  **在设置 UI 里改 `teams` 键不会生效**（插件不读宿主配置）。roster 的恢复梯子里那句「设置 UI 直接改 teams 键」在本部署**不可用**。
