@@ -43,7 +43,10 @@ param(
   [string]$Profile = "C:\Users\magic\.dsh\profiles\desktop",
   [switch]$DryRun
 )
-$ErrorActionPreference = "Stop"
+# NOTE: keep this at Continue and check $LASTEXITCODE explicitly. Under Windows
+# PowerShell 5.1 with ErrorActionPreference=Stop, a native command that writes to
+# stderr (git prints fetch progress there) becomes a terminating NativeCommandError.
+$ErrorActionPreference = "Continue"
 # $MyInvocation is null inside a param() default, so resolve the script folder here.
 if ([string]::IsNullOrEmpty($Src)) { $Src = $PSScriptRoot }
 function Info($m) { Write-Host $m }
@@ -71,7 +74,9 @@ if ($DryRun) {
   Info "      (deploy clone HEAD is currently $rc)"
 } else {
   & git -C $Clone fetch $Src main 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "git fetch failed (exit $LASTEXITCODE): $Clone <- $Src" }
   & git -C $Clone merge --ff-only FETCH_HEAD 2>&1 | Out-String | Write-Host
+  if ($LASTEXITCODE -ne 0) { throw "git merge --ff-only failed (exit $LASTEXITCODE)" }
 }
 $cloneRevNow = (& git -C $Clone rev-parse --short HEAD).Trim()
 Info "      deploy clone HEAD = $cloneRevNow"
