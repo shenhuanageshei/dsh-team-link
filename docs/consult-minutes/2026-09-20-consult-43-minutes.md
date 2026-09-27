@@ -156,7 +156,7 @@ exemption: unattended — 用户 2026-09-20 00:1x 明言“我睡觉了，你继
 
 # §11 评审：三个设计问题（只读评审）
 
-**依据**（均逐行核对）：[lib/index.js](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js)（重点行见各条）；[collab-enhancements-design-2026-09-19.md](D:/DSH-Portable/plugins/dsh-team-link/docs/collab-enhancements-design-2026-09-19.md) §11；[team-upgrade-design-2026-09-17.md](D:/DSH-Portable/plugins/dsh-team-link/docs/team-upgrade-design-2026-09-17.md) §3.6；[dsh-commands types.d.ts](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-commands/lib/types/types.d.ts)；[dsh-agent index.d.ts](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-agent/lib/types/index.d.ts) 与 [runtime-types.d.ts](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts)。
+**依据**（均逐行核对）：[lib/index.js](<CHECKOUT>/plugins/dsh-team-link/lib/index.js)（重点行见各条）；[collab-enhancements-design-2026-09-19.md](<CHECKOUT>/plugins/dsh-team-link/docs/collab-enhancements-design-2026-09-19.md) §11；[team-upgrade-design-2026-09-17.md](<CHECKOUT>/plugins/dsh-team-link/docs/team-upgrade-design-2026-09-17.md) §3.6；[dsh-commands types.d.ts](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-commands/lib/types/types.d.ts)；[dsh-agent index.d.ts](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-agent/lib/types/index.d.ts) 与 [runtime-types.d.ts](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts)。
 
 **先修正问题陈述里的一处前提**：砖态范围不是「roster/黑板全卡死」。`team_link_team_append`（decisions 追加 / discipline 整文件替换）**不过 writerGate**——工具描述自己写明「写黑板没有权限门」（:2270），代码里也无 gate 调用（:2333-2364）。所以「现任死亡」卡死的是：roster 变更（set-role/retire/既有团队 upsert）、换届（prepare/claim）、`/team_session` 登记。团队仍可经 decisions.md（追加型账本）与 `team_link_send`（过正常门）通讯。这影响 Q1 的机制设计（审计可落黑板、诊断可借黑板），也在 Q1③ 中用来防止「顺手给黑板加门」式的范围蔓延。
 
@@ -255,7 +255,7 @@ exemption: unattended — 用户 2026-09-20 00:1x 明言“我睡觉了，你继
 
 | # | 事实 | 出处 |
 |---|---|---|
-| F1 | `writerGate`：`policy.writer=coordinator`（默认）时仅 coordinator **现任**可写；空缺时会话路径**全拒**，明示「用户经设置 UI 永远是超级写者」 | [index.js:1746-1760](D:\DSH-Portable\plugins\dsh-team-link\lib\index.js) |
+| F1 | `writerGate`：`policy.writer=coordinator`（默认）时仅 coordinator **现任**可写；空缺时会话路径**全拒**，明示「用户经设置 UI 永远是超级写者」 | [index.js:1746-1760](<CHECKOUT>\plugins\dsh-team-link\lib\index.js) |
 | F2 | `retireGate` 独立于 writer 策略：任何团队（含 writer=any）退役都只有现任 coordinator 会话能发起 | index.js:1768-1778 |
 | F3 | `rotateGate`（prepare）：只有**该角色自己的现任**会话可发起；coordinator 也**不能**替 worker 角色发起换届 | index.js:4282-4290 |
 | F4 | claim 落定后 provisional 过期回退**只删 pairs**：「新任保持 current（换届事实已成立，降格需用户显式操作）」 | index.js:4464-4466；主设计 §3.6.2 评审 #5 |
@@ -531,7 +531,7 @@ H3 保留为首选（API 面看大概率成立，冒烟判据三条：① 命令
 
 # §11 评审：三个设计问题（只读评审）
 
-**依据**（均逐行核对）：[lib/index.js](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js)（重点行见各条）；[collab-enhancements-design-2026-09-19.md](D:/DSH-Portable/plugins/dsh-team-link/docs/collab-enhancements-design-2026-09-19.md) §11；[team-upgrade-design-2026-09-17.md](D:/DSH-Portable/plugins/dsh-team-link/docs/team-upgrade-design-2026-09-17.md) §3.6；[dsh-commands types.d.ts](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-commands/lib/types/types.d.ts)；[dsh-agent index.d.ts](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-agent/lib/types/index.d.ts) 与 [runtime-types.d.ts](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts)。
+**依据**（均逐行核对）：[lib/index.js](<CHECKOUT>/plugins/dsh-team-link/lib/index.js)（重点行见各条）；[collab-enhancements-design-2026-09-19.md](<CHECKOUT>/plugins/dsh-team-link/docs/collab-enhancements-design-2026-09-19.md) §11；[team-upgrade-design-2026-09-17.md](<CHECKOUT>/plugins/dsh-team-link/docs/team-upgrade-design-2026-09-17.md) §3.6；[dsh-commands types.d.ts](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-commands/lib/types/types.d.ts)；[dsh-agent index.d.ts](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-agent/lib/types/index.d.ts) 与 [runtime-types.d.ts](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts)。
 
 **先修正问题陈述里的一处前提**：砖态范围不是「roster/黑板全卡死」。`team_link_team_append`（decisions 追加 / discipline 整文件替换）**不过 writerGate**——工具描述自己写明「写黑板没有权限门」（:2270），代码里也无 gate 调用（:2333-2364）。所以「现任死亡」卡死的是：roster 变更（set-role/retire/既有团队 upsert）、换届（prepare/claim）、`/team_session` 登记。团队仍可经 decisions.md（追加型账本）与 `team_link_send`（过正常门）通讯。这影响 Q1 的机制设计（审计可落黑板、诊断可借黑板），也在 Q1③ 中用来防止「顺手给黑板加门」式的范围蔓延。
 
@@ -626,8 +626,8 @@ H3 保留为首选（API 面看大概率成立，冒烟判据三条：① 命令
 
 **事实核查（比 §11.2 的表述更精确）**：
 
-- `CommandResult` 确认为 `{kind:'success'; text?; sourceEventSeq?} | {kind:'error'; text}`，注释原文 "**Expected command outcome rendered directly by the dispatching UI**"（[types.d.ts:32-41](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-commands/lib/types/types.d.ts)）——进不了模型上下文。另见 `command/run`/`command/done` 事件定义为 "**Log-only (never model surface)**"（:89-119）。§11.2 的前提成立；唯一小更新是 success 变体还带 `sourceEventSeq`，但它指向「更早的权威域事件」——交接文档是文件不是事件，且 §10.3 禁新事件类型，**此路不通**。
-- 但 `CommandInvocation.agent` 是**活代理的完整运行面**：`followup(message)` 的官方语义正是「Queue an ordinary follow-up turn and wake the driver. **The item becomes the sole ordinary message of its own turn**」（[runtime-types.d.ts:186-200](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts)）——**恰好就是「下一回合补正文」需要的语义**。自驱动的先例在 V1（goal 驱动器对自己的会话 followup）与插件自身的 watchdog tick（:1409-1410）都成立。H3 的残余风险只是**行为验证**（从 UI dispatch 路径里 followup 的唤醒是否如预期），而非 API 存在性——失败概率低，且失败模式良性（见下）。
+- `CommandResult` 确认为 `{kind:'success'; text?; sourceEventSeq?} | {kind:'error'; text}`，注释原文 "**Expected command outcome rendered directly by the dispatching UI**"（[types.d.ts:32-41](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-commands/lib/types/types.d.ts)）——进不了模型上下文。另见 `command/run`/`command/done` 事件定义为 "**Log-only (never model surface)**"（:89-119）。§11.2 的前提成立；唯一小更新是 success 变体还带 `sourceEventSeq`，但它指向「更早的权威域事件」——交接文档是文件不是事件，且 §10.3 禁新事件类型，**此路不通**。
+- 但 `CommandInvocation.agent` 是**活代理的完整运行面**：`followup(message)` 的官方语义正是「Queue an ordinary follow-up turn and wake the driver. **The item becomes the sole ordinary message of its own turn**」（[runtime-types.d.ts:186-200](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-agent/lib/types/runtime-types.d.ts)）——**恰好就是「下一回合补正文」需要的语义**。自驱动的先例在 V1（goal 驱动器对自己的会话 followup）与插件自身的 watchdog tick（:1409-1410）都成立。H3 的残余风险只是**行为验证**（从 UI dispatch 路径里 followup 的唤醒是否如预期），而非 API 存在性——失败概率低，且失败模式良性（见下）。
 
 **比「退回工具入口」更好的替代：两段式拆分（机械现在做，正文下一回合补）**——评审**推荐采纳**，并取代 §11.2 的「只 nudge」原案：
 
@@ -675,7 +675,7 @@ H3 保留为首选（API 面看大概率成立，冒烟判据三条：① 命令
 
 | # | 事实 | 出处 |
 |---|---|---|
-| F1 | `writerGate`：`policy.writer=coordinator`（默认）时仅 coordinator **现任**可写；空缺时会话路径**全拒**，明示「用户经设置 UI 永远是超级写者」 | [index.js:1746-1760](D:\DSH-Portable\plugins\dsh-team-link\lib\index.js) |
+| F1 | `writerGate`：`policy.writer=coordinator`（默认）时仅 coordinator **现任**可写；空缺时会话路径**全拒**，明示「用户经设置 UI 永远是超级写者」 | [index.js:1746-1760](<CHECKOUT>\plugins\dsh-team-link\lib\index.js) |
 | F2 | `retireGate` 独立于 writer 策略：任何团队（含 writer=any）退役都只有现任 coordinator 会话能发起 | index.js:1768-1778 |
 | F3 | `rotateGate`（prepare）：只有**该角色自己的现任**会话可发起；coordinator 也**不能**替 worker 角色发起换届 | index.js:4282-4290 |
 | F4 | claim 落定后 provisional 过期回退**只删 pairs**：「新任保持 current（换届事实已成立，降格需用户显式操作）」 | index.js:4464-4466；主设计 §3.6.2 评审 #5 |

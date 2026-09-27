@@ -24,10 +24,10 @@
   This repo. Defaults to the folder containing this script.
 
 .PARAMETER Clone
-  The deploy clone. Default: C:\Users\magic\.dsh-plugins\dsh-team-link
+  The deploy clone. Default: %USERPROFILE%\.dsh-plugins\dsh-team-link
 
 .PARAMETER Profile
-  Profile folder that owns node_modules. Default: C:\Users\magic\.dsh\profiles\desktop
+  Profile folder that owns node_modules. Default: %USERPROFILE%\.dsh\profiles\desktop
 
 .PARAMETER DryRun
   Print what would happen; write nothing.
@@ -39,8 +39,8 @@
 [CmdletBinding()]
 param(
   [string]$Src = "",
-  [string]$Clone = "C:\Users\magic\.dsh-plugins\dsh-team-link",
-  [string]$Profile = "C:\Users\magic\.dsh\profiles\desktop",
+  [string]$Clone = (Join-Path $env:USERPROFILE ".dsh-plugins\dsh-team-link"),
+  [string]$Profile = (Join-Path $env:USERPROFILE ".dsh\profiles\desktop"),
   [switch]$DryRun
 )
 # NOTE: keep this at Continue and check $LASTEXITCODE explicitly. Under Windows

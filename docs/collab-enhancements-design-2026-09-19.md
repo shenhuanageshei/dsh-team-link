@@ -390,7 +390,7 @@ handle.agent.followup(createUserMessage({
 
 | 角色 | 现任 | 版本史备注 |
 |---|---|---|
-| `coordinator` | `session-4618b48d-74e9-48aa-b092-139718d3a47c`（**敲命令的那个会话**） | 创建者自举 |
+| `coordinator` | `session-4618…`（id 已脱敏）（**敲命令的那个会话**） | 创建者自举 |
 | `main` | `team-link-0921-main-main-e5df9a46`（**新建的那个**） | /team_session 批量建队 |
 
 **这不是缺陷**：§10.2.2 的契约就是「创建 **worker** 根会话」，而「创建即认领」把**调用会话**播种为 coordinator；新会话收到的起始任务（`teamSessionKickoffText`，`lib/index.js:4680`）**逐字**告诉它自己是「worker 根会话」。**但**：用户要的语义是「开新会话接替我的座位」，而那件事的**原生机制是 §11 换届**（`team_link_rotate successor:"auto"`：插件自建继任者 ＋ 交接文档 ＋ 令牌 ＋ 信任迁移），**不是** `/team_session`。

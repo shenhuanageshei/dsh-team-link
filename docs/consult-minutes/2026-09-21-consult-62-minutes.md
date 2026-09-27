@@ -128,7 +128,7 @@ if (rejection !== undefined) {
 
 # dsh-team-link v0.3.8 三问评审：整体可实施优化方案
 
-**事实复核（均已读档确认）**：export handler（[lib/index.js:8019](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L8019)–8057）确实零鉴权，`readSession` 任意 id 直出全量事件；open-in-app 正例的围栏在 [dsh-host-open-in-app/lib/index.js:1213](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-host-open-in-app/lib/index.js#L1213)（`inject=["webServer","connection","subprocess"]`）与 :1316-1323（`requestRejection` → 直写状态码）；`requestRejection` 的契约是「Host/Origin 栅栏 + 浏览器登录 cookie，返回状态码或 undefined」（[rpc-host.d.ts:28](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-connection/lib/types/rpc-host.d.ts#L28)–31）。Q2 的两道门（:7334 角色门、:7351 pluginCreated 门）与候选集（:7079-7083、:7481-7484）与题述一致；threat-intel roster 实读确认 b/c 均为 `session-<uuid>` 人类 id。Q3 硬编码确认在 [dsh-client-ui-workspace/lib/client.js:1113](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js#L1113)–1129 / :1186-1191（0.1.6-alpha.2，无 src）。**一个重要勘误**：`D:\DSH-Portable\profile\profiles\web` 不是源码 checkout（无 `packages/`、无 `apps/`，只有 node_modules + profile），所以「上游改法」意味着向 deepseek-harness 仓提 PR，本机无法重建该包。
+**事实复核（均已读档确认）**：export handler（[lib/index.js:8019](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L8019)–8057）确实零鉴权，`readSession` 任意 id 直出全量事件；open-in-app 正例的围栏在 [dsh-host-open-in-app/lib/index.js:1213](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-host-open-in-app/lib/index.js#L1213)（`inject=["webServer","connection","subprocess"]`）与 :1316-1323（`requestRejection` → 直写状态码）；`requestRejection` 的契约是「Host/Origin 栅栏 + 浏览器登录 cookie，返回状态码或 undefined」（[rpc-host.d.ts:28](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-connection/lib/types/rpc-host.d.ts#L28)–31）。Q2 的两道门（:7334 角色门、:7351 pluginCreated 门）与候选集（:7079-7083、:7481-7484）与题述一致；threat-intel roster 实读确认 b/c 均为 `session-<uuid>` 人类 id。Q3 硬编码确认在 [dsh-client-ui-workspace/lib/client.js:1113](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js#L1113)–1129 / :1186-1191（0.1.6-alpha.2，无 src）。**一个重要勘误**：`<CHECKOUT>\profile\profiles\web` 不是源码 checkout（无 `packages/`、无 `apps/`，只有 node_modules + profile），所以「上游改法」意味着向 deepseek-harness 仓提 PR，本机无法重建该包。
 
 **总体顺序**：Q1 先行（安全洞、改动小、独立成commit）→ Q2 的 (a)+(c)（行为面，一批做完文档同步）→ Q3 先提上游 PR、补丁只作为可弃的过渡层。三处都走仓库的「修复前必红 / 修复后全绿」纪律。
 
@@ -140,17 +140,17 @@ if (rejection !== undefined) {
 
 | # | 位置 | 改什么 |
 |---|---|---|
-| 1 | [lib/index.js:8013](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L8013) `mount(target)` | 再读 `const connection = target.get?.("connection")`；新增两个 reason code：`"no-connection"`（webServer 在、connection 不在）与 `"no-rejection"`（`typeof connection.requestRejection !== "function"`）。**这两种情况一律不注册路由**（区别于现在的「能挂就挂」）。 |
-| 2 | [lib/index.js:8022](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L8022) handler 首行 | 逐字镜像 open-in-app :1316-1323：`const rejection = connection.requestRejection(req); if (rejection !== undefined) { res.statusCode = rejection; res.end(); return; }`。顺带补 `req.method !== "GET"` → 405（与 open-in-app 同款）。 |
-| 3 | [lib/index.js:8077](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L8077) | `ctx.inject(["webServer"], …)` 改为 `ctx.inject(["webServer", "connection"], …)`——cordis 的 inject 等全部依赖就绪才回调，天然给出「双到齐才挂」的语义。 |
-| 4 | [lib/index.js:8062](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L8062) `describeMountFailure` + :8074 warn 文案 | 扩两个新 reason 的措辞；warn 明说「路由未挂载（fail-closed），导出工具照常」。 |
-| 5 | 文档同批 | [README.md:815](D:/DSH-Portable/plugins/dsh-team-link/README.md#L815) 的降级表加 `connection` 行并改写 `webServer` 行语义；§9.1.3 注释块（:7986-7996）补一段；CHANGELOG + verification-log。 |
+| 1 | [lib/index.js:8013](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L8013) `mount(target)` | 再读 `const connection = target.get?.("connection")`；新增两个 reason code：`"no-connection"`（webServer 在、connection 不在）与 `"no-rejection"`（`typeof connection.requestRejection !== "function"`）。**这两种情况一律不注册路由**（区别于现在的「能挂就挂」）。 |
+| 2 | [lib/index.js:8022](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L8022) handler 首行 | 逐字镜像 open-in-app :1316-1323：`const rejection = connection.requestRejection(req); if (rejection !== undefined) { res.statusCode = rejection; res.end(); return; }`。顺带补 `req.method !== "GET"` → 405（与 open-in-app 同款）。 |
+| 3 | [lib/index.js:8077](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L8077) | `ctx.inject(["webServer"], …)` 改为 `ctx.inject(["webServer", "connection"], …)`——cordis 的 inject 等全部依赖就绪才回调，天然给出「双到齐才挂」的语义。 |
+| 4 | [lib/index.js:8062](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L8062) `describeMountFailure` + :8074 warn 文案 | 扩两个新 reason 的措辞；warn 明说「路由未挂载（fail-closed），导出工具照常」。 |
+| 5 | 文档同批 | [README.md:815](<CHECKOUT>/plugins/dsh-team-link/README.md#L815) 的降级表加 `connection` 行并改写 `webServer` 行语义；§9.1.3 注释块（:7986-7996）补一段；CHANGELOG + verification-log。 |
 
 关键论证：**这不破红线，反而把红线写得更严**。红线是「服务缺失 → 降级 + 一行 warn + 工具照常」，不是「webServer 在就必须有路由」。降级的锚点本来就是「头部 ⬇ 按钮失效、`team_link_export` 工具可用」——把挂载条件从「有 webServer」收紧为「有 webServer **且** 有可用的信任围栏」，降级面没有扩大半格，只是从「可能无门」变成「宁可不门」。快路径 :8064-8066 的语义也自动变对：root ctx 上两服务齐才挂，否则进入 inject 等待。
 
 ### 判据（修复前必红 / 修复后全绿）
 
-1. **变异红（主断言）**：[host-half.test.mjs:662](D:/DSH-Portable/plugins/dsh-team-link/host-half.test.mjs#L662) `setup()` 增 `connectionService` 参数（默认给可编程 `requestRejection`）。用 :1125 既有的「直调 handler」模式构造 evil 请求（headers 带 `host: evil.example:3080` / `origin: http://evil.example`），fake connection 返回 403 → 断言 `statusCode===403` 且 body 空。**修复前 handler 根本不问 connection，返回 200 → 红**。
+1. **变异红（主断言）**：[host-half.test.mjs:662](<CHECKOUT>/plugins/dsh-team-link/host-half.test.mjs#L662) `setup()` 增 `connectionService` 参数（默认给可编程 `requestRejection`）。用 :1125 既有的「直调 handler」模式构造 evil 请求（headers 带 `host: evil.example:3080` / `origin: http://evil.example`），fake connection 返回 403 → 断言 `statusCode===403` 且 body 空。**修复前 handler 根本不问 connection，返回 200 → 红**。
 2. **降级矩阵**：(a) webServer 有 + connection 无 → 断言 `routes.length===0` 且恰一行 warn（**修复前 routes.length===1 → 红**）；(b) 双无 → 原断言（:925 一带）不变，红线保持；(c) late 双到齐（复用 :758-762、:809-811 的 late seam）→ 挂载。
 3. **回归**：`requestRejection` 返回 undefined 的合法请求 → 200 + `content-disposition`（沿用 :1125 的文件名不变式断言）。
 4. **真机复验**：重放你实测的三头组合 → 与 `/open-in-app/apps` 同判（403），无 cookie → 401；同源带 cookie → 200 全量 7,487,057 字节。
@@ -174,9 +174,9 @@ if (rejection !== undefined) {
 
 ### (a) 改动点
 
-- [lib/index.js:7334](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L7334)–7336：删角色门，**保留** :7351 的 `pluginCreated` 门与 :7360 的 resume 可用性检查、:7363 确认框、:7379-7408 双重复检——一条不动。
-- 论证：§11.9.1「硬死锁只有一格」（[design 文档:450](D:/DSH-Portable/plugins/dsh-team-link/docs/collab-enhancements-design-2026-09-19.md#L450)）论证的是「coordinator 死必须可救」，从没论证「worker 死不许救活」；对插件自建的死亡 worker，revive（身份不变、roster 不动、信任零改动）严格优于文案里承认的替代路 `retire + set-role`（丢信任拓扑）。授权来源不变（人类点击，§11.9.5），writerGate 不动，`revive` 仍只绑**当前** current——不向「通用 roster 编辑器」移动一寸。
-- **宣传面同批改**（这是 Y1 的教训，verification-log:200 明文写过）：工具描述 [lib/index.js:7605](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L7605)、:7608（「revive 只受理 coordinator」整段）、:7612/:7614 参数文案、诊断行 :7587、README §11.9.4、design doc §11.9.4 附录段。
+- [lib/index.js:7334](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L7334)–7336：删角色门，**保留** :7351 的 `pluginCreated` 门与 :7360 的 resume 可用性检查、:7363 确认框、:7379-7408 双重复检——一条不动。
+- 论证：§11.9.1「硬死锁只有一格」（[design 文档:450](<CHECKOUT>/plugins/dsh-team-link/docs/collab-enhancements-design-2026-09-19.md#L450)）论证的是「coordinator 死必须可救」，从没论证「worker 死不许救活」；对插件自建的死亡 worker，revive（身份不变、roster 不动、信任零改动）严格优于文案里承认的替代路 `retire + set-role`（丢信任拓扑）。授权来源不变（人类点击，§11.9.5），writerGate 不动，`revive` 仍只绑**当前** current——不向「通用 roster 编辑器」移动一寸。
+- **宣传面同批改**（这是 Y1 的教训，verification-log:200 明文写过）：工具描述 [lib/index.js:7605](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L7605)、:7608（「revive 只受理 coordinator」整段）、:7612/:7614 参数文案、诊断行 :7587、README §11.9.4、design doc §11.9.4 附录段。
 
 判据：新夹具「插件自建的死亡 worker 会话（`team-link-<team>-<worker>-<uuid8>`）+ 活 coordinator 发起」→ 确认 → `resume` 收到该 id、审计行 `verb=revive`。**修复前被 :7334 拒 → 红**。负向锁：人类 id 的 worker 仍拒且文案含侧边栏指引（现有 Y3-sym 对称锁 :225 保持绿）。
 
@@ -186,10 +186,10 @@ if (rejection !== undefined) {
 
 ### (c) 改动点
 
-- [lib/index.js:7481](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L7481)–7484 的「0 候选即报错」分支改造。**触发条件建议比题述更准一格**：`candidates.length === 0 || candidates.every(c => team.roles.some(r => r.current === c.session))`——后者覆盖 threat-intel 退化形（唯一活人已坐在 coordinator 格上，改任 worker 给他 = 角色堆叠）。谓词全部从 roster 读出，模型零输入。
+- [lib/index.js:7481](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L7481)–7484 的「0 候选即报错」分支改造。**触发条件建议比题述更准一格**：`candidates.length === 0 || candidates.every(c => team.roles.some(r => r.current === c.session))`——后者覆盖 threat-intel 退化形（唯一活人已坐在 coordinator 格上，改任 worker 给他 = 角色堆叠）。谓词全部从 roster 读出，模型零输入。
 - 能力闸门前置（复用 rotate auto 的 :2774-2776）：无 `agents.create` → fail-closed 报告，**不弹框**。
-- [lib/index.js:7245](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L7245) `askRecoveryCandidates` 的选项列表末位追加「自建继任者（successor=auto 语义：插件铸造 `team-link-<team>-<role>-<uuid8>` 根会话）」——候选仍由插件算、答案仍按标签回读（§11.9.5③ 的结构性性质保持）。
-- 选中后：铸 id（§10.2.2 模板，与 `/team_session`、rotate auto 同源）→ [lib/index.js:7520](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L7520) `rotation.prepare` **逐字**跑（令牌三元组、rotationBackup、freeze 广播一样不跳）→ 审计行 `verb=reappoint, to=<minted>`。
+- [lib/index.js:7245](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L7245) `askRecoveryCandidates` 的选项列表末位追加「自建继任者（successor=auto 语义：插件铸造 `team-link-<team>-<role>-<uuid8>` 根会话）」——候选仍由插件算、答案仍按标签回读（§11.9.5③ 的结构性性质保持）。
+- 选中后：铸 id（§10.2.2 模板，与 `/team_session`、rotate auto 同源）→ [lib/index.js:7520](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L7520) `rotation.prepare` **逐字**跑（令牌三元组、rotationBackup、freeze 广播一样不跳）→ 审计行 `verb=reappoint, to=<minted>`。
 - **交接文档**：successor=auto 的五硬节闸门（:2626）本为「无上下文继任者」设的，恢复自建的继任者同样无上下文——建议由**插件从 roster 事实自动生成**最小五硬节恢复文档（角色、死亡前任 id、信任快照指针），而不是给 recover 加 `handoff` 参数。参数面保持封闭是本仓库的硬纪律。
 
 判据：夹具照 threat-intel roster 原样（coordinator 活、b/c 人类死）→ `reappoint role=b` 弹框含 auto 选项 → 选中 → `agents.create` 被调、`prepare.successor = team-link-threat-intel-b-<uuid8>`、黑板/镜像/版本史三处留痕。**修复前该夹具只能选 coordinator（角色堆叠）或直接报错 → 红**。无 create 夹具 → fail-closed 文案 + 零弹框。限速自动继承（`recoveryRateLimited` :7053 与换届同窗）。
@@ -200,11 +200,11 @@ if (rejection !== undefined) {
 
 ## Q3 侧栏菜单：两段式——短期「零逻辑接缝补丁」，长期「上游 list 型 hole」
 
-先钉死三个事实：slots 只有 single/list/keyed/chain 四种 kind，未声明槽位注册即抛错（[slots README:28/:46](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-slots/README.md#L28)）；ui-workspace 只声明了 directoryFlow 子槽；本机没有该包源码，**改上游 = 给 deepseek-harness 仓提 PR**。team-link 自己的注册形态在 [lib/client.js:1392](D:/DSH-Portable/plugins/dsh-team-link/lib/client.js#L1392)–1398（`ctx.slots.register({name,id,order,locale}, Component)` + `guardedSlot`），现成件在 :92-98（链接/导出 URL）、:119-166（两个按钮）。
+先钉死三个事实：slots 只有 single/list/keyed/chain 四种 kind，未声明槽位注册即抛错（[slots README:28/:46](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-slots/README.md#L28)）；ui-workspace 只声明了 directoryFlow 子槽；本机没有该包源码，**改上游 = 给 deepseek-harness 仓提 PR**。team-link 自己的注册形态在 [lib/client.js:1392](<CHECKOUT>/plugins/dsh-team-link/lib/client.js#L1392)–1398（`ctx.slots.register({name,id,order,locale}, Component)` + `guardedSlot`），现成件在 :92-98（链接/导出 URL）、:119-166（两个按钮）。
 
 ### 短期（本部署内）：10 行「事件接缝」补丁，逻辑零外流
 
-- **补丁内容**（只动 [dsh-client-ui-workspace/lib/client.js:1113](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/cl
+- **补丁内容**（只动 [dsh-client-ui-workspace/lib/client.js:1113](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/cl
 … [reply capped at 8000 chars — the uncapped text is in the minutes' §1.1]
 
 [4] fangzhou-codingplan:kimi-k3 — failed
@@ -320,7 +320,7 @@ if (rejection !== undefined) {
 
 # dsh-team-link v0.3.8 三问评审：整体可实施优化方案
 
-**事实复核（均已读档确认）**：export handler（[lib/index.js:8019](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L8019)–8057）确实零鉴权，`readSession` 任意 id 直出全量事件；open-in-app 正例的围栏在 [dsh-host-open-in-app/lib/index.js:1213](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-host-open-in-app/lib/index.js#L1213)（`inject=["webServer","connection","subprocess"]`）与 :1316-1323（`requestRejection` → 直写状态码）；`requestRejection` 的契约是「Host/Origin 栅栏 + 浏览器登录 cookie，返回状态码或 undefined」（[rpc-host.d.ts:28](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-connection/lib/types/rpc-host.d.ts#L28)–31）。Q2 的两道门（:7334 角色门、:7351 pluginCreated 门）与候选集（:7079-7083、:7481-7484）与题述一致；threat-intel roster 实读确认 b/c 均为 `session-<uuid>` 人类 id。Q3 硬编码确认在 [dsh-client-ui-workspace/lib/client.js:1113](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js#L1113)–1129 / :1186-1191（0.1.6-alpha.2，无 src）。**一个重要勘误**：`D:\DSH-Portable\profile\profiles\web` 不是源码 checkout（无 `packages/`、无 `apps/`，只有 node_modules + profile），所以「上游改法」意味着向 deepseek-harness 仓提 PR，本机无法重建该包。
+**事实复核（均已读档确认）**：export handler（[lib/index.js:8019](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L8019)–8057）确实零鉴权，`readSession` 任意 id 直出全量事件；open-in-app 正例的围栏在 [dsh-host-open-in-app/lib/index.js:1213](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-host-open-in-app/lib/index.js#L1213)（`inject=["webServer","connection","subprocess"]`）与 :1316-1323（`requestRejection` → 直写状态码）；`requestRejection` 的契约是「Host/Origin 栅栏 + 浏览器登录 cookie，返回状态码或 undefined」（[rpc-host.d.ts:28](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-connection/lib/types/rpc-host.d.ts#L28)–31）。Q2 的两道门（:7334 角色门、:7351 pluginCreated 门）与候选集（:7079-7083、:7481-7484）与题述一致；threat-intel roster 实读确认 b/c 均为 `session-<uuid>` 人类 id。Q3 硬编码确认在 [dsh-client-ui-workspace/lib/client.js:1113](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js#L1113)–1129 / :1186-1191（0.1.6-alpha.2，无 src）。**一个重要勘误**：`<CHECKOUT>\profile\profiles\web` 不是源码 checkout（无 `packages/`、无 `apps/`，只有 node_modules + profile），所以「上游改法」意味着向 deepseek-harness 仓提 PR，本机无法重建该包。
 
 **总体顺序**：Q1 先行（安全洞、改动小、独立成commit）→ Q2 的 (a)+(c)（行为面，一批做完文档同步）→ Q3 先提上游 PR、补丁只作为可弃的过渡层。三处都走仓库的「修复前必红 / 修复后全绿」纪律。
 
@@ -332,17 +332,17 @@ if (rejection !== undefined) {
 
 | # | 位置 | 改什么 |
 |---|---|---|
-| 1 | [lib/index.js:8013](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L8013) `mount(target)` | 再读 `const connection = target.get?.("connection")`；新增两个 reason code：`"no-connection"`（webServer 在、connection 不在）与 `"no-rejection"`（`typeof connection.requestRejection !== "function"`）。**这两种情况一律不注册路由**（区别于现在的「能挂就挂」）。 |
-| 2 | [lib/index.js:8022](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L8022) handler 首行 | 逐字镜像 open-in-app :1316-1323：`const rejection = connection.requestRejection(req); if (rejection !== undefined) { res.statusCode = rejection; res.end(); return; }`。顺带补 `req.method !== "GET"` → 405（与 open-in-app 同款）。 |
-| 3 | [lib/index.js:8077](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L8077) | `ctx.inject(["webServer"], …)` 改为 `ctx.inject(["webServer", "connection"], …)`——cordis 的 inject 等全部依赖就绪才回调，天然给出「双到齐才挂」的语义。 |
-| 4 | [lib/index.js:8062](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L8062) `describeMountFailure` + :8074 warn 文案 | 扩两个新 reason 的措辞；warn 明说「路由未挂载（fail-closed），导出工具照常」。 |
-| 5 | 文档同批 | [README.md:815](D:/DSH-Portable/plugins/dsh-team-link/README.md#L815) 的降级表加 `connection` 行并改写 `webServer` 行语义；§9.1.3 注释块（:7986-7996）补一段；CHANGELOG + verification-log。 |
+| 1 | [lib/index.js:8013](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L8013) `mount(target)` | 再读 `const connection = target.get?.("connection")`；新增两个 reason code：`"no-connection"`（webServer 在、connection 不在）与 `"no-rejection"`（`typeof connection.requestRejection !== "function"`）。**这两种情况一律不注册路由**（区别于现在的「能挂就挂」）。 |
+| 2 | [lib/index.js:8022](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L8022) handler 首行 | 逐字镜像 open-in-app :1316-1323：`const rejection = connection.requestRejection(req); if (rejection !== undefined) { res.statusCode = rejection; res.end(); return; }`。顺带补 `req.method !== "GET"` → 405（与 open-in-app 同款）。 |
+| 3 | [lib/index.js:8077](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L8077) | `ctx.inject(["webServer"], …)` 改为 `ctx.inject(["webServer", "connection"], …)`——cordis 的 inject 等全部依赖就绪才回调，天然给出「双到齐才挂」的语义。 |
+| 4 | [lib/index.js:8062](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L8062) `describeMountFailure` + :8074 warn 文案 | 扩两个新 reason 的措辞；warn 明说「路由未挂载（fail-closed），导出工具照常」。 |
+| 5 | 文档同批 | [README.md:815](<CHECKOUT>/plugins/dsh-team-link/README.md#L815) 的降级表加 `connection` 行并改写 `webServer` 行语义；§9.1.3 注释块（:7986-7996）补一段；CHANGELOG + verification-log。 |
 
 关键论证：**这不破红线，反而把红线写得更严**。红线是「服务缺失 → 降级 + 一行 warn + 工具照常」，不是「webServer 在就必须有路由」。降级的锚点本来就是「头部 ⬇ 按钮失效、`team_link_export` 工具可用」——把挂载条件从「有 webServer」收紧为「有 webServer **且** 有可用的信任围栏」，降级面没有扩大半格，只是从「可能无门」变成「宁可不门」。快路径 :8064-8066 的语义也自动变对：root ctx 上两服务齐才挂，否则进入 inject 等待。
 
 ### 判据（修复前必红 / 修复后全绿）
 
-1. **变异红（主断言）**：[host-half.test.mjs:662](D:/DSH-Portable/plugins/dsh-team-link/host-half.test.mjs#L662) `setup()` 增 `connectionService` 参数（默认给可编程 `requestRejection`）。用 :1125 既有的「直调 handler」模式构造 evil 请求（headers 带 `host: evil.example:3080` / `origin: http://evil.example`），fake connection 返回 403 → 断言 `statusCode===403` 且 body 空。**修复前 handler 根本不问 connection，返回 200 → 红**。
+1. **变异红（主断言）**：[host-half.test.mjs:662](<CHECKOUT>/plugins/dsh-team-link/host-half.test.mjs#L662) `setup()` 增 `connectionService` 参数（默认给可编程 `requestRejection`）。用 :1125 既有的「直调 handler」模式构造 evil 请求（headers 带 `host: evil.example:3080` / `origin: http://evil.example`），fake connection 返回 403 → 断言 `statusCode===403` 且 body 空。**修复前 handler 根本不问 connection，返回 200 → 红**。
 2. **降级矩阵**：(a) webServer 有 + connection 无 → 断言 `routes.length===0` 且恰一行 warn（**修复前 routes.length===1 → 红**）；(b) 双无 → 原断言（:925 一带）不变，红线保持；(c) late 双到齐（复用 :758-762、:809-811 的 late seam）→ 挂载。
 3. **回归**：`requestRejection` 返回 undefined 的合法请求 → 200 + `content-disposition`（沿用 :1125 的文件名不变式断言）。
 4. **真机复验**：重放你实测的三头组合 → 与 `/open-in-app/apps` 同判（403），无 cookie → 401；同源带 cookie → 200 全量 7,487,057 字节。
@@ -366,9 +366,9 @@ if (rejection !== undefined) {
 
 ### (a) 改动点
 
-- [lib/index.js:7334](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L7334)–7336：删角色门，**保留** :7351 的 `pluginCreated` 门与 :7360 的 resume 可用性检查、:7363 确认框、:7379-7408 双重复检——一条不动。
-- 论证：§11.9.1「硬死锁只有一格」（[design 文档:450](D:/DSH-Portable/plugins/dsh-team-link/docs/collab-enhancements-design-2026-09-19.md#L450)）论证的是「coordinator 死必须可救」，从没论证「worker 死不许救活」；对插件自建的死亡 worker，revive（身份不变、roster 不动、信任零改动）严格优于文案里承认的替代路 `retire + set-role`（丢信任拓扑）。授权来源不变（人类点击，§11.9.5），writerGate 不动，`revive` 仍只绑**当前** current——不向「通用 roster 编辑器」移动一寸。
-- **宣传面同批改**（这是 Y1 的教训，verification-log:200 明文写过）：工具描述 [lib/index.js:7605](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L7605)、:7608（「revive 只受理 coordinator」整段）、:7612/:7614 参数文案、诊断行 :7587、README §11.9.4、design doc §11.9.4 附录段。
+- [lib/index.js:7334](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L7334)–7336：删角色门，**保留** :7351 的 `pluginCreated` 门与 :7360 的 resume 可用性检查、:7363 确认框、:7379-7408 双重复检——一条不动。
+- 论证：§11.9.1「硬死锁只有一格」（[design 文档:450](<CHECKOUT>/plugins/dsh-team-link/docs/collab-enhancements-design-2026-09-19.md#L450)）论证的是「coordinator 死必须可救」，从没论证「worker 死不许救活」；对插件自建的死亡 worker，revive（身份不变、roster 不动、信任零改动）严格优于文案里承认的替代路 `retire + set-role`（丢信任拓扑）。授权来源不变（人类点击，§11.9.5），writerGate 不动，`revive` 仍只绑**当前** current——不向「通用 roster 编辑器」移动一寸。
+- **宣传面同批改**（这是 Y1 的教训，verification-log:200 明文写过）：工具描述 [lib/index.js:7605](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L7605)、:7608（「revive 只受理 coordinator」整段）、:7612/:7614 参数文案、诊断行 :7587、README §11.9.4、design doc §11.9.4 附录段。
 
 判据：新夹具「插件自建的死亡 worker 会话（`team-link-<team>-<worker>-<uuid8>`）+ 活 coordinator 发起」→ 确认 → `resume` 收到该 id、审计行 `verb=revive`。**修复前被 :7334 拒 → 红**。负向锁：人类 id 的 worker 仍拒且文案含侧边栏指引（现有 Y3-sym 对称锁 :225 保持绿）。
 
@@ -378,10 +378,10 @@ if (rejection !== undefined) {
 
 ### (c) 改动点
 
-- [lib/index.js:7481](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L7481)–7484 的「0 候选即报错」分支改造。**触发条件建议比题述更准一格**：`candidates.length === 0 || candidates.every(c => team.roles.some(r => r.current === c.session))`——后者覆盖 threat-intel 退化形（唯一活人已坐在 coordinator 格上，改任 worker 给他 = 角色堆叠）。谓词全部从 roster 读出，模型零输入。
+- [lib/index.js:7481](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L7481)–7484 的「0 候选即报错」分支改造。**触发条件建议比题述更准一格**：`candidates.length === 0 || candidates.every(c => team.roles.some(r => r.current === c.session))`——后者覆盖 threat-intel 退化形（唯一活人已坐在 coordinator 格上，改任 worker 给他 = 角色堆叠）。谓词全部从 roster 读出，模型零输入。
 - 能力闸门前置（复用 rotate auto 的 :2774-2776）：无 `agents.create` → fail-closed 报告，**不弹框**。
-- [lib/index.js:7245](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L7245) `askRecoveryCandidates` 的选项列表末位追加「自建继任者（successor=auto 语义：插件铸造 `team-link-<team>-<role>-<uuid8>` 根会话）」——候选仍由插件算、答案仍按标签回读（§11.9.5③ 的结构性性质保持）。
-- 选中后：铸 id（§10.2.2 模板，与 `/team_session`、rotate auto 同源）→ [lib/index.js:7520](D:/DSH-Portable/plugins/dsh-team-link/lib/index.js#L7520) `rotation.prepare` **逐字**跑（令牌三元组、rotationBackup、freeze 广播一样不跳）→ 审计行 `verb=reappoint, to=<minted>`。
+- [lib/index.js:7245](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L7245) `askRecoveryCandidates` 的选项列表末位追加「自建继任者（successor=auto 语义：插件铸造 `team-link-<team>-<role>-<uuid8>` 根会话）」——候选仍由插件算、答案仍按标签回读（§11.9.5③ 的结构性性质保持）。
+- 选中后：铸 id（§10.2.2 模板，与 `/team_session`、rotate auto 同源）→ [lib/index.js:7520](<CHECKOUT>/plugins/dsh-team-link/lib/index.js#L7520) `rotation.prepare` **逐字**跑（令牌三元组、rotationBackup、freeze 广播一样不跳）→ 审计行 `verb=reappoint, to=<minted>`。
 - **交接文档**：successor=auto 的五硬节闸门（:2626）本为「无上下文继任者」设的，恢复自建的继任者同样无上下文——建议由**插件从 roster 事实自动生成**最小五硬节恢复文档（角色、死亡前任 id、信任快照指针），而不是给 recover 加 `handoff` 参数。参数面保持封闭是本仓库的硬纪律。
 
 判据：夹具照 threat-intel roster 原样（coordinator 活、b/c 人类死）→ `reappoint role=b` 弹框含 auto 选项 → 选中 → `agents.create` 被调、`prepare.successor = team-link-threat-intel-b-<uuid8>`、黑板/镜像/版本史三处留痕。**修复前该夹具只能选 coordinator（角色堆叠）或直接报错 → 红**。无 create 夹具 → fail-closed 文案 + 零弹框。限速自动继承（`recoveryRateLimited` :7053 与换届同窗）。
@@ -392,11 +392,11 @@ if (rejection !== undefined) {
 
 ## Q3 侧栏菜单：两段式——短期「零逻辑接缝补丁」，长期「上游 list 型 hole」
 
-先钉死三个事实：slots 只有 single/list/keyed/chain 四种 kind，未声明槽位注册即抛错（[slots README:28/:46](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-slots/README.md#L28)）；ui-workspace 只声明了 directoryFlow 子槽；本机没有该包源码，**改上游 = 给 deepseek-harness 仓提 PR**。team-link 自己的注册形态在 [lib/client.js:1392](D:/DSH-Portable/plugins/dsh-team-link/lib/client.js#L1392)–1398（`ctx.slots.register({name,id,order,locale}, Component)` + `guardedSlot`），现成件在 :92-98（链接/导出 URL）、:119-166（两个按钮）。
+先钉死三个事实：slots 只有 single/list/keyed/chain 四种 kind，未声明槽位注册即抛错（[slots README:28/:46](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-slots/README.md#L28)）；ui-workspace 只声明了 directoryFlow 子槽；本机没有该包源码，**改上游 = 给 deepseek-harness 仓提 PR**。team-link 自己的注册形态在 [lib/client.js:1392](<CHECKOUT>/plugins/dsh-team-link/lib/client.js#L1392)–1398（`ctx.slots.register({name,id,order,locale}, Component)` + `guardedSlot`），现成件在 :92-98（链接/导出 URL）、:119-166（两个按钮）。
 
 ### 短期（本部署内）：10 行「事件接缝」补丁，逻辑零外流
 
-- **补丁内容**（只动 [dsh-client-ui-workspace/lib/client.js:1113](D:/DSH-Portable/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js#L1113)–1129 与 :1186-1191 两块）：数组追加 `{id:"team-link-copy", label:"复制会话链接"}` / `{id:"team-link-export", label:"导出会话"}`；onSelect 加两个分支，各只发一个 `window.dispatchEvent(new CustomEvent("dsh-team-link:session-menu", {detail:{action, sessionId: node.id}}))`。
+- **补丁内容**（只动 [dsh-client-ui-workspace/lib/client.js:1113](<CHECKOUT>/profile/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js#L1113)–1129 与 :1186-1191 两块）：数组追加 `{id:"team-link-copy", label:"复制会话链接"}` / `{id:"team-link-export", label:"导出会话"}`；onSelect 加两个分支，各只发一个 `window.dispatchEvent(new CustomEvent("dsh-team-link:session-menu", {detail:{action, sessionId: node.id}}))`。
 - **全部业务逻辑在 team-link**：lib/client.js 的既有 apply 里加一个 window 监听，action=copy → 复用 `dshDeepLink`+`fallbackCopy`；action=export → 复用 `exportUrl` 下载。补丁里没有一行插件逻辑——它的维护面就是那两个字面量数组。
 - **落地形式与保险**：以 diff（patch-package 式）落仓，锁死目标文件版本 `0.1.6-alpha.2` + 内容哈希校验，升级后哈希不匹配就**响亮失败**而不是静默跳过。
 - 判据：client-half.test.mjs 给监听器加纯逻辑测试（构造 CustomEvent → 断言剪贴板 fallback / anchor href）；补丁本身用「重放 :1113 区域字符串包含两个新 id」的形态锁（仓库已有 CRLF 容错形态锁的先例，verification-log:236）。
@@ -406,7 +406,7 @@ if (rejection !== undefined) {
 1. **deepseek-harness `packages/client/ui-workspace/src`**：SessionRow 声明子槽 `workspace.session.menu`（list kind），SlotMap 经 `declare module` augmentation。
 2. **关键设计决策（要在 PR 里说清的那个分叉）**：Menu 原语消费的是**数据数组**（`items` + `onSelect(id)`），组件形 hole 与它不匹配。两条路：**(i)** 给 dsh-client-ui-primitives 的 Menu 加逐项 onSelect/渲染器——动公共原语，改动面大；**(ii)（推荐）** 该 hole 的 entry options 携带受控描述符 `{item:{id, label|localeKey, icon}, onSelect({sessionId,node,row})}`，SessionRow 读 entries 合并进 `sessionMenuItems`、onSelect 优先派发 entry 处理器。这要求 slots 的 KindOptions 为这个 hole 开一个受控字段——「声明即授权」模型要为此背书，属于需要上游设计评审的一步，正是 PR 里该论证的核心。
 3. ui-workspace README 表加一行（对齐 directoryFlow 的写法），版本 alpha.3。
-4. **team-link 侧**：peerDeps + `dsh.client.inject` 增 `@deepseek-ai/dsh-client-ui-workspace`；[lib/client.js:1392](D:/DSH-Portable/plugins/dsh-team-link/lib/client.js#L1392) 附近加两个 `guardedSlot` 注册（`locale:"dsh-team-link"`，label 走本插件词表——补丁方案里做不到的 i18n 这里自然解决）；client-half.test.mjs 断言注册形态；上游版本落地后**删补丁**。
+4. **team-link 侧**：peerDeps + `dsh.client.inject` 增 `@deepseek-ai/dsh-client-ui-workspace`；[lib/client.js:1392](<CHECKOUT>/plugins/dsh-team-link/lib/client.js#L1392) 附近加两个 `guardedSlot` 注册（`locale:"dsh-team-link"`，label 走本插件词表——补丁方案里做不到的 i18n 这里自然解决）；client-half.test.mjs 断言注册形态；上游版本落地后**删补丁**。
 
 ### 「改构建产物」的长期代价（如实清单）
 

@@ -520,7 +520,7 @@ node .test-tmp/s2g-red/client-half.test.mjs   →   assertion total: 259 (failed
 
 ### H 真机复验点 1：对运行中的 3080 重放三条 curl（原始读数）
 
-**方法**：`curl.exe`（Windows 自带），对 `http://127.0.0.1:3080` 逐条重放，每条两种标记（**无 token** / **`Host: evil.example:3080`**；导出那一条另加 `Origin: http://evil.example` + `Sec-Fetch-Site: cross-site`）。会话 id 取一个**真实**会话（`team_link_list_sessions` 读出，`d38e2c6f-8c20-4e5f-a623-d51ce0ee0d3a`）。**读数时间**：2026-09-21 18:41（本机时区）。
+**方法**：`curl.exe`（Windows 自带），对 `http://127.0.0.1:3080` 逐条重放，每条两种标记（**无 token** / **`Host: evil.example:3080`**；导出那一条另加 `Origin: http://evil.example` + `Sec-Fetch-Site: cross-site`）。会话 id 取一个**真实**会话（`team_link_list_sessions` 读出；真实 id 已脱敏）。**读数时间**：2026-09-21 18:41（本机时区）。
 
 | 请求 | 无 token | `Host: evil.example:3080`（导出那条另加跨站标记） |
 |---|---|---|
@@ -533,7 +533,7 @@ node .test-tmp/s2g-red/client-half.test.mjs   →   assertion total: 259 (failed
 ```
 HTTP/1.1 200 OK
 content-type: application/json; charset=utf-8
-content-disposition: attachment; filename="d38e2c6f-8c20-4e5f-a623-d51ce0ee0d3a.json"
+content-disposition: attachment; filename="<session-id>.json"
 
 {"exporter": "dsh-team-link", "exportedAt": "2026-09-21T10:41:51.562Z", "session": { "version": 3, "id": "d38e2c6f-…", …
 （正文事件流 2,713 个 `"type":` 记号；本插件导出的 JSON 顶层键正是 exporter / exportedAt / session / title / eventCount / events）
@@ -563,7 +563,7 @@ GET /team-link/export?session=<真实 id> Host evil.example:3080-> 403 (9 B, bod
 
 **判定**：**真实 id 与 bogus id 同判 403** ⇒ 拒绝发生在任何 `readSession` 之前；**403 = Host/Origin 栅栏、401 = 浏览器鉴权**，与设计 §4.1 的两段语义逐字相符。表体的大小也自洽：9 B / 12 B 分别就是官方 `client-connection` 的 RPC 通道写的 `forbidden` / `unauthorized` 两个词——**同源无 token** 那一行走的正是「栅栏放行 → 鉴权拦下」（401 `unauthorized`），而不是栅栏拒绝。
 
-**复跑核对（eng_coder，2026-09-21 21:37，同一读法）**：上表九行**逐字重现**（含 68 B / 0 B / 9 B 的表体大小、`forbidden` 体文，以及末行的 401）；真实 id 另用 `8fff041d-5c31-4d68-a09f-118c25fd1bf7` 与 `4a95884d-97cb-446a-b512-41ecdf315ff7`（`team_link_list_sessions` 读出）各跑一次，与 `bogus-id` **同判 403（9 B）**。
+**复跑核对（eng_coder，2026-09-21 21:37，同一读法）**：上表九行**逐字重现**（含 68 B / 0 B / 9 B 的表体大小、`forbidden` 体文，以及末行的 401）；真实 id 另取两个（`team_link_list_sessions` 读出；已脱敏）各跑一次，与 `bogus-id` **同判 403（9 B）**。
 
 **仍未闭合的两半（如实记，不粉饰）**：① 该点自身的正路径「**同源带 cookie（已登录浏览器）→ 200 全量**」仍**无读数**（需一次已登录浏览器的下载复验）；② **真机复验点 3** 的收起态 / 标题栏收起态两态仍未在真机核对（无浏览器驱动面，与批次 3、批次 4 同口径留给父侧）。
 
@@ -1174,7 +1174,7 @@ cd $d; node host-half.test.mjs; node client-half.test.mjs
 - 第一行团队名 `dsh-session-link-pro-20260922` ⇒ **带日期默认名真机成立**（§10.2.8.9 ①）；
 - 「确认则」行含 `（将释放并接管原团队）` ⇒ **框内披露成立**（§10.2.8.9 ②）；
 - 成本行 `成本：2 个回合（1 个新会话 ＋ 1 条调用方回执；按各自模型计费）` ⇒ §10.2.8.10 的 N＋1 口径成立；
-- 信任授予那一格里协调者 id 显示 `session-79af8f9b-8a9e-4412-…` ⇒ **真机会话 id 是 44 码点、被 `id: 28` 封顶并留省略号** —— 本档早先记的「真机 28 码点」是**错的**（正确性不受影响：封顶 ⇒ 44 与 28 两具交付串等长），已在 §10.2.8.4 的「判据定档」里更正；
+- 信任授予那一格里协调者 id 显示 `session-79af…`（已脱敏） ⇒ **真机会话 id 是 44 码点、被 `id: 28` 封顶并留省略号** —— 本档早先记的「真机 28 码点」是**错的**（正确性不受影响：封顶 ⇒ 44 与 28 两具交付串等长），已在 §10.2.8.4 的「判据定档」里更正；
 - **框体紧凑、底部「创建 / 取消 / 提交」全在视野内** ⇒ 缺陷 ③ 的「动作可达性」真机验收成立。
 
 **真机复验抓出的一个真问题（已修，属我漏补判据）**：设计档 §10.2.8.10 🟡#7 明确要求「补一具**无任务形态**的框体读数」，**我漏补了**；真机那一次命令恰好落在「无任务 ＋ 释放披露 ＋ 带日期团队名 ＋ 44 码点 id」上 ⇒ **交付串实测 399 码点 > 390**（硬预算 600 未破、6 行未破）。修法**不是放宽判据**：压掉同一张框里的**重复**文案（「- 启动任务：」与「确认则」两行的括号都写「未给正文/task=」，且「改投最小唤醒 / 唤醒不含任务」两行各说一遍 ⇒ **−18**）⇒ **381 ≤ 390**；并**补上缺失的夹具**（U33c 参照 **F/G/H/I**：354 / 370 / 370（44 码点 id 封顶后与 28 码点等长）/ 381）。修后重跑：绿相 `995 (failed: 0)` / `269 (failed: 0)` · 红相 `995 (failed: 34)` · 变异 A／B／C `995 (failed: 1)`／`995 (failed: 1)`／`995 (failed: 1)`。
@@ -1220,8 +1220,8 @@ cd $d; node host-half.test.mjs; node client-half.test.mjs
 
 ```text
 ToolArgsError: invalid arguments: "file" must be one of ["decisions","discipline"]
-    at Object.execute (file:///D:/DSH-Portable/profile/profiles/web/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1._307da6b6f1082125485177be0afab642/node_modules/@deepseek-ai/dsh-tools/lib/index.js:868:37)
-    at file:///D:/DSH-Portable/plugins/dsh-team-link/host-half.test.mjs:2145:36 {
+    at Object.execute (file:///<CHECKOUT>/profile/profiles/web/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1._307da6b6f1082125485177be0afab642/node_modules/@deepseek-ai/dsh-tools/lib/index.js:868:37)
+    at file:///<CHECKOUT>/plugins/dsh-team-link/host-half.test.mjs:2145:36 {
   code: 'INVALID_ARGS',
   violations: [ '"file" must be one of ["decisions","discipline"]' ]
 }
@@ -1495,7 +1495,7 @@ node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
 
 | # | 假设 | 实测结论 |
 | --- | --- | --- |
-| A1 | 宿主 `agentTeams` 服务可 `ctx.get` 到且读面形状可知 —— **2026-09-27 已核**（`DIVERGENCE(8)` D1 实证更正：本节原先记的「本部署仍读不到它」**把真机读反了**） | **① 读面形状已核实**（直读宿主包）：宿主 `TeamService extends Service` → `super(ctx, 'agentTeams')`（`…/dsh-experimental-agent-team/lib/types/index.js:28,46`），读面 = `tryMembership(agent)` / `listMembers(agent)` —— **以活动代理本人为凭据**，没有「按 id 读某一队」的公开面。**② 本部署已装载该组合包 ⇒ 服务已挂载**：活动 profile 是 **desktop**（`DSH_PROFILE=desktop`，`C:\Users\magic\.dsh\profiles\desktop`），其 `dsh.profile.bundles` **含** `@deepseek-ai/dsh-experimental-agent-team-profile`（写入 12:30 早于宿主启动 17:16），四个包也在 `desktop-runtime.json` 的 `sharedPackages` 里；**决定性证据**：本会话日志的系统提示词同时含该工具包的 POLICY 常量与**只由它注册**的 `spawn_teammate` 工具声明，而该工具包 `inject = ["agents","agentTeams","tools","systemPrompt"]` ⇒ `agentTeams` 服务已在运行实例中挂载。⇒ 探针 `available:true`、**U11b 那一支在本部署不会触发、US1 可达**。③ 原证据 `profile/profiles/web/...` 是**便携残留**，不是本部署。**读面仍按分支文案**（服务在场而调用方不是成员 ⇒ 中性首行 + 原因行），**写路径的拒绝分支仍由替身夹具断言**（真机不触发 ≠ 不需要） |
+| A1 | 宿主 `agentTeams` 服务可 `ctx.get` 到且读面形状可知 —— **2026-09-27 已核**（`DIVERGENCE(8)` D1 实证更正：本节原先记的「本部署仍读不到它」**把真机读反了**） | **① 读面形状已核实**（直读宿主包）：宿主 `TeamService extends Service` → `super(ctx, 'agentTeams')`（`…/dsh-experimental-agent-team/lib/types/index.js:28,46`），读面 = `tryMembership(agent)` / `listMembers(agent)` —— **以活动代理本人为凭据**，没有「按 id 读某一队」的公开面。**② 本部署已装载该组合包 ⇒ 服务已挂载**：活动 profile 是 **desktop**（`DSH_PROFILE=desktop`，`<DSH_HOME>\profiles\desktop`），其 `dsh.profile.bundles` **含** `@deepseek-ai/dsh-experimental-agent-team-profile`（写入 12:30 早于宿主启动 17:16），四个包也在 `desktop-runtime.json` 的 `sharedPackages` 里；**决定性证据**：本会话日志的系统提示词同时含该工具包的 POLICY 常量与**只由它注册**的 `spawn_teammate` 工具声明，而该工具包 `inject = ["agents","agentTeams","tools","systemPrompt"]` ⇒ `agentTeams` 服务已在运行实例中挂载。⇒ 探针 `available:true`、**U11b 那一支在本部署不会触发、US1 可达**。③ 原证据 `profile/profiles/web/...` 是**便携残留**，不是本部署。**读面仍按分支文案**（服务在场而调用方不是成员 ⇒ 中性首行 + 原因行），**写路径的拒绝分支仍由替身夹具断言**（真机不触发 ≠ 不需要） |
 | A2 | `userQuestions.ask` 在 `set-mode` 场景可用（既有三处调用形一致） | **成立**：确认框走与既有三处同一个调用形（`questions[].options` + `agent` + `signal`，计时器 ＋ `AbortController` 复用 `ROTATION_CONFIRM_TIMEOUT_MS`）；四条路径各有断言：答「切换」⇒ 落笔 / 答「取消」⇒ 零写入 / 3 分钟超时 ⇒ 零写入 / 无确认服务 ⇒ fail-closed 零写入 |
 | A3 | `normalizeTeams` 的降级留痕方式与既有范式一致 | **成立，但确如设计所料需补一处留痕通道**：`normalizeTeams` 是**纯函数**（导出给测试、被 `normalizePolicy` 每次读取调用），拿不到 `ctx` 也就打不出日志 ⇒ 留痕落在**读面**上，由一张**进程内**表（`TEAM_MODE_DEGRADATIONS`，每次归一化重建）承载 —— 与看门狗去抖同一条纪律（进程内、不持久化），**零新持久状态** |
 | A4 | 当前会话 id 可从调用方上下文取（用于默认 Lead） | **成立**：`agentSessionId(exec)`（`exec.agent.id`）就是默认 Lead 的来源，断言覆盖「落笔的 Lead == 调用方会话 id」。**已知未断言的一条分支**（如实记）：`writer=any` 且执行上下文**没有会话身份**时，省略 `leadSessionId` 会走「请显式给 leadSessionId」的拒绝；该分支有实现、暂无断言（writer=coordinator 时空缺 / 无身份那两条已由既有门断言覆盖） |
@@ -1673,7 +1673,7 @@ node client-half.test.mjs  → ALL PASS / assertion total: 269 (failed: 0)
 
 ### 边界与残留声明
 
-- **本轮未运行任何破坏性命令**（无 `git rebase` / `reset --hard` / `clean -f` / `push --force`）；**未碰部署面**（`profile/profiles/web/...` 与用户目录 `C:\Users\magic\.dsh-plugins\dsh-team-link`）；**未碰 `docs/observability-batch-design-2026-09-26.md`**。
+- **本轮未运行任何破坏性命令**（无 `git rebase` / `reset --hard` / `clean -f` / `push --force`）；**未碰部署面**（`profile/profiles/web/...` 与用户目录 `<USERPROFILE>\.dsh-plugins\dsh-team-link`）；**未碰 `docs/observability-batch-design-2026-09-26.md`**。
 - **工作树零新增残留**：本轮没有产生任何临时文件 / 探针 / 备份（红相是「先写断言、在同一棵树里跑」得到的，不换实现、不隔离夹具目录），套件运行由它自己的 teardown 清掉 `<repo>/.test-tmp-team`。`git status --short` 只列本轮允许的 8 个 `M`；根目录下那些 `.log` 与被忽略的 `.test-tmp-r7pre/` 是**更早轮次**留下的（`.gitignore` 已覆盖），本轮既不产生也不清理它们。
 - **提交哈希 `12f0874`（2026-09-27 由父会话回填）**（本仓纪律：coder 不碰 git 历史）。
 
