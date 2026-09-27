@@ -1997,3 +1997,13 @@ assertion total: 1214 (failed: 7)
 
 **待验（下一次重启后）**：`team_link_roster action=get` 的**首行**应为 `存储：文件 C:\Users\magic\.dsh\team-link\policy.json`，且名册里看得见上述三个团队。
 （每个 store **只读一次**文件 ⇒ 写入后必须重启才生效。）
+
+**迁移后读数（2026-09-27 20:42，重启后实测）**：
+
+- `team_link_roster action=get` **首行**：`存储：文件 C:\Users\magic\.dsh\team-link\policy.json` ✓（三态可核红线生效）
+- 名册：**共 3 个团队** ✓ —— `threat-intel`（3 角色，workspace `D:\workspace\threat-intel`）· `0921-main`（7 角色）· `0922`（2 角色）
+- `team_link_status` 首行同形 ✓，且段①来源行已是 `来源：文件 C:\Users\magic\.dsh\team-link\policy.json 的 teams 键` ✓（分歧审计 🔵#9 的修复在真机成立）
+- **文件后端是活的（不只是读了静态文件）**：`policy.json` 的 mtime 由写入时的 `18:25:36` 变为 `20:42:36`、大小 `30,512 → 31,865` 字节 ⇒ 插件启动后**自己读过也写过**该文件 ✓
+- 启动后文件内容复核：`teams` 仍是那 3 个（12 角色）· `pairs` 34 项 · `rememberTargets` 23 项 · `savedAt` 已被插件刷新（我写入的那个值不再保留，符合 §3.3「每次成功写入刷新」）
+
+**结论**：「团队重启即失忆」这条真机缺陷**闭环** —— 本部署没有可用的 `settings.register()`（`no-register`），状态改由插件自己的文件承载，重启后仍在。
