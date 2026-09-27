@@ -29,14 +29,14 @@
 
 ## 四、部署（改完代码怎么让它生效）
 
-坑：desktop profile 用 pnpm file: 依赖装本插件，pnpm 把整包**拷贝**到
-`<profile>/node_modules/.pnpm/dsh-team-link@file+.../node_modules/dsh-team-link`，**DSH 加载的是那份拷贝**
-—— 所以「改代码 → 重启」不生效，必须刷新拷贝后再重启。
+**接线 = `link:`（junction 直指本仓目录）**：desktop profile 的 `package.json` 写
+`"dsh-team-link": "link:D:/DSH-Portable/plugins/dsh-team-link"`，且 `<profile>/node_modules/dsh-team-link`
+是指向本仓的 junction ⇒ **改完代码重启即生效**，没有拷贝步骤。
 
-    powershell -ExecutionPolicy Bypass -File deploy-desktop.ps1 -DryRun   # 先看
-    powershell -ExecutionPolicy Bypass -File deploy-desktop.ps1           # 克隆 fast-forward + 刷拷贝 + 校验 sha256
+**不要再退回 `file:`**：那是 pnpm 硬拷贝，DSH 加载的是 `.pnpm` 里那份拷贝，「改代码 → 重启」**看着正常但跑旧版**
+（本项目真机踩过：连重启两次没生效，靠 sha256 比对才揪出来）。历史脚本 `deploy-desktop.ps1` 已随该接线退役删除。
 
-脚本正文是纯 ASCII：Windows PowerShell 5.1 会把无 BOM 的 UTF-8 当 GBK 读，中文会乱码甚至语法报错。
+宿主包（`@deepseek-ai/dsh-tools` / `dsh-session-reference`）由宿主提供，不需要在本仓 node_modules 里解析。
 
 ## 五、网络与推送
 

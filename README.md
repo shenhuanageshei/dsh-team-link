@@ -1128,22 +1128,21 @@ dev_install_package { dir: "<你的目录>/dsh-team-link", profile: "web" }
 
 或手动装配：profile `package.json` 的 `dependencies` 写 `"dsh-team-link": "link:<本目录>"`，`dsh.profile.bundles` 数组加入 `"dsh-team-link"`，**重启 shell 生效**（bundle 层不会被 HMR 重载——这一点在 0.3.7 的验证里被实测确认过）。
 
-### 改完代码怎么让它生效（`deploy-desktop.ps1`）
+### 改完代码怎么让它生效（`link:` 装配）
 
-**坑**：profile 用 pnpm 的 `file:` 依赖装本插件时，pnpm 会把整包**拷贝**到 `<profile>\node_modules\.pnpm\dsh-team-link@file+...\node_modules\dsh-team-link`，而 DSH 加载的是那份**拷贝** —— 所以「改代码 → 重启」**不会生效**（看起来正常，跑的还是旧版）。
+**推荐接线 = `link:`（junction 直指工作目录）**：DSH 加载的就是你正在改的那份代码，**改完只需重启**，没有任何拷贝步骤：
 
-一条命令搞定（走本地路径 fast-forward、不依赖网络；带 sha256 核对；`-DryRun` 只打印不落盘）：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy-desktop.ps1 -DryRun   # 先看它要干什么
-powershell -ExecutionPolicy Bypass -File deploy-desktop.ps1           # 真做：克隆更新 + 刷新 pnpm 拷贝 + 校验
+```jsonc
+// profile 的 package.json
+"dependencies": { "dsh-team-link": "link:<本目录的绝对路径>" },
+"dsh.profile.bundles": [ /* … */ "dsh-team-link" ]
 ```
 
-它做四件事：① 从本仓库 fast-forward 部署克隆 → ② 把 `lib/` + `package.json` + `cordis.patch.yml` 覆盖进 pnpm 拷贝 → ③ 校验两边 `lib/index.js` 的 sha256 一致 → ④ 提示重启。路径用 `-Src` / `-Clone` / `-Profile` 覆盖；回滚 = `git -C <克隆> checkout <旧提交>` 后重跑。
+并让 `<profile>\node_modules\dsh-team-link` 是指向 `<本目录>` 的 **junction**（用方式一装出来的 profile 本来就是这样）。
 
-> 想**彻底免掉这一步**就用方式一那种 `link:` 装配（junction）：DSH 直接加载你的工作目录，改完只需重启。前提是该目录备齐三个运行时依赖（`schemastery` / `@deepseek-ai/dsh-tools` / `@deepseek-ai/dsh-session-reference`）—— 纯源码克隆里没有它们。
->
-> 脚本正文刻意写成**纯 ASCII**：Windows PowerShell 5.1 会把无 BOM 的 UTF-8 当 GBK 读，中文会乱码甚至语法报错。
+> **为什么不要用 `file:`**：pnpm 会把整包**拷贝**进 `<profile>\node_modules\.pnpm\dsh-team-link@file+...\node_modules\dsh-team-link`，**DSH 加载的是那份拷贝** —— 于是「改代码 → 重启」**看着一切正常，跑的却是旧版**（真机踩过：连重启两次都没生效，最后靠比对 `lib/index.js` 的 sha256 才揪出来）。若因故必须用 `file:`，改完代码要先刷新那份拷贝（`pnpm install`，或手动覆盖）再重启。
+
+> 两种接线对宿主包的要求相同：`@deepseek-ai/dsh-tools` / `@deepseek-ai/dsh-session-reference` **由宿主提供**，工作目录里只要能解析 `schemastery` 即可。
 
 ### 方式二：npm / bundle 安装
 

@@ -6,6 +6,20 @@
 
 ---
 
+## 未发布 — 部署接线改为 `link:`（2026-09-27）
+
+### ✨ 改了什么
+
+desktop profile 的 `dsh-team-link` 从 pnpm `file:`（整包**拷贝**进 `.pnpm/`，改完代码必须先刷新拷贝再重启）改为 **`link:`**：
+`<profile>/node_modules/dsh-team-link` 成为**指向本仓目录**的 junction，**改完代码只需重启**。
+0.4.0 引入的过渡脚本 `deploy-desktop.ps1` 随本条**退役删除**（它解决的是 `file:` 接线自带的拷贝问题）。
+
+### ✅ 怎么验证
+
+- 切换后经 junction 读 `lib/index.js`：sha256 与本仓**逐字节一致**（`A78C463D…`）。
+- 改动前拍手动配置快照 `20260927-111821-07ef`，并另存 `package.json.bak-20260927-pre-link`；旧 `.pnpm` 拷贝**保留未删**（回滚＝改回 `file:` 后重跑 `pnpm install`）。
+- 安全性核对：三个运行时依赖中 `schemastery` 两侧均为 3.18.0；`@deepseek-ai/dsh-tools` / `dsh-session-reference` 在 desktop profile 中**不存在**（由宿主 asar 提供）⇒ link 不引入版本错配。lockfile 中本就没有 `dsh-team-link` 条目 ⇒ 无「lockfile 与声明不一致」风险。
+
 ## 0.4.0 — 2026-09-27（发布收口：团队任务台账 ＋ 可观测批（A）＋ 形态批（B）＋ 三轮修复轮）
 
 > 本版一次性收口下列 **8 个「未发布」条目**（开发期累积、按时间倒序）；package.json 已 bump 到 **0.4.0**。上一版为 **0.3.10（2026-09-22）**。
