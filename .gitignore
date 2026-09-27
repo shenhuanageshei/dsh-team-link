@@ -3,4 +3,6 @@ node_modules/
 .stage*-block.txt
 *.log
 .DS_Store
+# 团队黑板根（<workspace>/team/<name>/）：本仓被当工作区时会生成
+/team/
 

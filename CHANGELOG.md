@@ -6,6 +6,23 @@
 
 ---
 
+## 未发布 — 部署脚本与真机冒烟（2026-09-27）
+
+### ✨ 新增
+
+**部署脚本 `deploy-desktop.ps1`** —— 解决「改完代码重启却不生效」这个静默坑：profile 用 pnpm `file:` 依赖装本插件时，pnpm 会把整包**拷贝**进 `<profile>\node_modules\.pnpm\dsh-team-link@file+...\node_modules\dsh-team-link`，而 DSH 加载的是那份拷贝。脚本四步：从本仓库（本地路径，不依赖网络）fast-forward 部署克隆 → 覆盖 `lib/` + `package.json` + `cordis.patch.yml` 进 pnpm 拷贝 → 校验两边 `lib/index.js` sha256 一致 → 提示重启；`-DryRun` 只打印、不落盘、不改 git 状态。
+
+### ✅ 怎么验证
+
+- 两个壳各跑一遍：`powershell -File deploy-desktop.ps1 -DryRun`（exit 0，四文件报告 `already in sync`，两侧 sha256 打印一致）；坏路径参数 `-Clone C:\nope` ⇒ 明确报错 + exit 1（fail-fast）。
+- 干跑前后：仓库 `git status` 与部署克隆 HEAD **未变**（零副作用）。
+
+### 📌 同批记录（真机冒烟的两条发现，修复另立条目）
+
+在**运行中的壳**里对台账做写入冒烟（建临时团队 → `plan/claim/done/dispute` 四种行 → 读回派生视图）时，抓到两条**夹具测不出**的问题：① 派生视图的时间戳是 UTC（切 ISO 串）而同屏「读数」是本地时间，**同屏混用两个时基且未标注**（真机差 8 小时）；② `roster.md` 镜像在 `upsert-team` 新建那条路上把 `形态（mode）` / `Lead 会话（leadSessionId）` 渲染成 `undefined`。两条都另立修复条目。
+
+---
+
 ## 未发布 — B 批收尾修复轮（代码评审 R1–R6）（2026-09-27）
 
 > 形态批（B 批）与分歧审计修复轮 `DIVERGENCE(8)` 之后的**收尾修复轮**：只取代码评审 7 条里的 6 条（R1–R6），**R7 仅留档、代码与夹具一字未动**（父侧裁定：接受顺序耦合，理由见验证档的「已知可接受项」）。**不夹带新功能、不扩范围**：A 批设计 §7 与 B 档 §7「明确不做」继续有效；**不动 `docs/observability-batch-design-2026-09-26.md`**；**不碰部署面**。逐条读数与红/负相拆分见 [`docs/verification-log.md`](docs/verification-log.md) 的「B 批收尾修复轮（R1–R6）」一节。
