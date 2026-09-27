@@ -43,3 +43,10 @@
 - GitHub 直连常报 Recv failure: Connection was reset；本机代理可用时按命令临时指定（**不改全局配置**）：
   `git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 push origin main`
 - 部署不依赖 GitHub（走本地路径），推送失败不阻塞交付。
+
+## 六、写文件的纪律（Windows 编码坑，2026-09-27 立）
+
+- **绝不用 Windows PowerShell 5.1 的 `Set-Content` / `Out-File -Encoding utf8` 写配置或源码** —— 它写出来的是**带 BOM** 的 UTF-8（`EF BB BF`）。BOM 会污染 JSON / YAML / 脚本 / git 规则：JSON.parse 可能失败、PowerShell 自己解析脚本报错、git exclude 首行失效。
+- **正确做法**：Node `fs.writeFileSync(p, text, "utf8")`，或 **pwsh 7 的 `-Encoding utf8NoBOM`**（本机未装 pwsh 7 ⇒ 走 Node）。改**仓库内**文件优先用 write / edit 编辑工具，不要用 shell 拼字符串重写整档。
+- **事故（2026-09-27）**：用 `Set-Content -Encoding utf8` 写了 desktop profile 的 `package.json` ⇒ 带 BOM ⇒ 被另一会话发现修复（`link:` 声明本身正确，原样保留）；同日 `.git/info/exclude` 也被这样写进 BOM。
+- **收尾动作**：任何配置文件写完后**回读前 3 字节**确认不是 `EF BB BF`；写 `*.json` 的另要求 `JSON.parse` 通过。
