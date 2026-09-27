@@ -8974,7 +8974,7 @@ check("W7 边界: offset 越界 ⇒ 4xx + 可读的原因（面板会把它显�
 	pnBadPage.status === 400 && typeof pnBadPage.json?.error === "string");
 
 // ===========================================================================
-// C 批 · C3（4 条 🔵 的 ②③④）：快路径归档留痕**条件化** · 「快路径 ＋ fold failed」
+// C 批 · C3（🔵 **登记 4 条 / 本批执行 3 条**，① 已在上一批修完；本段 = ②③④）：快路径归档留痕**条件化** · 「快路径 ＋ fold failed」
 // 新夹具 · `setup()` 形参排版。归属：docs/policy-persistence-design-2026-09-27.md §8。
 // ===========================================================================
 
@@ -9015,6 +9015,28 @@ const c3SetupEnd = c3HostLines.findIndex((line, index) => index >= c3SetupStart 
 const c3SetupSpan = c3SetupStart === -1 || c3SetupEnd === -1 ? [] : c3HostLines.slice(c3SetupStart, c3SetupEnd + 1);
 check("C3-c `setup()` 形参排版: 签名不再压成一整行 —— 形参一行一个（签名区 ≥ 20 行、每行 ≤ 120 字符）",
 	c3SetupSpan.length >= 20 && c3SetupSpan.every((line) => line.length <= 120));
+
+// ===========================================================================
+// C 批分歧审计修复轮（🔵#5）：收敛后的状态词在 `agent === null` 一格是**行为修正**，不是
+// 静默漂移。收敛前那两份各写一份：列表工具写
+// `running ? "▶ 运行中" : agent !== undefined ? "○ 空闲" : "✕ 未运行"` ⇒ `null` 走「○ 空闲」；
+// 状态卡写 `agent === undefined ? "✕ 未运行" : agent.status === …` ⇒ 遇 `null` 直接抛。
+// 收敛后两种「没有这个代理」都判「✕ 未运行」。判据读**真函数**（`__testing.agentStateLabel`，
+// 不抄一份进测试），并把「行为修正」这句标记钉在 `agentStateLabel` 自己的源码块里 ——
+// 否则它只是一句无法复核的散文。
+// ===========================================================================
+const agentStateAt = hostSource.indexOf("function agentStateLabel(agent) {");
+const agentStateBlock = agentStateAt === -1
+	? ""
+	: hostSource.slice(hostSource.lastIndexOf("/**", agentStateAt), hostSource.indexOf("\n}", agentStateAt));
+check("🔵#5 null 判据: 状态词对三种输入逐字 —— 已定义（running / idle）与 `undefined` 两档保持原样，`null` 一档 = 「✕ 未运行」（**行为修正**：旧列表工具那一档写「○ 空闲」、旧状态卡那一格会抛）；且「行为修正」这句标记就落在 `agentStateLabel` 自己的源码块里",
+	typeof __testing.agentStateLabel === "function"
+		&& __testing.agentStateLabel({ status: "running" }) === "▶ 运行中"
+		&& __testing.agentStateLabel({ status: "idle" }) === "○ 空闲"
+		&& __testing.agentStateLabel(undefined) === "✕ 未运行"
+		&& __testing.agentStateLabel(null) === "✕ 未运行"
+		&& agentStateBlock.includes("行为修正")
+		&& agentStateBlock.includes("=== null"));
 
 rmSync(escDir, { recursive: true, force: true });
 rmSync(tmpDir, { recursive: true, force: true });

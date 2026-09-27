@@ -2008,10 +2008,10 @@ assertion total: 1214 (failed: 7)
 
 **结论**：「团队重启即失忆」这条真机缺陷**闭环** —— 本部署没有可用的 `settings.register()`（`no-register`），状态改由插件自己的文件承载，重启后仍在。
 
-## 2026-09-27 C 批：客户端团队面板（跨半边取数通道）＋ 形态可视化 ＋ 3 条 🔵 收尾
+## 2026-09-27 C 批：客户端团队面板（跨半边取数通道）＋ 形态可视化 ＋ 🔵 登记 4 条 / 本批执行 3 条（① 已在上一批修完）
 
 **设计档**：[`docs/client-panel-batch-design-2026-09-27.md`](client-panel-batch-design-2026-09-27.md)（评审 PASS，判据 W1–W9 ＋ C3-a/b/c）。
-**改了哪两个文件**：`lib/index.js`（新增只读路由 `GET /team-link/panel` ＋ 面板载荷构造器 ＋ 三处段体渲染器收敛为一处）· `lib/client.js`（新增面板分区；**本批首次动客户端半边**）。
+**改了哪两个文件**：`lib/index.js`（新增只读路由 `GET /team-link/panel` ＋ 面板载荷构造器 ＋ 六处段体渲染器收敛为一处）· `lib/client.js`（新增面板分区；**本批首次动客户端半边**）。
 
 ### 起点读数（实现前，基线复核）
 
@@ -2040,9 +2040,11 @@ assertion total: 1214 (failed: 7)
 - 绿相：host `1299 (failed: 0)` · client `299 (failed: 0)`。
 - **★ 负相**：同一份种子、`update` 不抛错时**照旧**归档 1 份并留下「折叠存档」那行（本轮只把它挪到折叠成功之后）⇒ C3-b 的「零归档」拒的是「没折叠」，不是「这一段本来就不归档」。
 
-### 三处「一处事实一处渲染」的收敛（本批顺带，防漂移）
+### 六处「一处事实一处渲染」的收敛（本批顺带，防漂移）
 
-`agentStateLabel()` / `sessionFaceLine()` / `teamRoleLines()` / `pendingLines()` / `watchdogLines()` / `tasksDerivedLines()` 从「状态卡 / 列表工具 / team_read 各自一份」收敛为**各一处**：状态卡的 ①②③④ 段与 `team_read` 的派生读数段改成调用它们，输出逐字不变（既有 1264 条断言全绿即证据），团队面板读的是**同一批字节**。
+`agentStateLabel()` / `sessionFaceLine()` / `teamRoleLines()` / `pendingLines()` / `watchdogLines()` / `tasksDerivedLines()` —— **六处** —— 从「状态卡 / 列表工具 / team_read 各自一份」收敛为**各一处**：状态卡的 ①②③④ 段与 `team_read` 的派生读数段改成调用它们，团队面板读的是**同一批字节**（既有 1264 条断言全绿即证据）。
+
+**输出等价性的口径（分歧审计 🔵#5 收窄，2026-09-27 修复轮）**：对 `ctx.agents.get` 实际会产生的输入（已定义 / `undefined`）**逐字不变**；`null` 一档**不是**逐字不变的 —— 旧列表工具写「○ 空闲」（`running ? "▶ 运行中" : agent !== undefined ? "○ 空闲" : "✕ 未运行"`）、旧状态卡那一格直接抛（`agent.status`），收敛后两种「没有这个代理」统一判「✕ 未运行」。这一档是**行为修正**、不是静默漂移：判据 `🔵#5 null 判据`，标记（「行为修正」）落在 `lib/index.js` 的 `agentStateLabel()` 自己的源码块里。
 
 ### 同批文档
 
@@ -2056,3 +2058,50 @@ assertion total: 1214 (failed: 7)
 
 工作树只含本批的可改文件；`git status --short` 的读数由宿主在交付后执行（见交付报告的 check summary 列）。
 
+---
+
+## 2026-09-27 C 批分歧审计修复轮（🔵#2/#3/#4/#5）
+
+**设计档**：[`docs/client-panel-batch-design-2026-09-27.md`](client-panel-batch-design-2026-09-27.md)（🔵 的口径与回填以它为准）。
+**分歧审计的读数**：审计 **0 🔴** / **4 条 🔵**（🔵#2 账本计数 · 🔵#3 「4 条 / 3 条」口径 · 🔵#4 §8 第 2 问未回填 · 🔵#5 `null` 一格的「逐字不变」声称；另有观察 ③ 只登记）。**只收这 4 条，别处一字不动。**
+
+### 起点读数（修复前，实跑）
+
+- `node host-half.test.mjs` → `ALL PASS` / `assertion total: 1299 (failed: 0)`（退出码 0）
+- `node client-half.test.mjs` → `ALL PASS` / `assertion total: 299 (failed: 0)`（退出码 0）
+
+### 红相与绿相（逐条，均为实跑原文）
+
+- **红相（判据先写、实现后到）**：`node host-half.test.mjs` → `1 FAILURE(S)` / `assertion total: 1300 (failed: 1)`（退出码 1），红的恰是 `🔵#5 null 判据`。
+  **如实分解（不冒充红相）**：该条的**行为半**在修复前**已经成立**（`agentStateLabel` 本就含 `null` 分支；旧码见 `git show 2bcf496^:lib/index.js`：列表工具 `running ? "▶ 运行中" : agent !== undefined ? "○ 空闲" : "✕ 未运行"`、状态卡 `agent === undefined ? "✕ 未运行" : agent.status === …`）⇒ 这一半是 **★ 负相**；真红的是另外两半，实测读数 `typeof __testing.agentStateLabel = undefined`（**判据面**缺席）与 `agentStateBlock.includes(行为修正) = false`（**标记**缺席），同一次读数里 `agentStateBlock.includes(=== null) = true`（再次证明行为半本就成立）。
+- **绿相（实现后）**：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1300 (failed: 0)`（退出码 0）；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 299 (failed: 0)`（退出码 0）。
+- **本轮的断言账**：新增 **1** 条宿主断言（`1300 = 1299 + 1`）；客户端套件未动（`299`）。
+
+### 4 条闭环
+
+| # | 审计条目 | 处置（落点） |
+| --- | --- | --- |
+| 🔵#2 | 账本「计数与列表不一致」：「三处」vs 列表里的六个 | **闭环**：标题与正文同一次编辑改成「**六处**」（本档 C 批小节的 `:2014` 与 `:2043` 两处，as-of 本轮；正文并点出六个函数名）。代码侧改写点确为 6 处 |
+| 🔵#3 | 「4 条 🔵」与「3 条 🔵」同批并存 | **闭环**：口径统一为「**登记 4 条 / 本批执行 3 条（① 已在上一批修完）**」—— 设计档标题 / §1 / §5 标题 / §6 / §7.1、README §十 与设计索引行、CHANGELOG（新条目标题 ＋ C 批 ④ 标题）、本节标题同改 |
+| 🔵#4 | 设计 §8 第 2 问仍是问句，而代码已作答 | **闭环**：回填「**面板 = 状态卡的 5（同值）**」＋ 实现取数（`rows.slice(-STATUS_TASKS_TAIL_DEFAULT)`、常量 = 5）与「面板路由不收 `tasksTail`」两句口径；§8 标题改为「两问均已回填」 |
+| 🔵#5 | 「收敛后输出逐字不变」在 `agent === null` 一格不成立 | **闭环**：① 补 null 判据（先红后绿，读数见上）并把「**行为修正**」标记钉在 `agentStateLabel` 源码块里；为读真函数，`__testing` 开放 `agentStateLabel`（纯函数）；② 本节「六处收敛」那段把「输出逐字不变」**收窄**为「对 `ctx.agents.get` 实际会产生的输入（已定义 / `undefined`）逐字不变；`null` 一档由旧码的『○ 空闲』改判为更正确的『✕ 未运行』」，CHANGELOG 同批 |
+
+### 后续项登记（本批不做）
+
+- 审计观察 ③（`tasksTail` 的两种「不可读」只降级到 lines 文本、`present` 仍 `true`、无断言覆盖）与本轮新核实的一条收敛残渣（`lib/index.js` 列表工具里的死局部 `const running = …`，as-of 本轮 `:10826`）—— 两条都写进设计档 **§8.1 后续项登记**，**本批不动**。
+
+### 同批文档
+
+- `docs/client-panel-batch-design-2026-09-27.md`：口径**五处**（标题 / §1 一句话 / §5 标题 / §6 分期 / §7.1）· W8 行的当前读数 · §8 第 2 问回填 · 新增 §8.1；
+- `README.md`：tests 徽章 / 稳定性格 / §十「当前读数」**三处读数** `1299 → 1300`（`1300 = 1264 + 35 + 1`）· 设计索引行口径；
+- `CHANGELOG.md`：新增「C 批分歧审计修复轮」条目 ＋ C 批标题与 ④ 的口径；
+- 本节。
+
+### 本轮未重启、未 commit、未留临时文件
+
+工作树只含本轮的可改文件；`git status --short` 的读数由宿主在交付后执行（见交付报告的 check summary 列）。
+
+
+**⚠ 提交归属更正（2026-09-27，父侧自记）**：提交 `2bcf496` 的消息只写了「§8 三行遗留随 C 批闭合」，但该次用了 `git add -A` ⇒
+**实际一并提交了 C 批实现的 9 个文件**（`lib/index.js` / `lib/client.js` / 两个套件 / README / CHANGELOG / 本账本 / C 批设计档 / hardening 设计档）。
+**以本注记为准**：C 批的实现内容在 `2bcf496`，其后的修复轮内容在紧随的提交里。公开历史按用户裁定（选项 A）**不改写**，故以更正注记代替。
