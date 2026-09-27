@@ -4,6 +4,43 @@
 
 格式：每个版本按 **修了什么 → 为什么 → 怎么验证** 组织。凡涉及行为修复的条目都附**变异验证**证据（修复前必红 / 修复后全绿），这是本仓库的验收文化。
 
+## 未发布 — C 批代码评审修复轮：🟡#1/#2 ＋ 🔵#3/#4/#5/#6（2026-09-27）
+
+> C 批交付**代码评审**（结论 **PASS、零 🔴**；6 条 = 2 🟡 ＋ 4 🔵）的逐条收口。**只闭环这 6 条，不夹带**：改动面 = 2 个实现文件（`lib/index.js` / `lib/client.js`）＋ 2 个套件（新增 **12** 条断言 —— host 6 / client 6）＋ 文档（本文件 / [`docs/verification-log.md`](docs/verification-log.md) / [`docs/client-panel-batch-design-2026-09-27.md`](docs/client-panel-batch-design-2026-09-27.md) §9 / `README.md` 的三处读数 —— 见下「同批文档」）。账本见同档的「C 批代码评审修复轮」一节。
+
+### ✨ 改了什么
+
+**🟡#1 面板的 13 个 `.dshsl-pn-*` 类此前一条 CSS 规则都没有**（正是本仓自己定性的「a class with no rule is appearance by luck, not by contract」，此前为 `.dshsl-st` / `.dshsl-st-label` 补过一次）。
+实际后果不是外观洁癖：台账行与角色行是宿主渲染好的**多空格缩进**字节（`"    " + row` 的台账行、`teamRoleLines` 的四空格角色行），落在没有 `white-space:pre-wrap` 的 `<p>` 上会被浏览器折叠成一句话 ⇒ 直接削弱 R1「一屏可读」。
+**修法**：`lib/client.js` 样式数组末尾补一组 `.dshsl-pn-*` 规则（13 个类各有规则；`.dshsl-pn-line` / `.dshsl-pn-placement` 给 `white-space:pre-wrap`，徽标与段落间距照 `.dshsl-relay*` 的既有做法）＋ **一条源码级对照判据**（`className:` 里出现的每一个 `dshsl-pn` 类都必须能在样式块里按选择器找到规则；两侧集合都要非空，防止「两边都空所以相等」）。徽标**只给一条规则、不按 `data-badge` 的值分色** —— 三态的区别由宿主给的标签文字承担，把宿主那一层的档位词汇写进 `lib/client.js` 会踩 W4 那条源码级代理锁（「客户端自己一个档位词都没有」）。
+
+**🟡#2 「读更多」翻页在第二页起回卷。** 旧实现取 `firstUnread = shown.findIndex(!read.ids.has(id))` —— 第二页（`offset=12`）的第 0 行永远不在本页读窗里 ⇒ `nextOffset = 0` ⇒ 客户端唯一的翻页控件指回第一页（13–24 个会话两页循环；>24 个时第 25 行起在 UI 上不可达，客户端没有手输 offset 的口子）。
+**修法**：`lib/index.js` 的 `sessionSegment.page.nextOffset` 改为「**当前页之后**」—— `windowEnd = 本页 offset + 本页读窗行数`，`windowEnd >= shown.length` 时置 **null**（客户端隐藏按钮）。列表工具段尾那句 `listReadTail` **一字未动**（它是提示不是载荷，且与工具面同源）。
+
+**🔵#3 降级句在分页路径上不准。** `PANEL_LV_WINDOW_NOTE` 写死「本面板只读了前 12 行」，而 `offset=12` 那一页读的是 13–24 行 ⇒ 那句降级句与实况相反。
+**修法**：新增 `panelWindowNote(offset)` —— 第一页逐字复用原常量（第一页字节一个都不动），分页那一页换成点名**本次这一页**的措辞（「本面板本次只读了 12 行，从第 13 行起」）。
+
+**🔵#4 多团队时派生读数失去归属。** `tasksDerivedLines()` 的行原先被顺序拼进 `payload.tasksTail.derived`，**一个团队名都不带**（对照同一段 `- <team>/tasks.md：…` 的三处头）⇒ 两支队伍的「最后主张 / 未消解存疑」在面板上分不出谁是谁。
+**修法**：新增 `teamDerivedLines(teamName, derivedLines)` —— 块首带 `- <team>/tasks.md：` 归属头、续行四空格缩进（与同段台账尾的排版同形）；**行体逐字仍是 `tasksDerivedLines()` 的字节**，面板一个字节都不改写。原有 W6「逐字同形」判据因此**改紧**：剥掉面板自己那一层归属头之后，行体仍必须逐字出现在 `team_read` 的输出里。
+
+**🔵#5 面板行直入 DOM，没过 `wellFormed()`。** 落点行与段行直接 `createElement`，绕过了本仓对**孤立代理对**的整条纪律（§8 字符串安全）—— 卡片、发送行、纯文本行都过，面板不该是新缺口。
+**修法**：面板的**每一个宿主字符串出口**都过 `wellFormed()`：落点行 / 段行 / 档位结论 / 徽标标签 / 台账尾 / 派生行 / 会话行 / 段尾 / 缺段句 / 整页降级句（后两处会回显宿主的 reason / error 字段）。判据用**半对代理**（孤立高代理、孤立低代理各一处）打进八处字节，断言渲染出的**每一段**文本都不含孤立代理项。
+
+**🔵#6 面板子树里缺 React `key`。** 评审点名 5 处（`placement` / `fail` / `loading` / `refresh` / `more`，`lib/client.js` as-of 修复前 `:2214` / `:2216` / `:2218` / `:2220` / `:2228`）。
+**修法**：补齐这 5 处，并**同一缺陷类**余下的 5 处一并补齐（段标题 `h3`、缺段句、档位结论、徽标 `span`、面板根 `div` —— 它们同属数组子节点，React 对每一个都会报「unique key」）⇒ 判据写成「**整棵面板子树 key 完备**」，比点名的 5 处更紧。评审给的 5 处与同一缺陷类的余下 5 处都在交付报告里点名列清，不当作夹带。
+
+### 🧪 怎么验证
+
+- **起点读数（实跑）**：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1300 (failed: 0)`（退出码 0）；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 299 (failed: 0)`（退出码 0）。
+- **红相（判据先写、实现后到，实跑）**：`node host-half.test.mjs` → `5 FAILURE(S)` / `assertion total: 1306 (failed: 5)`（退出码 1）—— 红的是 🟡#2 翻页不回卷 · 🟡#2 ★ 负相末页 · 🔵#3 降级句随页走 · 🔵#4 派生行带团队归属 · 🔵#4 归属头只是加的那一层；`node client-half.test.mjs` → `4 FAILURE(S)` / `assertion total: 305 (failed: 4)`（退出码 1）—— 红的是 🟡#1 类名↔规则 · 🟡#1 `pre-wrap` · 🔵#6 key 完备 · 🔵#5 `wellFormed`。
+  **如实分解（不冒充红相）**：本轮 12 条新判据里 **9 条实测红**，另 **3 条是控制 / 对照项（★ 负相，本就绿）**：🔵#6 的 walker 控制项与 🔵#5 的「没有孤立代理项时逐字原样」对照项在修复前即绿；🟡#2 那条「沿**按钮链**走到第 25 行起」的判据是**实现之后补强**的（首跑红相里它还是旧版「三页读窗并集」形态、首跑即绿），**未取得红相读数，如实标注**。
+- **绿相（实现后，实跑）**：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1306 (failed: 0)`（退出码 0）；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 305 (failed: 0)`（退出码 0）。
+- **本轮的断言账**：host `1306 = 1300 + 6`；client `305 = 299 + 6`。
+- **同批文档**：`docs/verification-log.md`（本轮一节：起点/红/绿读数 ＋ 6 条闭环表 ＋ 同批文档）· `docs/client-panel-batch-design-2026-09-27.md`（W8 行读数 ＋ 新增 §9 本轮一节）· `README.md`（tests 徽章 / 稳定性格 / §十「当前读数」三处读数 `1300 → 1306`、`299 → 305`）· 本文件。
+- **未做（如实登记）**：**未做真机 DOM 冒烟**（🔵#1 / 🔵#5 / 🔵#6 三条里，只有 🔵#1 的「类名 ↔ 规则」是源码级判据、🔵#5 / 🔵#6 判据走的是 stub 树；浏览器里的实际排版与 React「unique key」警告没有实测）；未重启、未 commit、未留临时文件。
+
+---
+
 ## 未发布 — C 批分歧审计修复轮：🔵#2/#3/#4/#5（2026-09-27）
 
 > C 批分歧审计（只读，审计 **0 🔴** / 4 条 🔵）的逐条收口。**只收这 4 条，别处一字不动**：改动面 = **1 条新判据** ＋ `agentStateLabel` 的「行为修正」标记与判据面（`__testing` 导出）＋ 文档四处（计数 / 口径 / 回填 / 声称）。设计档 = [`docs/client-panel-batch-design-2026-09-27.md`](docs/client-panel-batch-design-2026-09-27.md)；账本见 [`docs/verification-log.md`](docs/verification-log.md) 的「C 批分歧审计修复轮」一节。

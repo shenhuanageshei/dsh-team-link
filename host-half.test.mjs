@@ -8912,8 +8912,13 @@ const pnTailSeg = pnSeg(pnCall.json, "tasksTail");
 const pnRawTailRows = (pnTailSeg?.lines ?? []).filter((line) => line.includes("| plan |") || line.includes("| claim |") || line.includes("| done |"));
 check("W6: 台账尾的原始行与 team_read 的原始行逐字同源（同一读法 blackboardLines + 同一批行）",
 	pnRawTailRows.length > 0 && pnRawTailRows.every((line) => pnReadOut.includes(line.trim())));
-check("W6: 派生读数**逐字同形** —— 面板每一行「最后主张 / 未消解存疑」都原样出现在 team_read 的输出里（同一渲染器 renderTaskView）",
-	Array.isArray(pnTailSeg?.derived) && pnTailSeg.derived.length > 0 && pnTailSeg.derived.every((line) => pnReadOut.includes(line)) && pnTailSeg.derived.some((line) => line.includes("最后主张")) && pnTailSeg.derived.some((line) => line.includes("未消解存疑")));
+/** 评审修复轮 🔵#4：面板的派生行**带上了团队归属头**（- <team>/tasks.md： 开场，续行四空格缩进，
+ * 与同一段台账尾的排版同形）—— 这是面板**加的那一层**；剥掉它之后，行体仍必须逐字是宿主渲染器
+ * （tasksDerivedLines / renderTaskView）的字节。这条判据因此比旧版**更紧**：它同时钉住「有归属」
+ * 与「行体没被客户端改写」两件事，而不是把归属当成可以省的装饰。 */
+const pnDerivedBody = (line) => line.replace(/^    /, "").replace(/^- [^\s/]+\/tasks\.md：/, "");
+check("W6: 派生读数**逐字同形** —— 面板每一行「最后主张 / 未消解存疑」剥掉面板自己的团队归属头（- <team>/tasks.md： 与四空格续行缩进）之后，原样出现在 team_read 的输出里（同一渲染器 renderTaskView）",
+	Array.isArray(pnTailSeg?.derived) && pnTailSeg.derived.length > 0 && pnTailSeg.derived.every((line) => pnReadOut.includes(pnDerivedBody(line))) && pnTailSeg.derived.some((line) => line.includes("最后主张")) && pnTailSeg.derived.some((line) => line.includes("未消解存疑")));
 check("W6 ★ 负相（不冒充）: 上面那句不是「因为两边都是空」—— team_read 自己确实给出了这一对措辞，面板给出的「最后主张」行也不止一行",
 	pnReadOut.includes("最后主张") && pnReadOut.includes("未消解存疑") && (pnTailSeg?.derived ?? []).filter((line) => line.includes("最后主张")).length >= 2);
 
@@ -8972,6 +8977,101 @@ check("W7: 翻页只读 —— offset=k 只换一个读窗（第二页读到剩�
 const pnBadPage = await pnCallOn(pnEnv, "?session=session-self&offset=999");
 check("W7 边界: offset 越界 ⇒ 4xx + 可读的原因（面板会把它显示成「面板数据不可用」），而不是静默给一页空数据",
 	pnBadPage.status === 400 && typeof pnBadPage.json?.error === "string");
+
+// ---------------------------------------------------------------------------
+// C 批评审修复轮（🟡#1–#2 · 🔵#3–#4）：**判据先写、实现后到** —— 本段在实现之前整段 FAIL，
+// 红相读数见交付报告。判据名以评审号开头（🟡#n / 🔵#n），红绿两相读的是同一个名字。
+// ---------------------------------------------------------------------------
+
+// 🟡#2 翻页不回卷：「读更多」的语义必须是**当前页之后**。旧实现取「第一个未读行的序号」，
+// 而第 0 行永远不在第二页的读窗里 ⇒ 第二页起 nextOffset 恒等于 0 ⇒ 唯一的翻页控件指回
+// 第一页（13–24 个会话时两页循环；>24 个时第 25 行起在 UI 上不可达 —— 客户端没有手输 offset）。
+// 夹具：36 个会话面行 ⇒ 三页（12 + 12 + 12），逐页读一遍；而且第二、三页里**仍有未读行**
+// —— 这正是 🔵#3 的病灶面（分页那一页上「未读」句自称「前 12 行」与实况相反）。
+const PN_PG_COUNT = 36;
+const pnPgIds = Array.from({ length: PN_PG_COUNT }, (_, index) => "session-pg-" + String(index).padStart(2, "0"));
+const pnPgEnv = pnSetup({
+	sessions: pnPgIds.map((id, index) => ({ header: { id, createdAt: 2000 + index, cwd: PN_WS }, live: true, persisted: true })),
+	eventsBySession: Object.fromEntries(pnPgIds.map((id) => [id, pnRecentEvents(id)])),
+	extraAgents: pnPgIds.map((id) => ({ id, status: "idle", cwd: PN_WS })),
+});
+await waitForChain(pnPgEnv, 1);
+const pnPgOf = (call) => (pnSeg(call.json, "sessions")?.page ?? null);
+/** 本页**真的读过**的行（读窗内的行才有 verdict；窗口外的行显示为未读）。 */
+const pnReadIdsOf = (call) => pnRowsOf(call).filter((row) => pnRowHas(row, "verdict=")).map((row) => row.id);
+const pnUnreadLinesOf = (call) => pnRowsOf(call).filter((row) => pnRowHas(row, "未读")).flatMap((row) => row.lines.filter((line) => line.includes("未读")));
+const pnPg1 = await pnCallOn(pnPgEnv, "?session=session-self");
+const pnPg2 = await pnCallOn(pnPgEnv, "?session=session-self&offset=12");
+const pnPg3 = await pnCallOn(pnPgEnv, "?session=session-self&offset=24");
+const pnPgSeen = [...new Set([...pnReadIdsOf(pnPg1), ...pnReadIdsOf(pnPg2), ...pnReadIdsOf(pnPg3)])];
+check("🟡#2 翻页不回卷: 三页 fixture（36 个会话面行）逐页声明的 nextOffset 一律**向前**（默认窗 → 12 → 24），末页为 null（按钮消失）—— 旧实现的「第一个未读行」在第二页起恒为 0（第 0 行不在本页读窗内）",
+	pnPgOf(pnPg1)?.nextOffset === 12 && pnPgOf(pnPg2)?.nextOffset === 24 && pnPgOf(pnPg3)?.nextOffset === null
+		&& pnPgOf(pnPg1)?.offset === 0 && pnPgOf(pnPg2)?.offset === 12 && pnPgOf(pnPg3)?.offset === 24);
+// ★ 覆盖缺口（**补强于实现之后，无红相读数，如实标注**）：上面那条与下面这条都读 nextOffset，
+// 但这一条走的是**客户端唯一那条翻页路径** —— 从第一页起只按 nextOffset 一路点下去（客户端
+// 没有手输 offset 的口），于是「第 25 行起在 UI 上可达」这句话才是真的对上界面的。
+const pnWalkOffsets = [];
+const pnWalkReadIds = [...pnReadIdsOf(pnPg1)];
+let pnWalkNext = pnPgOf(pnPg1)?.nextOffset ?? null;
+while (pnWalkNext !== null && pnWalkOffsets.length < 6) {
+	pnWalkOffsets.push(pnWalkNext);
+	const pnWalkCall = await pnCallOn(pnPgEnv, "?session=session-self&offset=" + String(pnWalkNext));
+	pnWalkReadIds.push(...pnReadIdsOf(pnWalkCall));
+	pnWalkNext = pnPgOf(pnWalkCall)?.nextOffset ?? null;
+}
+const pnWalkUnique = [...new Set(pnWalkReadIds)];
+check("🟡#2 第 25 行起可达（沿**按钮链**走，★ 无红相读数：补强于实现之后）: 从第一页起只按 nextOffset 走下去 ⇒ 恰好 12 → 24 → null（步数有界、次次严格前进、不自环），沿途读窗的并集正是全部 36 行 —— 旧实现第二步就回到 0（自环）⇒ 第 25 行起在 UI 上不可达",
+	pnWalkOffsets.join(",") === "12,24" && pnWalkNext === null && pnWalkUnique.length === PN_PG_COUNT
+		&& pnReadIdsOf(pnPg1).length === 12 && pnReadIdsOf(pnPg2).length === 12 && pnReadIdsOf(pnPg3).length === 12
+		&& pnWalkUnique.every((id) => pnPgIds.includes(id)) && pnPgSeen.length === pnWalkUnique.length);
+check("🟡#2 ★ 负相（控制项：两页 fixture 的末页也隐藏按钮）: 16 行那条老夹具（pnEnv）上第一页给 offset=12、第二页（上一段已取过的 pnPage2）nextOffset=null（末页不再指回任何一页）",
+	pnSeg(pnCall.json, "sessions")?.page?.nextOffset === 12 && pnSeg(pnPage2.json, "sessions")?.page?.nextOffset === null);
+
+// 🔵#3 降级句在分页路径上不准：「未读（本面板只读了前 12 行）」在 offset=12 那一页是**假话**
+// （本次读的是 13–24 行）。分页那一页必须换中性措辞，点名**本次这一页**。
+check("🔵#3 降级句随页走: 第一页的 24 行未读句仍是「只读了前 12 行」；第二页同样有 24 行未读（第 1–12 与第 25–36 行），但那句话点名**本次这一页**（本次只读了 12 行），不再自称前 12 行 —— 旧实现两页同一句，分页路径上那句话与实况相反",
+	pnUnreadLinesOf(pnPg1).length === 24 && pnUnreadLinesOf(pnPg1).every((line) => line.includes("只读了前 12 行"))
+		&& pnUnreadLinesOf(pnPg2).length === 24 && pnUnreadLinesOf(pnPg2).every((line) => line.includes("本次只读了") && !line.includes("只读了前 12 行")));
+
+// 🔵#4 派生读数在多团队时失去归属：tasksDerivedLines() 的行原先被顺序拼进同一个数组，一个
+// 团队名都不带（对照同一段里那三处 `- <team>/tasks.md：…` 头）⇒ 两支队伍的「最后主张 /
+// 未消解存疑」在面板上分不出谁是谁。夹具：两支队伍、各自一份 tasks.md。
+const PN_WS2 = path.join(PN_TMP, "ws2");
+const PN_TEAM2 = "panel-team-2";
+const pnTwoSeedDoc = policyDoc({ teams: [pnTeamRow, { ...pnTeamRow, name: PN_TEAM2, workspace: PN_WS2 }], pairs: pnSeedDoc.policy.pairs });
+const pnTwoEnv = pnSetup({ policySeed: pnTwoSeedDoc });
+await waitForChain(pnTwoEnv, 1);
+const pnTasks2Path = path.join(PN_WS2, "team", PN_TEAM2, "tasks.md");
+await mkdir(path.dirname(pnTasks2Path), { recursive: true });
+await writeFile(pnTasks2Path, [
+	"1 | 2026-09-26T21:10:02.123Z | session-lead | plan | t-1 | 另一队的事",
+	"2 | 2026-09-26T21:12:44.001Z | session-wb | claim | t-1 | 接了",
+	"3 | 2026-09-26T21:13:00.000Z | session-wb | done | t-1 | 收工",
+].join("\n") + "\n", "utf8");
+const pnTwoCall = await pnCallOn(pnTwoEnv, "?session=session-self");
+const pnTwoDerived = pnSeg(pnTwoCall.json, "tasksTail")?.derived ?? [];
+const pnAttrHead = (teamName) => "- " + teamName + "/tasks.md：";
+const pnTwoReadOut = String(await pnTwoEnv.tool("team_link_team_read").execute({ team: PN_TEAM2 }, execFor(pnTwoEnv.senderAgent)));
+check("🔵#4 派生行带团队归属: 多团队（两支）时每支队伍的派生块都以自己的「- <team>/tasks.md：」头开场（与同一段台账尾的三处头同形）—— 旧实现把两支队伍的派生行顺序拼进同一个数组、一个团队名都不带，面板上分不出谁是谁",
+	pnTwoDerived.filter((line) => line.startsWith(pnAttrHead(PN_TEAM))).length === 1
+		&& pnTwoDerived.filter((line) => line.startsWith(pnAttrHead(PN_TEAM2))).length === 1
+		&& pnTwoDerived.filter((line) => line.includes("最后主张")).length >= 2);
+/** 一支队伍在派生数组里的**整块**（归属头 + 其后的四空格续行；下一个归属头即块尾）。 */
+const pnDerivedBlockOf = (derived, teamName) => {
+	const head = pnAttrHead(teamName);
+	const start = derived.findIndex((line) => line.startsWith(head));
+	if (start === -1) return [];
+	const block = [derived[start]];
+	for (let index = start + 1; index < derived.length; index += 1) {
+		if (derived[index].startsWith("- ")) break;
+		block.push(derived[index]);
+	}
+	return block;
+};
+const pnTwoBlock = pnDerivedBlockOf(pnTwoDerived, PN_TEAM2);
+check("🔵#4 归属头只是**面板加的那一层**: 第二队那一块的行体（归属头之后的每一行）逐字出现在**它自己**那份 team_read 输出里 —— 行体仍是宿主渲染器 renderTaskView 的字节，面板一个字节都没改写；且那一块确实带「最后主张」（不是空块）",
+	pnTwoBlock.length >= 2 && pnTwoBlock.slice(1).some((line) => line.includes("最后主张"))
+		&& pnTwoBlock.slice(1).every((line) => pnTwoReadOut.includes(pnDerivedBody(line))));
 
 // ===========================================================================
 // C 批 · C3（🔵 **登记 4 条 / 本批执行 3 条**，① 已在上一批修完；本段 = ②③④）：快路径归档留痕**条件化** · 「快路径 ＋ fold failed」

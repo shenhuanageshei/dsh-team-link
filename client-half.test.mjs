@@ -1638,7 +1638,8 @@ const panelPayload = {
 	tasksTail: {
 		present: true,
 		lines: ["- panel-team/tasks.md：共 7 行，显示 5 条 · baseHash=deadbeefdeadbeef（仅供参考/审计：tasks 只追加、不接受 baseHash 参数）", "    6 | 2026-09-26T21:30:00.000Z | session-lead | plan | t-8 | 第二件事"],
-		derived: ["（派生读数：扫描最近 500 行；逐任务给「最后主张」与「未消解存疑」——是读数，不是裁决）", "- t-7 · 4 行 · 最后主张 done（2026-09-26 21:19 · session-wb）· ⚠ 未消解存疑 1 条"],
+		// 🔵#4 起宿主的派生行带**团队归属头**（`- <team>/tasks.md：` 开场 + 四空格续行）：夹具照实回填。
+		derived: ["- panel-team/tasks.md：（派生读数：扫描最近 500 行；逐任务给「最后主张」与「未消解存疑」——是读数，不是裁决）", "    - t-7 · 4 行 · 最后主张 done（2026-09-26 21:19 · session-wb）· ⚠ 未消解存疑 1 条"],
 	},
 	sessions: {
 		present: true,
@@ -1817,6 +1818,68 @@ if (panelSurfacePresent) {
 	// --- 面板与既有列表的面共存（回归锁） ------------------------------------------
 	check("§4.3 零回归（面板同批）: 会话列表、搜索、范围切换与空态句一字未变",
 		treeAllByClass(pnReadyTree, "dshsl-st-row").length === 2 && treeText(treeByClass(pnReadyTree, "dshsl-st-count")) === fill(tZh("sessionToolsCount"), "count", 2) && treeByClass(pnReadyTree, "dshsl-st-search") !== null && treeByClass(pnReadyTree, "dshsl-st-range") !== null);
+	// --- 评审修复轮 🟡#1：面板类名 ↔ 样式规则（一条类名没有规则 = 靠运气长得对） --------
+	const pnCssText = String(styleTags[0].textContent);
+	const pnCodeClasses = new Set([...SOURCE.matchAll(/className:\s*"([^"]+)"/g)].flatMap((match) => match[1].split(/\s+/)).filter((name) => name.indexOf("dshsl-pn") === 0));
+	const pnRuleClasses = new Set([...pnCssText.matchAll(/\.(dshsl-pn[a-z0-9-]*)/g)].map((match) => match[1]));
+	const pnUnstyledClasses = [...pnCodeClasses].filter((name) => !pnRuleClasses.has(name)).sort();
+	check("🟡#1 面板类名 ↔ 规则: 每一个 dshsl-pn 类都能在样式块里找到规则（此前 13 个类一条规则都没有 —— 正是本文件 :92-100 自己定性的「a class with no rule is appearance by luck, not by contract」的第二个实例），且两侧集合都非空（抽取器真的能区分，不是「两边都空所以相等」）",
+		pnCodeClasses.size >= 13 && pnRuleClasses.size >= 13 && pnUnstyledClasses.length === 0);
+	check("🟡#1 台账行/落点行保留缩进: .dshsl-pn-line 与 .dshsl-pn-placement 都给了 white-space:pre-wrap（宿主渲染好的四空格缩进不会被 <p> 折叠掉），徽标与段落间距照 .dshsl-relay* 的既有做法给",
+		/\.dshsl-pn-line\{[^}]*white-space:pre-wrap/.test(pnCssText) && /\.dshsl-pn-placement\{[^}]*white-space:pre-wrap/.test(pnCssText) && /\.dshsl-pn-badge\{[^}]*border-radius/.test(pnCssText));
+
+	// --- 评审修复轮 🔵#6：面板子树的数组子节点 key 完备 -----------------------------
+	const panelElementNodes = (tree, out = []) => {
+		if (tree === null || tree === undefined || typeof tree !== "object") return out;
+		if (Array.isArray(tree)) { for (const child of tree) panelElementNodes(child, out); return out; }
+		if (typeof tree.type === "string") out.push(tree);
+		if (tree.children !== undefined) panelElementNodes(tree.children, out);
+		return out;
+	};
+	const keylessPanelNodes = (tree) => panelElementNodes(tree).filter((node) => node.props === undefined || node.props.key === undefined);
+	const pnLoadingDialogTree = flatten(mount(makeSessionToolsDialog(scene(popularList, NO_WORKSPACES), primitivesStub), { t: tZh, onClose() {}, panel: { phase: "loading" }, onRefresh() {}, onPage() {} }).tree);
+	const pnFailDialogTree = flatten(mount(makeSessionToolsDialog(scene(popularList, NO_WORKSPACES), primitivesStub), { t: tZh, onClose() {}, panel: { phase: "error", reason: "宿主 API 不可用" }, onRefresh() {}, onPage() {} }).tree);
+	check("🔵#6 React key: 面板子树里**每一个**元素都带 key（评审点名 5 处：placement / fail / loading / refresh / more；同一缺陷类在同一棵子树里实为 10 处 —— 段标题 h3、缺段句、档位结论、徽标 span 与面板根 div 同属数组子节点）",
+		keylessPanelNodes(treeByClass(pnReadyTree, "dshsl-pn")).length === 0
+			&& keylessPanelNodes(treeByClass(pnFailDialogTree, "dshsl-pn")).length === 0
+			&& keylessPanelNodes(treeByClass(pnLoadingDialogTree, "dshsl-pn")).length === 0);
+	check("🔵#6 ★ 负相（控制项：这个 walker 真的数得出缺 key 的节点）: 手工造一个无 key 的数组子节点 ⇒ 被数出来（不是「walker 什么都不数所以恒绿」）",
+		keylessPanelNodes({ type: "p", props: { className: "dshsl-pn-line" }, children: [] }).length === 1
+			&& keylessPanelNodes({ type: "p", props: { className: "dshsl-pn-line", key: "l0" }, children: [] }).length === 0);
+
+	// --- 评审修复轮 🔵#5：面板行直入 DOM 也要过 wellFormed（§8 字符串安全） ----------
+	const LONE_HIGH = "\uD800";
+	const LONE_LOW = "\uDC00";
+	const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+	const treeStrings = (tree) => {
+		if (typeof tree === "string") return [tree];
+		if (tree === null || tree === undefined || typeof tree !== "object") return [];
+		if (Array.isArray(tree)) return tree.flatMap(treeStrings);
+		return tree.children === undefined ? [] : treeStrings(tree.children);
+	};
+	/** 宿主给的每一段字节里都塞一个**半对代理**（孤立高代理 / 孤立低代理各一处）：落点行、段行、
+	 * 档位结论、徽标标签、台账尾、派生行、会话行与段尾各一处 ⇒ 面板的每一个字符串出口都被验到。 */
+	const pnLonePayload = {
+		...panelPayload,
+		placementLine: "存储：设置服务（team-link 命名空间）" + LONE_HIGH,
+		form: { ...panelPayload.form, conclusion: "档位结论：" + LONE_LOW + "档" },
+		teams: { present: true, lines: ["- 团队 " + LONE_HIGH + " 行"] },
+		watchdogs: { present: false, lines: [], unavailable: { reason: "看门狗段读取失败：" + LONE_HIGH } },
+		tasksTail: { present: true, lines: ["台账 " + LONE_HIGH + " 行"], derived: ["派生 " + LONE_LOW + " 行"] },
+		sessions: {
+			...panelPayload.sessions,
+			rows: [{ id: "session-pn-00", badge: { state: "sessions", label: "多会话" + LONE_HIGH }, lines: ["- session-pn-00 " + LONE_LOW, "活性：verdict=ok"] }],
+			tail: ["读窗 " + LONE_HIGH],
+		},
+	};
+	const pnLoneTree = flatten(mount(makeSessionToolsDialog(scene(popularList, NO_WORKSPACES), primitivesStub), { t: tZh, onClose() {}, panel: { phase: "ready", payload: pnLonePayload }, onRefresh() {}, onPage() {} }).tree);
+	const pnLoneText = treeStrings(pnLoneTree).join("|");
+	check("🔵#5 wellFormed: 面板渲染出的**每一段**文本都不含孤立代理项（宿主在落点行 / 段行 / 档位结论 / 徽标标签 / 台账尾 / 派生行 / 会话行 / 段尾八处各给了一个半对代理；缺段句那条降级路径的 reason 里也塞了一个）",
+		LONE_SURROGATE_RE.test(LONE_HIGH) && !LONE_SURROGATE_RE.test(pnLoneText) && pnLoneText.includes("\uFFFD")
+			&& treeText(treeByClass(pnLoneTree, "dshsl-pn-placement")) === "存储：设置服务（team-link 命名空间）\uFFFD");
+	check("🔵#5 对照（不冒充）: 没有孤立代理项的响应逐字原样渲染 —— 上面的修复没有把正常字节也改掉",
+		treeText(treeByClass(pnReadyTree, "dshsl-pn-placement")) === panelPayload.placementLine && !pnLoneText.includes("\uD800") && !pnLoneText.includes("\uDC00"));
+
 	windowStub.fetch = undefined;
 }
 

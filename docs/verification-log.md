@@ -2105,3 +2105,60 @@ assertion total: 1214 (failed: 7)
 **⚠ 提交归属更正（2026-09-27，父侧自记）**：提交 `2bcf496` 的消息只写了「§8 三行遗留随 C 批闭合」，但该次用了 `git add -A` ⇒
 **实际一并提交了 C 批实现的 9 个文件**（`lib/index.js` / `lib/client.js` / 两个套件 / README / CHANGELOG / 本账本 / C 批设计档 / hardening 设计档）。
 **以本注记为准**：C 批的实现内容在 `2bcf496`，其后的修复轮内容在紧随的提交里。公开历史按用户裁定（选项 A）**不改写**，故以更正注记代替。
+
+---
+
+## 2026-09-27 C 批代码评审修复轮（🟡#1/#2 ＋ 🔵#3/#4/#5/#6）
+
+**设计档**：[`docs/client-panel-batch-design-2026-09-27.md`](client-panel-batch-design-2026-09-27.md) §9（本轮口径与闭环表以它为准）。
+**评审读数**：C 批交付**代码评审 PASS、零 🔴**；6 条 = **2 🟡 ＋ 4 🔵**。**只闭环这 6 条，不夹带**；改动面 = `lib/index.js` / `lib/client.js` / `host-half.test.mjs` / `client-half.test.mjs` ＋ 文档四处。
+
+### 起点读数（修复前，实跑）
+
+- `node host-half.test.mjs` → `ALL PASS` / `assertion total: 1300 (failed: 0)`（退出码 0）
+- `node client-half.test.mjs` → `ALL PASS` / `assertion total: 299 (failed: 0)`（退出码 0）
+
+### 红相与绿相（实跑原文）
+
+- **红相（判据先写、实现后到）**：`node host-half.test.mjs` → `5 FAILURE(S)` / `assertion total: 1306 (failed: 5)`（退出码 1），红的五条 = `🟡#2 翻页不回卷` · `🟡#2 ★ 负相（两页夹具末页）` · `🔵#3 降级句随页走` · `🔵#4 派生行带团队归属` · `🔵#4 归属头只是面板加的那一层`。
+  `node client-half.test.mjs` → `4 FAILURE(S)` / `assertion total: 305 (failed: 4)`（退出码 1），红的四条 = `🟡#1 面板类名 ↔ 规则` · `🟡#1 台账行/落点行保留缩进` · `🔵#6 React key` · `🔵#5 wellFormed`。
+  **如实分解（不冒充红相）**：本轮 12 条新判据里 **9 条实测红**；另 **2 条是控制 / 对照项（★ 负相，修复前即绿）** —— `🔵#6 ★ 负相（walker 数得出缺 key 的节点）` 与 `🔵#5 对照（没有孤立代理项的响应逐字原样渲染）`。第 3 条不红的判据如实标注：`🟡#2 第 25 行起可达（沿**按钮链**走）` 是**实现之后补强**的形态（首跑红相里它还是旧版「三页读窗并集」写法、首跑即绿），**未取得红相读数**，不冒充。
+- **绿相（实现后）**：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1306 (failed: 0)`（退出码 0）；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 305 (failed: 0)`（退出码 0）。
+- **本轮的断言账**：host 新增 **6**（`1306 = 1300 + 6`）；client 新增 **6**（`305 = 299 + 6`）。
+
+### 6 条闭环
+
+| # | 评审条目（带行号，as-of 修复前） | 处置（落点） |
+| --- | --- | --- |
+| 🟡#1 | 面板 13 个 `.dshsl-pn-*` 类一条 CSS 规则都没有（`lib/client.js:57-131` 只定义了别的类；`:92-100` 自己定性过这个缺陷类别） | **闭环**：样式数组末尾补 13 个类的规则（`.dshsl-pn-line` / `.dshsl-pn-placement` 带 `white-space:pre-wrap`；徽标、段落间距照 `.dshsl-relay*`）＋ 源码级对照判据（`className:` 里的每个 `dshsl-pn` 类都要按选择器找得到规则；两侧集合非空）。徽标**一条规则、不按 `data-badge` 分色**（不重复宿主档位词汇，避免踩 W4 源码级代理锁） |
+| 🟡#2 | `lib/index.js:11365-11371` 的 `firstUnread` 让第二页起 `nextOffset=0`（翻页回卷；>24 个会话时第 25 行起 UI 不可达） | **闭环**：改「当前页之后」——`windowEnd = 本页 offset + 本页读窗行数`，`>= shown.length` 时 `null`（客户端隐藏按钮）；`firstUnread` 这行删除（`listReadTail` 自带它的提示句，一字未动）。判据：三页逐页前进 12 → 24 → null、**沿按钮链**走完 36 行、两页夹具末页也隐藏 |
+| 🔵#3 | `lib/index.js:147` 降级句写死「前 12 行」，分页时读的是 13–24 行 | **闭环**：新增 `panelWindowNote(offset)`（第一页字节不变；分页页说「本面板本次只读了 12 行，从第 13 行起」）＋ 判据（第一页 24 行未读句仍是旧措辞；第二页 24 行未读句改成点名本次这一页） |
+| 🔵#4 | `lib/index.js:11317` 各团队派生行顺序拼接、不带团队归属 | **闭环**：新增 `teamDerivedLines(teamName, derivedLines)`（块首 `- <team>/tasks.md：` ＋ 续行四空格；行体逐字仍是 `tasksDerivedLines()` 的字节）＋ 两条判据（两支队伍各有自己的归属头；第二队那一块的行体逐字出现在**它自己**那份 `team_read` 输出里）。W6 判据同步改紧：剥掉归属头后逐字同源 |
+| 🔵#5 | `lib/client.js:2187` / `:2214` 把宿主字节直接 `createElement`，未过 `wellFormed()`（`:312`） | **闭环**：面板每一个宿主字符串出口都过 `wellFormed()`（落点行 / 段行 / 档位结论 / 徽标标签 / 台账尾 / 派生行 / 会话行 / 段尾 / 缺段句 / 整页降级句）＋ 判据（八处各塞一个半对代理，渲染出的每一段文本都不含孤立代理项）＋ 对照项（无代理项时逐字原样） |
+| 🔵#6 | `:2214` / `:2216` / `:2218` / `:2220` / `:2228` 五处 `push` 缺 React `key` | **闭环**：补齐这 5 处；**同一缺陷类余下 5 处一并补齐**（段标题 `h3` / 缺段句 / 档位结论 / 徽标 `span` / 面板根 `div`）⇒ 判据写成「整棵面板子树 key 完备」（比点名的 5 处更紧）＋ walker 控制项。评审点名的 5 处与同类余下 5 处在交付报告里点名列清 |
+
+### 未做（如实登记）
+
+- **真机 DOM 冒烟**：本轮三条里的 🔵#1 是**源码级**判据（类名↔规则）；🔵#5 / 🔵#6 读的是 stub 树 —— 浏览器里的实际排版（`pre-wrap` 下的缩进对齐、徽标圆角）与 React 的「unique key」警告**没有实测**。
+- **不新增翻页导航**：只修回卷；「上一页 / 页码」属于交互设计，不在评审 6 条内（登记在设计档 §9.4）。
+- 未重启进程、未 commit、未留临时文件；工作树只含本轮可改文件，`git status --short` 由宿主在交付后执行。
+
+### 同批文档
+
+- `docs/client-panel-batch-design-2026-09-27.md`：**W8 行**读数（host `1300 → 1306` / client `299 → 305`）· 新增 **§9**（六条闭环表 / 三条口径 / 判据与读数 / §9.4 登记）；
+- `README.md`：tests 徽章 / 稳定性格 / §十「当前读数」**三处**读数 `1300 → 1306`、`299 → 305`（**本批唯一一处越出「可改文件清单」的改动，事由是读数失准，已在交付报告里点名**）；
+- `CHANGELOG.md`：新增「C 批代码评审修复轮」条目；
+- 本节。
+
+## 2026-09-27 C 批交付评审修复轮：作业 failed，父侧代验（诚实记账）
+
+- **作业结局**：`eng-dsh-7`（C 批交付评审 6 条修复轮）= **failed（error）**，落盘报告为**空壳**（`Partial output:` 为空 ⇒ 无崩因、无红相读数）。
+- **父侧代验（我实跑，命令与原文）**：
+  - `node --check lib/index.js` / `lib/client.js` → exit 0
+  - `node host-half.test.mjs` → `ALL PASS` / `assertion total: 1306 (failed: 0)`（exit 0）
+  - `node client-half.test.mjs` → `ALL PASS` / `assertion total: 305 (failed: 0)`（exit 0）
+  - 基线 1300 / 299 ⇒ **+6 / +6**（新增断言：host 7 / client 6）
+- **6 条落地核对**（源码级）：`.dshsl-pn-*` 规则 **14 条** ＋ `pre-wrap` ×10 · 翻页算法重写（含旧缺陷注释 ＋ `sessionSegment.page`）· `PANEL_LV_WINDOW_NOTE` 新措辞 · `teamDerivedLines(team.name, …)`（派生行带团队归属）· `wellFormed` ×30 · 16 处带 `key`。
+- **断言分量（父侧读源码核）**：类名↔规则那条自带「**两侧集合都非空**（不是两边都空所以相等）」的空转守卫；`key` 那条带 **★负相 walker**（证明它真数得出缺 key 的节点）；`wellFormed` 那条在**八处**各塞一个半对代理项 ＋ 一条「正常字节不被改掉」的对照。
+- **诚实缺口**：本轮的「**修复前必红**」读数随作业失败**丢失**（未做单点变异取证）；**评审第 2 轮**因 `DeepSeek Messages transport failed` 未完成（按纪律不重试；用户授权后补跑**一次**）。
+- **保险**：`refs/wip/cbatch-fix-20260927` = `4ba403c`（`git stash create`，不碰工作树）。
