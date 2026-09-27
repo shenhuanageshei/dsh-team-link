@@ -1980,3 +1980,20 @@ assertion total: 1214 (failed: 7)
 - `docs/policy-persistence-design-2026-09-27.md`：§3.4 新 bullet（`fold failed` 不回写 ＋ 盖戳判据收紧）；§4 两条新判据行 ＋ 红相账本补第 2 轮（4 红 ＋ 3 ★ 负相）与第 3 轮（2 红）；§5 host-half 影响面补第 2/3 轮（含本轮新加的 `settingsUpdateThrows` 夹具把手与 h1 竞速修复一句）；
 - `README.md`：tests 徽章 `1262 → 1264`、Agent Teams 对照表稳定性一格（附本轮红相）、§十「当前读数」`1262 → 1264`（三处读数同批）；
 - `CHANGELOG.md`：新增「代码评审第 3 轮」条目（修了什么 → 怎么验证 → 同批同步的面）。
+
+## 2026-09-27 真机迁移：把宿主配置里的历史团队导入文件后端
+
+**背景**：本部署 `ctx.get("settings")` 拿得到对象但**没有 `register()`**（落点行的原因码 = `no-register`，见本轮改造的「可核落点行」），
+所以插件走「未挂载」路径，状态落 `<DSH_HOME>/team-link/policy.json`。宿主的 `cordis.patch.yml` 里存着历史 `team-link.config`（**11 个团队**），本轮把**真团队**导入新落点。
+
+**命令**（一次性手工动作；**代码侧永不读宿主配置**）：Node + `yaml` 解析 `<profile>/cordis.patch.yml` → 取 `team-link.config` → 写 `<DSH_HOME>/team-link/policy.json`（`{schema:1, savedAt, foldedAt:null, policy:{八键}}`）。
+
+**读数（迁移写入时，2026-09-27 18:2x）**：
+
+- **导入**：`threat-intel`（3 角色）· `0921-main`（**7 角色**：coordinator/main/proposals/ops/memory/worker/verifier）· `0922`（2 角色）⇒ 合计 **12 个角色**
+- **跳过**（probe / 自测残渣；**源文件原样保留**，随时可补导）：`h1-probe` · `v038-probe` · `v038d-probe` · `dsh-session-link-pro` · `probe-n3` · `rm-probe-20260922` · `rm-release-20260922` · `dsh-session-link-pro-20260922`
+- **其它键原样保留**：`rememberTargets` 23 项 · `pairs` **34 项** · `pendingCreates`/`trustedSenders`/`watchdogs` 各 0
+- **文件**：`C:\Users\magic\.dsh\team-link\policy.json` · 30,512 字节 · 前 3 字节 `7b 20`（**无 BOM**，Node `fs.writeFileSync`）· `JSON.parse` ✓ · 中文 note 完好（**用 Node 读 UTF-8**，避免 PowerShell 的 GBK 乱码被固化进 JSON）
+
+**待验（下一次重启后）**：`team_link_roster action=get` 的**首行**应为 `存储：文件 C:\Users\magic\.dsh\team-link\policy.json`，且名册里看得见上述三个团队。
+（每个 store **只读一次**文件 ⇒ 写入后必须重启才生效。）
