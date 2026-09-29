@@ -5,7 +5,7 @@
 > 原名 `dsh-session-link-pro`（0.2.4 及之前），**GitHub 仓库已于 2026-09-18 改名为 `dsh-team-link`**（旧地址由 GitHub 自动重定向）。历史会话日志里的旧工具名 `session_link_pro_*` 与消息 id 前缀 `slp-` 保持原样——它们是取证链，不做回写。
 
 [![tests](https://img.shields.io/badge/tests-1306%20%2B%20305%20assertions-brightgreen)](#十测试)
-[![version](https://img.shields.io/badge/version-0.4.0-blue)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.4.1-blue)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
 Fork 自 [PwnKY/dsh-session-link](https://github.com/PwnKY/dsh-session-link)——深链复制、`/s/<id>` 打开器与深链上下文注入保留自上游；本仓库在其上长出了完整的多会话协作层。
@@ -577,7 +577,7 @@ flowchart TD
 | 服务缺失 | `sessions` / `workspaces` / `uiWorkspace`（以及 seed 模块的 `Modal`）缺任一项 ⇒ **入口不注册 + 一行 warn**，绝不渲染一个点了没反应的假按钮；其余面（深链、消息卡片、头部按钮）照常 |
 | 键盘与无障碍 | Tab 进入、Enter/Space 打开；关闭（Esc / 关闭按钮 / 成功打开）**把焦点还给入口**；动作按钮带独立无障碍名（含会话标题）；尊重 `prefers-reduced-motion` |
 | 边界 | 只做「看 / 复制 / 导出 / 打开」——**不做**会话写操作（改名 / 分叉 / 归档），不加右键菜单，不动会话行内菜单 |
-| **团队面板分区**（C 批，**未发布**） | 同一个弹窗里、会话列表**之后**的一个**只读**分区（**不新造 Modal、不新造入口** —— 宿主 Modal 有独占交互契约，侧栏入口已经在且不与对话抢焦点）。取数走**只读路由** `GET /team-link/panel`（与导出路由**同一道栅栏**：`connection.requestRejection` ⇒ 无 token 401 / Host-Origin 不符 403 / 仅 GET / 非 GET 405）。六段：**落点行** → 团队与角色 → 换届 pending（token 掩码）→ 看门狗 → 台账尾（末 N 行 ＋ 「最后主张 / 未消解存疑」派生读数）→ 会话面/读窗（**未读行显示为未读** ＋ **只读**翻页）。**一次渲染 = 一次路由调用**（与工具面同一个「≤12 次面读」不变量），**只在打开 / 手动刷新时拉，不轮询**（无定时器）。**降级**：整条路由不可用 ⇒ 面板照常打开并显示「⚠ 面板数据不可用：<原因>」；单段取不到 ⇒ 该段显示「⚠ 本段不可用：<原因>」。**渲染归属**：落点行三态、台账派生读数、活性 verdict 都由**宿主渲染好整串**，客户端只显示不重算（「同源」由构造保证） |
+| **团队面板分区**（C 批，**0.4.1 起**） | 同一个弹窗里、会话列表**之后**的一个**只读**分区（**不新造 Modal、不新造入口** —— 宿主 Modal 有独占交互契约，侧栏入口已经在且不与对话抢焦点）。取数走**只读路由** `GET /team-link/panel`（与导出路由**同一道栅栏**：`connection.requestRejection` ⇒ 无 token 401 / Host-Origin 不符 403 / 仅 GET / 非 GET 405）。六段：**落点行** → 团队与角色 → 换届 pending（token 掩码）→ 看门狗 → 台账尾（末 N 行 ＋ 「最后主张 / 未消解存疑」派生读数）→ 会话面/读窗（**未读行显示为未读** ＋ **只读**翻页）。**一次渲染 = 一次路由调用**（与工具面同一个「≤12 次面读」不变量），**只在打开 / 手动刷新时拉，不轮询**（无定时器）。**降级**：整条路由不可用 ⇒ 面板照常打开并显示「⚠ 面板数据不可用：<原因>」；单段取不到 ⇒ 该段显示「⚠ 本段不可用：<原因>」。**渲染归属**：落点行三态、台账派生读数、活性 verdict 都由**宿主渲染好整串**，客户端只显示不重算（「同源」由构造保证） |
 
 **已知限制**：
 
@@ -1119,6 +1119,17 @@ settings **从一开始就已在场**时同理：命名空间若还是空的，�
 
 ## 九、安装
 
+### 宿主版本支持（先读这一节）
+
+| DSH 宿主版本 | 状态 | 建议 |
+| --- | --- | --- |
+| **≥ 0.2.0-rc.1** | ✅ **本版实测通过**（2026-09-29 真机：0.2.0-rc.1 桌面版加载成功 · 10 个 `team_link_*` 工具在场 · `team_link_status` 实调返回完整状态卡） | 用 **0.4.1** 及以后 |
+| 0.1.0-rc.6 – 0.1.7-rc.x | ⚠️ peer 区间**仍声明支持**（`^0.1.x` 两个历史分支未撤，装得上），但**本版含 0.4.0 之后累积的 10 个条目、实现相对 0.4.0 有实质改动**（`lib/index.js` ＋ `lib/client.js` 合计 **1188 增 / 70 删**；`lib/index.js` 的 sha256 `071f3269…` → `860d51d7…`），而**本轮只在 0.2.0-rc.1 上实测** | 保守起见留在 **0.4.0** |
+
+**低于 v0.2.0-rc.1 的使用者：请使用 `0.4.0` 版**（见 [`CHANGELOG.md`](CHANGELOG.md) 的 `0.4.0 — 2026-09-27` 一节）。本版（0.4.1）的 peer 区间虽然保留着 `^0.1.x` 分支、在 0.1.x 上仍然装得上，但 0.4.1 的实现相对 0.4.0 有实质改动，而本轮**只**在 0.2.0-rc.1 上实测过 ⇒ 老宿主上我们不背书。
+
+**为什么这张表是硬约束、不是建议**：DSH **0.2.0-rc.1 起**，加载器在挂载任何插件**之前**先跑一道兼容性闸门——对 bundle 的 `peerDependencies` 里**每一个** `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 条目做 `semver.satisfies(运行时版本, 区间, { includePrerelease: true })`，**任一条不满足就把整个 bundle 静默丢弃**（只往宿主 stderr 打一行，GUI 里毫无提示，症状就是「插件的工具凭空消失」）。机制细节见下面「[依赖声明：宿主包一律走 peerDependencies](#依赖声明宿主包一律走-peerdependencies)」一节。
+
 ### 方式一：本地目录 + 热装配（开发常用）
 
 依赖通过 junction 复用 DSH 检出目录的 `node_modules`（免下载）：
@@ -1169,7 +1180,9 @@ dev_install_package { dir: "<你的目录>/dsh-team-link", profile: "web" }
 
 `@deepseek-ai/dsh-session-reference`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/dsh-client-locale`、`@deepseek-ai/dsh-client-ui-conversation`、`@deepseek-ai/dsh-client-ui-workspace`、`@deepseek-ai/dsh-api-session-controller`、`@deepseek-ai/dsh-api-workspace-controller`、`@deepseek-ai/cordis` 都由 shell 提供，因此声明为 **peerDependencies**（**八项**）——纪律一句话：**凡进 `dsh.client.inject` 的宿主包，一律同时进 `peerDependencies`**（`dsh.client.inject` 的五项逐个都在上面这份名单里；shell 的 seed 模块 `dsh-client-ui-primitives` 两边都不进，理由见本节末）。只有与 shell 无身份耦合的纯库 `schemastery` 留在 `dependencies`。写成 `dependencies` 会在全新安装时拉进**第二份**同一个包（版本还可能落后于 shell）。
 
-版本区间写成 `^0.1.0-rc.6 || ^0.1.5-rc.1` 而不是单个 `^0.1.0-rc.6`：npm 的 semver 规定「预发布版本只有在区间里存在**同一 major.minor.patch** 的预发布比较符时才算满足」，所以 `^0.1.0-rc.6`（乃至 `*`）都匹配不到 `0.1.5-rc.1`——区间写窄了会在 0.1.5 上误报 unmet peer，甚至触发自动安装第二份。
+版本区间写成 `^0.1.0-rc.6 || ^0.1.5-rc.1 || ^0.2.0-rc.1` 而不是单个 `^0.1.0-rc.6`：npm 的 semver 规定「预发布版本只有在区间里存在**同一 major.minor.patch** 的预发布比较符时才算满足」，所以 `^0.1.0-rc.6`（乃至 `*`）都匹配不到 `0.1.5-rc.1`——区间写窄了会在 0.1.5 上误报 unmet peer，甚至触发自动安装第二份。
+
+**这份区间同时是「能不能装上」的开关（DSH 0.2.0-rc.1 起，2026-09-29 实测）**：加载器在挂载任何插件**之前**先跑一道兼容性闸门，对 bundle 里**每一个** `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` peer 做 `semver.satisfies(运行时版本, 区间, { includePrerelease: true })`——**任一条不满足就把整个 bundle 静默丢弃**：只往宿主 stderr 打一行，GUI 里毫无提示，症状就是「插件的工具凭空消失」。运行时版本取 `@deepseek-ai/dsh-app-boot/package.json` 的 `version`（**不是**桌面壳自己的版本号）。桌面版自动升到 0.2.0-rc.1 当天，本插件就因为区间停在 `^0.1.x` 被整个跳过（`^0.1.5-rc.1` 展开是 `>=0.1.5-rc.1 <0.2.0`，不含 `0.2.0-rc.1`）。⇒ **每次宿主小版本换代（0.1 → 0.2 → …）都必须复核这份区间**，否则升级即静默下线。
 
 ### 依赖的宿主服务
 
@@ -1227,7 +1240,7 @@ node client-half.test.mjs   # 浏览器半边：卡片渲染 / 降级路径 / �
 | [`docs/team-mode-batch-design-2026-09-26.md`](docs/team-mode-batch-design-2026-09-26.md) | **形态批（B 批，2026-09-26）**：团队**形态**字段（`mode` / `leadSessionId`，只落在 settings）· `team_link_roster action=set-mode`（**第五个封闭动词**：宿主探测 + 双重门 + Lead 校验与默认 + decisions 恰好一行 + 幂等）· 读面**形态段**（形态 + Lead + 成员名册投影 + 完整能力矩阵 + 形态诊断行；roster get 与状态卡 ⑦ 段同源）· **teammate 交卷提示**（提示式、不阻断）；判据 U1–U14 + U11b，§8 的假设 A1–A4 逐条实测，读数见 [`docs/verification-log.md`](docs/verification-log.md) |
 | [`docs/team-upgrade-research-2026-09-17.md`](docs/team-upgrade-research-2026-09-17.md) | 调研：一次 16+ 小时真实多会话联调的复盘，与升级提案（**其 §5 已被设计取代**，以设计文档为准） |
 | [`docs/consult-minutes/`](docs/consult-minutes/) | 多模型会诊纪要（含裁定层：逐条采纳/不采纳与理由、分歧父侧裁定、教训、不可验清单） |
-| [`docs/verification-log.md`](docs/verification-log.md) | **验证账本**（证据，不是说明书）：0.3.1 → 0.3.10（未发布） 逐轮的红相/绿相读数、审计变异矩阵、以及每次真机验证的原始取证（含 0.3.7 那次「静默失效一整天」的完整调试历程） |
+| [`docs/verification-log.md`](docs/verification-log.md) | **验证账本**（证据，不是说明书）：0.3.1 → 0.4.1 逐轮的红相/绿相读数、审计变异矩阵、以及每次真机验证的原始取证（含 0.3.7 那次「静默失效一整天」的完整调试历程） |
 
 ---
 

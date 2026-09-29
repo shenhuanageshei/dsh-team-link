@@ -4,7 +4,33 @@
 
 格式：每个版本按 **修了什么 → 为什么 → 怎么验证** 组织。凡涉及行为修复的条目都附**变异验证**证据（修复前必红 / 修复后全绿），这是本仓库的验收文化。
 
-## 未发布 — C 批代码评审修复轮：🟡#1/#2 ＋ 🔵#3/#4/#5/#6（2026-09-27）
+## 0.4.1 — 2026-09-29（发布收口：DSH 0.2.0-rc.1 兼容性闸门 ＋ 部署接线改 `link:` ＋ 策略持久化自持化 ＋ C 批客户端团队面板与形态可视化 ＋ 六轮代码评审/分歧审计修复）
+
+> 本版一次性收口下列 **10 个「未发布」条目**（开发期累积、按时间倒序）；package.json 已 bump 到 **0.4.1**。上一版为 **0.4.0（2026-09-27）**。
+>
+> **宿主版本支持**：本版声明并实测 **DSH 0.2.0-rc.1**；peer 区间同时保留 `^0.1.0-rc.6 || ^0.1.5-rc.1` 两个历史分支（累加，不撤），故 0.1.x 宿主**仍能通过闸门**——但本版实现相对 0.4.0 有实质改动，而**只在 0.2.0-rc.1 上实测过**。支持矩阵与「低于 0.2.0-rc.1 怎么办」见 [`README.md`](README.md) 的「宿主版本支持」一节。
+
+### DSH 0.2.0-rc.1 兼容性闸门：peer 区间补 `^0.2.0-rc.1`（2026-09-29）
+
+> 桌面版 2026-09-29 自动升级到 **0.2.0-rc.1**，本插件当天**整个没被加载**：工具凭空消失、插件页零提示。根因不在插件代码，而在 `package.json` 的 peer 区间没跟上宿主换代。**改动面 = 1 个清单文件（`package.json`）＋ 文档（本文件 / [`docs/verification-log.md`](docs/verification-log.md) / `README.md` 依赖声明一节）；实现文件零改动。** 账本见同档的「2026-09-29 DSH 0.2.0-rc.1 兼容性闸门」一节。
+
+### ✨ 改了什么
+
+`package.json` 里 7 个 `@deepseek-ai/dsh-*` peer 的区间由 `^0.1.0-rc.6 || ^0.1.5-rc.1` 补为 `^0.1.0-rc.6 || ^0.1.5-rc.1 || ^0.2.0-rc.1`。`@deepseek-ai/cordis` **不动**：0.2.0-rc.1 里是 4.0.4，仍满足 `^4.0.1`，且闸门只查 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 名下的 peer。
+
+**为什么是「整个没加载」而不是「报个 peer 警告」**：`dsh-desktop-host` 启动时用 `loadProfileDirectory()` 对 `dsh.profile.bundles` 里每个包跑 `@deepseek-ai/dsh-app-boot` 的 `evaluatePluginCompatibility()`；任一条 `@deepseek-ai/dsh*` peer 不满足 `semver.satisfies(运行时版本, 区间, { includePrerelease: true })` 就 `throw`，被同文件的 `catch` 吞掉后推入 `skippedBundles` ⇒ **该 bundle 的 patch 层完全不参与组合**（`layers.push` 在闸门之后），`cordis.patch.yml` 那条 `- id: team-link` 于是指向一个从未存在的 entry。这个跳过只经 `reportSkippedBundles()` 往宿主 stderr 打一行，而桌面壳只把宿主 stderr 留在内存里（64 KiB 环形缓冲），**仅在宿主异常退出时**才随崩溃报告落盘 ⇒ 用户侧零提示。
+
+### 🧪 怎么验证
+
+- **修复前（闸门复刻，实跑）**：逐字复刻 `@deepseek-ai/dsh-app-boot/lib/index.js` 的 `evaluatePluginCompatibility()`，运行时版本取 app-boot 自己的 `0.2.0-rc.1`，semver 用 profile 那份 —— `dsh-team-link@0.4.0` 落在 **SKIPPED**，理由 `peerDependencies {"@deepseek-ai/dsh-tools":"^0.1.0-rc.6 || ^0.1.5-rc.1", …}`（7 条）。
+- **修复后（同一脚本，实跑）**：`dsh-team-link` 移到 **PASSED**；SKIPPED 由 **14 → 10**（其中 1 个是本条，另 3 个是 `dsh-better-sidebar` 0.24.1 / `dsh-config-manager` 0.1.66 / `dshmarket` 1.66.5 在本轮期间各自更新到 0.2.0 就绪版，与本条无关）。
+- **semver 判据本身**：`semver.satisfies('0.1.7-rc.2', '^0.1.0-rc.6 || ^0.1.5-rc.1', { includePrerelease: true })` → `true`（所以旧宿主上一直是好的）；同一区间对 `'0.2.0-rc.1'` → `false`。
+- **套件（实跑）**：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1306 (failed: 0)`（退出码 0）；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 305 (failed: 0)`（退出码 0）。**断言总数不变**（本轮不新增断言，故 README §十 的两处读数不动）。
+- **0.2.0-rc.1 上的兼容性复核（静态，逐项对源码行）**：四项硬注入服务全在 —— `tools`（`dsh-tools/lib/index.js:2704`；`register()` `:2878`）· `sessionQuery`（`dsh-session-query/lib/index.js:1046`；`listSessions` `:1070` / `readSession` `:1079` / `filterSessions` `:1094` / `readTitleSnapshots` `:1127` / `readSurface` `:1166`）· `sessionReferenceResolver`（`dsh-session-reference/lib/index.js:440`；`prepare(agent, content, references, signal)` `:606`，与调用点逐字同形）· `agents`（`dsh-agent/lib/index.js:332`；`create` `:451` / `resume` `:464` / `get` `:594` / `list` `:612` / `roots` `:621`）；晚挂服务同样在场（`settings` / `goals` / `webServer` / `connection` ＋ `requestRejection` / `workspaceRegistry` / `systemPrompt` / `agentDefaultModel`）；过滤描述符形状未变（`case "id": filter.values.includes(record.header.id)`，`dsh-session-query/lib/index.js:753`）。
+- **真机读数（重启后，实调 —— 本节唯一一处非静态证据）**：DSH 以 0.2.0-rc.1 重启后，只读工具 `team_link_status` 成功返回整张状态卡（读数时点 **2026-09-29 15:01:24**）：**首行**是三态之一的 `存储：文件 C:\Users\huangchaowen\.dsh\team-link\policy.json`，名册读回 `threat-intel` 的 3 个角色（coordinator / worker-a / worker-b，与 2026-09-28 01:04 的登记一致），形态段读出 `形态=sessions`，宿主 `agentTeams` 投影可读 ⇒ **工具面回归 = 修复生效**（bundle 被跳过时工具根本不在表里，调不到）。
+- **未做（如实登记）**：未 commit、未留临时文件；**客户端半边（侧栏团队面板）未做真机 DOM 冒烟** —— 本次验到的是宿主工具面。
+
+### C 批代码评审修复轮：🟡#1/#2 ＋ 🔵#3/#4/#5/#6（2026-09-27）
 
 > C 批交付**代码评审**（结论 **PASS、零 🔴**；6 条 = 2 🟡 ＋ 4 🔵）的逐条收口。**只闭环这 6 条，不夹带**：改动面 = 2 个实现文件（`lib/index.js` / `lib/client.js`）＋ 2 个套件（新增 **12** 条断言 —— host 6 / client 6）＋ 文档（本文件 / [`docs/verification-log.md`](docs/verification-log.md) / [`docs/client-panel-batch-design-2026-09-27.md`](docs/client-panel-batch-design-2026-09-27.md) §9 / `README.md` 的三处读数 —— 见下「同批文档」）。账本见同档的「C 批代码评审修复轮」一节。
 
@@ -41,7 +67,7 @@
 
 ---
 
-## 未发布 — C 批分歧审计修复轮：🔵#2/#3/#4/#5（2026-09-27）
+### C 批分歧审计修复轮：🔵#2/#3/#4/#5（2026-09-27）
 
 > C 批分歧审计（只读，审计 **0 🔴** / 4 条 🔵）的逐条收口。**只收这 4 条，别处一字不动**：改动面 = **1 条新判据** ＋ `agentStateLabel` 的「行为修正」标记与判据面（`__testing` 导出）＋ 文档四处（计数 / 口径 / 回填 / 声称）。设计档 = [`docs/client-panel-batch-design-2026-09-27.md`](docs/client-panel-batch-design-2026-09-27.md)；账本见 [`docs/verification-log.md`](docs/verification-log.md) 的「C 批分歧审计修复轮」一节。
 
@@ -69,7 +95,7 @@
 
 ---
 
-## 未发布 — C 批：客户端团队面板（跨半边取数通道）＋ 形态可视化 ＋ 🔵 登记 4 条 / 本批执行 3 条（① 已在上一批修完）（2026-09-27）
+### C 批：客户端团队面板（跨半边取数通道）＋ 形态可视化 ＋ 🔵 登记 4 条 / 本批执行 3 条（① 已在上一批修完）（2026-09-27）
 
 > 设计档 = [`docs/client-panel-batch-design-2026-09-27.md`](docs/client-panel-batch-design-2026-09-27.md)（评审 PASS）。本批**首次动客户端半边**：判据 W1–W9 ＋ C3-a/b/c；实现 2 个文件（`lib/index.js` 新增只读路由与面板载荷、`lib/client.js` 新增面板分区），新增断言 **65 条**（host +35 / client +30），另**改写既有期望值 4 条**（host 3 条路由计数断言、client 1 条段落类序断言 —— 都是「新增了一条路由/一个分区」逼出来的，断言本身照旧严格），**文档 5 个文件**（见下「同批文档」）。账本见 [`docs/verification-log.md`](docs/verification-log.md) 末节。
 
@@ -92,7 +118,7 @@
 
 ---
 
-## 未发布 — 代码评审第 3 轮：`fold failed` 后链尾不回写 / `detach()` 同步置窗口判据（2026-09-27）
+### 代码评审第 3 轮：`fold failed` 后链尾不回写 / `detach()` 同步置窗口判据（2026-09-27）
 
 > 逐项收口代码评审第 3 轮的 2 条 🟡 ＋ 一条文档滞后（报告项）：实现 2 处、判据 2 条（先红后绿）、文档 4 处。账本见 [`docs/verification-log.md`](docs/verification-log.md) 末节。
 
@@ -113,7 +139,7 @@
 
 ---
 
-## 未发布 — 代码评审第 2 轮：catch 支盖戳门 / 数组 policy 也判损坏 / 两因并存并陈（2026-09-27）
+### 代码评审第 2 轮：catch 支盖戳门 / 数组 policy 也判损坏 / 两因并存并陈（2026-09-27）
 
 > 逐项收口代码评审第 2 轮的 3 条（1 🟡 ＋ 2 🔵）：实现 3 处、文档 4 处。判据（4 红 ＋ 3 ★ 负相）先于本轮写进 `host-half.test.mjs`（上一轮被 DSH 重启打断、未交付报告；本轮从工作区起点实测复核后**只补实现、不新增判据**）。账本见 [`docs/verification-log.md`](docs/verification-log.md) 末节。
 
@@ -133,7 +159,7 @@
 
 ---
 
-## 未发布 — 代码评审修复轮：损坏档守卫 / 写失败 warn 按段复位 / `foldedAt` 盖戳门 / `refused` 窗口（2026-09-27）
+### 代码评审修复轮：损坏档守卫 / 写失败 warn 按段复位 / `foldedAt` 盖戳门 / `refused` 窗口（2026-09-27）
 
 > 逐项收口代码评审列出的 6 条（2 🟡 ＋ 4 🔵）：代码侧 4 处，夹具整洁 2 处，文档 4 处。账本见 [`docs/verification-log.md`](docs/verification-log.md) 末节。
 
@@ -156,7 +182,7 @@
 
 ---
 
-## 未发布 — 分歧审计修复轮 `DIVERGENCE(10)`：快路径折叠 ＋ 状态卡「来源」跟随落点（2026-09-27）
+### 分歧审计修复轮 `DIVERGENCE(10)`：快路径折叠 ＋ 状态卡「来源」跟随落点（2026-09-27）
 
 > 逐项收口父侧审计列出的 10 条；代码侧只动 2 条（🟡#5 · 🔵#9），其余 8 条是文档层。账本见 [`docs/verification-log.md`](docs/verification-log.md) 末节。
 
@@ -179,7 +205,7 @@
 
 ---
 
-## 未发布 — 策略持久化自持化：落点可核 ＋ settings 缺席时不再只活在一个进程里（2026-09-27）
+### 策略持久化自持化：落点可核 ＋ settings 缺席时不再只活在一个进程里（2026-09-27）
 
 > 设计档：[`docs/policy-persistence-design-2026-09-27.md`](docs/policy-persistence-design-2026-09-27.md)（评审 PASS）。证据账本：[`docs/verification-log.md`](docs/verification-log.md) 的「策略持久化自持化」一节。
 
@@ -193,7 +219,7 @@
 
 **④ settings 之后再挂上时会折叠。** 文件里的内容并入 settings（服务成为落点），**并立刻把合并结果写回文件、盖上 `foldedAt`** —— 服务下一次缺席（重启）读到的就是合并后的真值，不会表现为「折叠后新建的团队消失」。两边都有数据时按既有 legacy 迁移规则裁决：**服务胜**，文件那一份原样归档为 `policy.superseded-<时间戳>.json` **并留痕**，不做静默合并。回写刻意挂在 attach 后置链的**末尾**（旧命名空间迁移之后）：写早了，文件会缺迁移进来的那一份信任数据。
 
-**⑤ 一个时刻只写一处。** settings 在场时**不建、不写**那个文件；读**有条件**：命名空间还是默认时读进来折叠并入（见上方「未发布」那节的 ①），命名空间已有数据时**连读都不读** —— 读了就会把文件那侧并进来，与 §3.3「服务胜」的裁定冲突。
+**⑤ 一个时刻只写一处。** settings 在场时**不建、不写**那个文件；读**有条件**：命名空间还是默认时读进来折叠并入（见上方「分歧审计修复轮 `DIVERGENCE(10)`」那节的 ①），命名空间已有数据时**连读都不读** —— 读了就会把文件那侧并进来，与 §3.3「服务胜」的裁定冲突。
 
 ### 💡 为什么
 
@@ -210,7 +236,7 @@
 - **红相（文件后端档，测试先行）**：`7 FAILURE(S)` / `assertion total: 1214 (failed: 7)`（退出码 1）＝ 6 条新判据 ＋ 1 条 import 白名单锁；**另 4 条覆盖缺口类 ★ 负相**（纯解析器与恒真路径断言，两种实现上都绿，如实标负相不冒充红相）。
 - **折叠/可核/迁移档的 23 条**：问题先于实现写出，但**红相改用变异验证** —— 8 次**单点**变异（写文件时不看 scope / 折叠后不回写 / 归档跳过 / 落点行说谎 / 载入不置可折叠位 / 链尾回写跳过 / 迁移次序颠倒 / 永不读文件）逐条证明这些判据**真会变红**，变异后源码按 sha256 校验**逐字节还原**。
 - **一次性与真机可核**：无服务时的写入 → 重启（新进程读同一文件）→ 读回一致；迁移可核 = 导入后 `roster get` **看得见**迁移过来的团队 **且**首行 = `存储：文件 <绝对路径>`（`U9 迁移可核:` 三条断言即该路径的夹具等价物；真机执行步骤见 `AGENTS.md` §七，由父侧做并把两条读数抄进账本）。
-## 未发布 — 部署接线改为 `link:`（2026-09-27）
+### 部署接线改为 `link:`（2026-09-27）
 
 ### ✨ 改了什么
 
@@ -271,9 +297,9 @@ desktop profile 的 `dsh-team-link` 从 pnpm `file:`（整包**拷贝**进 `.pnp
 - 两个壳各跑一遍：`powershell -File deploy-desktop.ps1 -DryRun`（exit 0，四文件报告 `already in sync`，两侧 sha256 打印一致）；坏路径参数 `-Clone C:\nope` ⇒ 明确报错 + exit 1（fail-fast）。
 - 干跑前后：仓库 `git status` 与部署克隆 HEAD **未变**（零副作用）。
 
-### 📌 同批记录（真机冒烟的两条发现 —— 修复见上面「未发布 — 真机冒烟修复轮（L1 时基 / L2 镜像）」一节）
+### 📌 同批记录（真机冒烟的两条发现 —— 修复见上面「真机冒烟修复轮（L1 时基 / L2 镜像）」一节）
 
-在**运行中的壳**里对台账做写入冒烟（建临时团队 → `plan/claim/done/dispute` 四种行 → 读回派生视图）时，抓到两条**夹具测不出**的问题：① 派生视图的时间戳是 UTC（切 ISO 串）而同屏「读数」是本地时间，**同屏混用两个时基且未标注**（真机差 8 小时）；② `roster.md` 镜像在 `upsert-team` 新建那条路上把 `形态（mode）` / `Lead 会话（leadSessionId）` 渲染成 `undefined`。两条已另立修复条目（见上面「未发布 — 真机冒烟修复轮（L1 时基 / L2 镜像）」一节：L1 渲染统一到本地时基、L2 镜像与新建路径去 `undefined`）。
+在**运行中的壳**里对台账做写入冒烟（建临时团队 → `plan/claim/done/dispute` 四种行 → 读回派生视图）时，抓到两条**夹具测不出**的问题：① 派生视图的时间戳是 UTC（切 ISO 串）而同屏「读数」是本地时间，**同屏混用两个时基且未标注**（真机差 8 小时）；② `roster.md` 镜像在 `upsert-team` 新建那条路上把 `形态（mode）` / `Lead 会话（leadSessionId）` 渲染成 `undefined`。两条已另立修复条目（见上面「真机冒烟修复轮（L1 时基 / L2 镜像）」一节：L1 渲染统一到本地时基、L2 镜像与新建路径去 `undefined`）。
 
 ---
 

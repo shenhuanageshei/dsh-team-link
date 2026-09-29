@@ -1,6 +1,6 @@
 {
   "name": "dsh-team-link",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Session deep links + full session export + approved cross-session messaging + team identity/lifecycle (roster, watchdog, broadcast, rotation) for DeepSeek Harness (dsh). Formerly dsh-session-link-pro.",
   "type": "module",
   "main": "lib/index.js",
@@ -59,12 +59,12 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-api-session-controller": "^0.1.0-rc.6 || ^0.1.5-rc.1",
-    "@deepseek-ai/dsh-api-workspace-controller": "^0.1.0-rc.6 || ^0.1.5-rc.1",
-    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6 || ^0.1.5-rc.1",
-    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.6 || ^0.1.5-rc.1",
-    "@deepseek-ai/dsh-client-ui-workspace": "^0.1.0-rc.6 || ^0.1.5-rc.1",
-    "@deepseek-ai/dsh-session-reference": "^0.1.0-rc.6 || ^0.1.5-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6 || ^0.1.5-rc.1"
+    "@deepseek-ai/dsh-api-session-controller": "^0.1.0-rc.6 || ^0.1.5-rc.1 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-api-workspace-controller": "^0.1.0-rc.6 || ^0.1.5-rc.1 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6 || ^0.1.5-rc.1 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.6 || ^0.1.5-rc.1 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-workspace": "^0.1.0-rc.6 || ^0.1.5-rc.1 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-session-reference": "^0.1.0-rc.6 || ^0.1.5-rc.1 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6 || ^0.1.5-rc.1 || ^0.2.0-rc.1"
   }
 }

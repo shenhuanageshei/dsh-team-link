@@ -29,14 +29,25 @@
 
 ## 四、部署（改完代码怎么让它生效）
 
-**接线 = `link:`（junction 直指本仓目录）**：desktop profile 的 `package.json` 写
-`"dsh-team-link": "link:D:/DSH-Portable/plugins/dsh-team-link"`，且 `<profile>/node_modules/dsh-team-link`
-是指向本仓的 junction ⇒ **改完代码重启即生效**，没有拷贝步骤。
+**接线 = `link:`（目录链接直指本仓目录）**：desktop profile 的 `package.json` 写
+`"dsh-team-link": "link:D:/workspace/dsh-plugins/dsh-team-link"`，且 `<profile>/node_modules/dsh-team-link`
+是指向本仓的目录链接（本机实测为符号链接 `SymbolicLink`：`fsutil reparsepoint query` → reparse tag
+`0xA000000C`；旧措辞的 `junction` 即指这条链接）⇒ **改完代码重启即生效**，没有拷贝步骤。
 
 **不要再退回 `file:`**：那是 pnpm 硬拷贝，DSH 加载的是 `.pnpm` 里那份拷贝，「改代码 → 重启」**看着正常但跑旧版**
 （本项目真机踩过：连重启两次没生效，靠 sha256 比对才揪出来）。历史脚本 `deploy-desktop.ps1` 已随该接线退役删除。
 
 宿主包（`@deepseek-ai/dsh-tools` / `dsh-session-reference`）由宿主提供，不需要在本仓 node_modules 里解析。
+
+**宿主换代必复核 peer 区间（2026-09-29 立）**：DSH **0.2.0-rc.1** 起，加载器在挂载任何插件**之前**先跑一道兼容性闸门
+（`@deepseek-ai/dsh-app-boot` 的 `evaluatePluginCompatibility()`；桌面宿主由 `dsh-desktop-host/lib/index.js` 的
+`loadProfileDirectory()` 逐 bundle 调用）：对 `peerDependencies` 里**每一个** `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*`
+条目做 `semver.satisfies(运行时版本, 区间, { includePrerelease: true })`，**任一条不满足就把整个 bundle 静默丢弃**
+—— 只往宿主 stderr 打一行（`reportSkippedBundles()`），**GUI 零提示**，症状是「插件的工具凭空消失」。
+运行时版本取 `@deepseek-ai/dsh-app-boot/package.json` 的 `version`（**不是**桌面壳自己的版本号）。
+⇒ **宿主小版本换代（0.1 → 0.2 → …）之后必须复核 `package.json` 的 peer 区间并补上新分支**，否则升级即静默下线。
+判据与读数见 [`docs/verification-log.md`](docs/verification-log.md) 的「2026-09-29 DSH 0.2.0-rc.1 兼容性闸门」一节；
+用户面的支持矩阵见 [`README.md`](README.md) 的「宿主版本支持」一节。
 
 ## 五、网络与推送
 
