@@ -230,7 +230,8 @@ const STUB_DEFAULT_PRESET = "dsh-default";
 /**
  * `agentPresets` service stub (§10.2.2's template = `dsh-webhook`'s
  * `createWebhookSession`). The plugin reaches it the way that template does —
- * `resolve` (+ `standingKeyFor`) BEFORE `agents.create`, then `mount(agentCtx,
+ * `resolve` (+ the pin call — `acquireScope` on current hosts, `standingKeyFor`
+ * on 0.1.x) BEFORE `agents.create`, then `mount(agentCtx,
  * id)` inside `setup` — and this stub keeps the two properties those calls must
  * satisfy, because a stub that only counted calls could not tell 「建出来了」
  * from 「能用」:
@@ -250,9 +251,13 @@ const STUB_DEFAULT_PRESET = "dsh-default";
  * `preset=<bogus>` case is there to prove a named-but-unresolvable preset fails
  * loudly instead of quietly producing an uncomposable session.
  */
-function makeAgentPresets({ defaultId = STUB_DEFAULT_PRESET, known = [STUB_DEFAULT_PRESET, "coder", "reviewer"] } = {}) {
+function makeAgentPresets({ defaultId = STUB_DEFAULT_PRESET, known = [STUB_DEFAULT_PRESET, "coder", "reviewer"], pinSurface = "current" } = {}) {
+	if (!["current", "legacy", "both", "none"].includes(pinSurface)) throw new Error(`makeAgentPresets: unknown pinSurface ${JSON.stringify(pinSurface)}（可用：current / legacy / both / none）`);
 	const resolved = [];
 	const standings = [];
+	const acquired = [];
+	const released = [];
+	const legacyPinned = [];
 	const mounts = [];
 	const notFound = (id) => new Error(`agent-presets: preset "${id}" not found (available: ${known.join(", ")})`);
 	const service = {
@@ -262,10 +267,39 @@ function makeAgentPresets({ defaultId = STUB_DEFAULT_PRESET, known = [STUB_DEFAU
 			if (!known.includes(wanted)) throw notFound(wanted);
 			return { id: wanted };
 		},
-		async standingKeyFor(id) {
-			standings.push(id);
-			return { agentPreset: id };
-		},
+		// 宿主换代（DSH 0.2.0-rc.1，真机 2026-09-29）：pin 面由 `pinSurface` 选择 ——
+		// "current"（默认，只有 acquireScope，0.2.0-rc.1 真机形状）/ "legacy"（只有
+		// standingKeyFor，0.1.x 一代）/ "both"（两代都在场，验「优先现名」）/ "none"
+		//（两个都没有，验断层被显式点名而非裸 TypeError）。无论走哪支，`standings`
+		// 记同一个读数，DEFECT-1 的既有断言不随宿主换代改口径。
+		...(pinSurface === "legacy" || pinSurface === "none" ? {} : {
+			// 真宿主的形状（`@deepseek-ai/dsh-agent-preset-registry` 的 `acquireScope`）：
+			// `retain(id)` ＋ 一个 `[Symbol.asyncDispose]` 句柄（`users--` ＋ `collect()`），
+			// 注册面文档原话是「A revision lease; dispose it after the scoped read
+			// completes」。**桩必须连句柄一起建模**：只返回 `{ key }` 的桩会把「拿到的
+			// 租约永不释放」这层缺陷永久挡在套件外面 —— 与上一轮「桩里只有自家在调的
+			// 方法名」是同一个盲区，只是这次挡住的是泄漏、不是改名。
+			async acquireScope(id) {
+				acquired.push(id);
+				standings.push(id);
+				let disposed = false;
+				return {
+					key: `scope:${id}`,
+					[Symbol.asyncDispose]: async () => {
+						if (disposed) return;
+						disposed = true;
+						released.push(id);
+					},
+				};
+			},
+		}),
+		...(pinSurface === "current" || pinSurface === "none" ? {} : {
+			async standingKeyFor(id) {
+				legacyPinned.push(id);
+				standings.push(id);
+				return { agentPreset: id };
+			},
+		}),
 		async mount(agentCtx, id) {
 			if (agentCtx === undefined || agentCtx === null || typeof agentCtx.agentId !== "string") {
 				throw new Error("agent-presets: refusing to compose an unscoped context; the scope key is what joins an agent to its preset");
@@ -275,7 +309,7 @@ function makeAgentPresets({ defaultId = STUB_DEFAULT_PRESET, known = [STUB_DEFAU
 			return { id };
 		},
 	};
-	return { service, resolved, standings, mounts, defaultId };
+	return { service, resolved, standings, acquired, released, legacyPinned, mounts, defaultId, pinSurface };
 }
 
 /** DEFECT-1 的端到端读数，按**会话 id** 配对（不按位置）：`meta.agentPreset`
@@ -828,6 +862,7 @@ function setup({
 	omitCommands = false,
 	lateCommands = false,
 	omitAgentPresets = false,
+	agentPresetsOptions = undefined,
 	omitWorkspaceRegistry = false,
 	omitSessionTitle = false,
 	sessionTitleOptions = undefined,
@@ -985,8 +1020,10 @@ function setup({
 	// `dsh-webhook`'s `createWebhookSession` calls it unconditionally), so the
 	// ordinary cases exercise the resolve → `meta.agentPreset` → `setup` mount path;
 	// `omitAgentPresets` is the degradation fixture (the whole preset face is gone,
-	// so one warn per created session must say so and the session must still exist).
-	const agentPresets = makeAgentPresets();
+	// so one warn per created session must say so and the session must still exist);
+	// `agentPresetsOptions` forwards into makeAgentPresets (its `pinSurface` knob
+	// models WHICH host generation the preset pin API belongs to — see the stub).
+	const agentPresets = makeAgentPresets(agentPresetsOptions ?? {});
 	if (!omitAgentPresets) ctx.provide("agentPresets", agentPresets.service);
 	// §10.2.2 模板的另一半（真机缺陷 #2）：会话建完要**挂进工作区**，否则侧边栏按
 	// 工作区分组时列不出它。与 agentPresets 同款——可选服务、创建时 `ctx.get`、默认
@@ -5477,8 +5514,8 @@ check("🔵 #4: a webServer without register() is named by its reason code — �
  * real `CommandInvocation` so the assertions cover the handler and not a
  * re-implementation of it.
  */
-function teamSessionEnv({ teams = [], sessions = [], askScript = [], extraAgents = [], omitUserQuestions = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, selfCwd = TEAM_WS, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {
-	const env = setup({ sessions, useSettings: true, askScript, selfCwd, extraAgents, omitUserQuestions, omitCommands, lateCommands, omitAgentPresets, omitWorkspaceRegistry, omitSessionTitle, sessionTitleOptions, omitAgentDefaultModel, agentDefaultModelOptions, workspaceRegistryOptions, failCreateAt, createdHook, actionLog, pendingSeed });
+function teamSessionEnv({ teams = [], sessions = [], askScript = [], extraAgents = [], omitUserQuestions = false, omitCommands = false, lateCommands = false, omitAgentPresets = false, agentPresetsOptions = undefined, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, workspaceRegistryOptions = undefined, failCreateAt = -1, selfCwd = TEAM_WS, createdHook = undefined, actionLog = [], pendingSeed = undefined } = {}) {
+	const env = setup({ sessions, useSettings: true, askScript, selfCwd, extraAgents, omitUserQuestions, omitCommands, lateCommands, omitAgentPresets, agentPresetsOptions, omitWorkspaceRegistry, omitSessionTitle, sessionTitleOptions, omitAgentDefaultModel, agentDefaultModelOptions, workspaceRegistryOptions, failCreateAt, createdHook, actionLog, pendingSeed });
 	const ns = env.settings.namespaces.get("team-link");
 	ns.data.teams = structuredClone(teams);
 	return {
@@ -6343,6 +6380,47 @@ check("DEFECT-1 降级: 那行 warn 说清了后果（没有 persona-prefix 组�
 const bogusPresetEnv = teamSessionEnv({ askScript: ["创建"] });
 const bogusPresetOut = await bogusPresetEnv.run("n=1 team=defect1 roles=worker-a preset=nope");
 check("DEFECT-1 不静默降级: preset= 指了一个解析不出来的 id ⇒ 创建失败并如实报出原因（`not found`），零创建", bogusPresetEnv.creates.length === 0 && bogusPresetOut.kind === "error" && bogusPresetOut.text.includes("not found") && bogusPresetOut.text.includes("创建失败"));
+
+// --- DSH 0.2.0-rc.1 宿主换代: preset pin `standingKeyFor` → `acquireScope` -------
+// 真机（2026-09-29 15:35 / 15:46 两次，团队 mal-analyze-cli-20260929，n=4）：宿主
+// 自动升到 0.2.0-rc.1 后 `/team_session` 连续失败，回执「批量建队未全部成功」，命令
+// 输出逐字是 `未创建（创建失败（agentPresets.standingKeyFor is not a function））`，
+// worker-2/3/4 按失败即停未尝试、团队零落地。根因：pin API 在现宿主上改名
+// `acquireScope`（注册面签名 `async acquireScope(id?): Promise<{ key: ScopeKey } &
+// AsyncDisposable`），而本插件的创建路径还在调旧名——默认夹具此前**只有**
+// `standingKeyFor`，把「按官方模板写、按自家桩验」的镜像盲区原样留给了真机。
+// 四具夹具把宿主 pin 面建模成可切换形状（`makeAgentPresets` 的 `pinSurface`）：
+// 现名可用就走现名 / 只有旧名时回退 / 两名都在时仍只走现名 / 两个都没有时显式点名
+// 断层（不再是裸 TypeError 当错误文案）。
+const pinCurrentEnv = teamSessionEnv({ askScript: ["创建"] });
+const pinCurrentOut = await pinCurrentEnv.run("n=2 team=pin-surface roles=worker-a,worker-b task=验现名 pin");
+check("pin 换代（现名）: 0.2.0-rc.1 形状（只有 acquireScope）下批量建队照常成立 —— pin 走的就是现名，旧名一次都没被调，preset 绑定判据不变", pinCurrentOut.kind === "success" && pinCurrentEnv.agentPresets.acquired.length === pinCurrentEnv.creates.length && pinCurrentEnv.agentPresets.acquired.every((id) => id === STUB_DEFAULT_PRESET) && pinCurrentEnv.agentPresets.legacyPinned.length === 0 && presetBoundOnce(pinCurrentEnv));
+const pinBothEnv = teamSessionEnv({ askScript: ["创建"], agentPresetsOptions: { pinSurface: "both" } });
+const pinBothOut = await pinBothEnv.run("n=1 team=pin-surface roles=worker-a");
+check("pin 换代（优先现名）: 两代方法都在场时只走 acquireScope，standingKeyFor 一次都不被调（回退是留给 0.1.x 宿主的，不是给新宿主的）", pinBothOut.kind === "success" && pinBothEnv.agentPresets.acquired.length === 1 && pinBothEnv.agentPresets.legacyPinned.length === 0);
+const pinLegacyEnv = teamSessionEnv({ askScript: ["创建"], agentPresetsOptions: { pinSurface: "legacy" } });
+const pinLegacyOut = await pinLegacyEnv.run("n=1 team=pin-surface roles=worker-a");
+check("pin 换代（旧名回退）: 宿主只有 standingKeyFor（0.1.x 一代）时批量建队仍成立 —— 回退分支不是死代码", pinLegacyOut.kind === "success" && pinLegacyEnv.agentPresets.legacyPinned.length === 1 && pinLegacyEnv.agentPresets.acquired.length === 0 && presetBoundOnce(pinLegacyEnv));
+const pinNoneEnv = teamSessionEnv({ askScript: ["创建"], agentPresetsOptions: { pinSurface: "none" } });
+const pinNoneOut = await pinNoneEnv.run("n=2 team=pin-surface roles=worker-a,worker-b");
+check("pin 换代（断层点名）: 两个 pin 方法都没有 ⇒ 创建失败且错误文案点名两代已知形状与断层（含两个方法名），不再是裸 TypeError —— 零创建、零 pairs", pinNoneOut.kind === "error" && pinNoneOut.text.includes("acquireScope") && pinNoneOut.text.includes("standingKeyFor") && pinNoneOut.text.includes("创建失败") && !pinNoneOut.text.includes("is not a function") && pinNoneEnv.creates.length === 0 && pinNoneEnv.pairs().length === 0);
+
+// 释放面（2026-09-29 同日补）：`standingKeyFor` → `acquireScope` **不是纯改名** ——
+// 宿主注册面的实现是 `retain(id)` ＋ 一个 `[Symbol.asyncDispose]` 句柄（`users--` ＋
+// `collect()`），文档原话「A revision lease; dispose it after the scoped read
+// completes」；官方模板 `dsh-webhook:158` 用 `await using` 取、`:216` 在 `finally` 释放。
+// 只改名、不改释放时序 ⇒ 每建一个会话泄一个租约（该 generation 的 `users` 永不归零、
+// 永不被回收）。三条判据分别钉住：正常路径还、失败路径也还、旧代不伪造句柄。
+check("pin 换代（租约必须释放）: 现宿主形状下**每个**创建的会话都恰好取一次 preset 租约、并恰好释放一次 —— `acquireScope` 返回的是可释放租约，不是可以丢掉的返回值", pinCurrentEnv.agentPresets.acquired.length === pinCurrentEnv.creates.length && pinCurrentEnv.agentPresets.released.length === pinCurrentEnv.creates.length && pinCurrentEnv.agentPresets.released.join(",") === pinCurrentEnv.agentPresets.acquired.join(","));
+const pinFailEnv = teamSessionEnv({ askScript: ["创建"], failCreateAt: 0 });
+const pinFailOut = await pinFailEnv.run("n=1 team=pin-surface roles=worker-a");
+check("pin 换代（失败也要还）: `agents.create` 抛错时租约**仍**被释放（与官方模板同序：释放落在 `finally`，不是「建成功了才还」）—— 泄漏判据不因失败路径放行", pinFailOut.kind === "error" && pinFailEnv.agentPresets.acquired.length === 1 && pinFailEnv.agentPresets.released.length === 1);
+check("pin 换代（旧代不伪造释放）: 0.1.x 形状（只有 `standingKeyFor`，返回纯值、没有可释放句柄）下照常建队，且**不**凭空造一个 dispose 去调 —— 释放面只在真取到租约时存在", pinLegacyOut.kind === "success" && pinLegacyEnv.agentPresets.legacyPinned.length === 1 && pinLegacyEnv.agentPresets.acquired.length === 0 && pinLegacyEnv.agentPresets.released.length === 0 && presetBoundOnce(pinLegacyEnv));
+const pinHandleProbe = makeAgentPresets();
+const pinHandleScope = await pinHandleProbe.service.acquireScope("coder");
+await pinHandleScope[Symbol.asyncDispose]();
+await pinHandleScope[Symbol.asyncDispose]();
+check("pin 换代（句柄幂等 · 控制项）: 同一个 `acquireScope` 句柄重复 dispose 只记一次 released —— 证明上面那条「恰好一次」的读数不是靠重复计数凑出来的（桩真能区分「还了」与「还了两次」）", pinHandleProbe.released.length === 1);
 
 // --- DEFECT-2（§10.2.2 模板的**时序**）：workspace 建 → meta.cwd → attach ------
 // 真机缺陷 #2：那个会话**在盘上、cwd 也对**，但**没有工作区归属**——侧边栏按工作区

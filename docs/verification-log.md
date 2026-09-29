@@ -2204,3 +2204,52 @@ assertion total: 1214 (failed: 7)
   **收尾读数**：`git status --short` 干净 · `git rev-list --left-right --count origin/main...main` → `0 0` · 远端 tag 集合 = `v0.3.7` / `v0.3.8` / `v0.3.10` / `v0.4.0` / `v0.4.1`。
 - **同轮追加 · 代码评审第 2 轮 🟡#1 已闭环（我写错的一处声称）**：README「宿主版本支持」表原先写「0.4.1 与 0.4.0 的**实现文件逐字节相同**，本版只多了区间分支」—— **是假的**。实测取证：`git merge-base --is-ancestor d6c2484 HEAD` → **exit 0**（0.4.0 抬升提交 `d6c2484` 是 HEAD 的祖先）；`git diff --stat d6c2484 HEAD -- lib/` → `lib/client.js` 292 行、`lib/index.js` 966 行（合计 **1188 增 / 70 删**）；`lib/index.js` 的 sha256 **`071f3269d89c3881…` → `860d51d7fef54d13…`**。**根因（如实写）**：说这句话时脑子里的对象是**本节的 peer 区间修复**（那一条确实零实现改动），却被写成了**整版**的等价性声明，而 0.4.1 收口了 0.4.0 之后累积的 10 个条目（其中 `feat(persistence)` `4d8f54a` 与两轮面板修复都改了实现）。**修法**：该行改为「区间仍声明支持（`^0.1.x` 未撤，装得上），但本版含 0.4.0 之后 10 个条目、实现相对 0.4.0 有实质改动（1188 增 / 70 删，sha256 亦不同），本轮只在 0.2.0-rc.1 上实测」；同段「请使用 `0.4.0` **那个 release**」改为「请使用 `0.4.0` **版**」—— 本仓只有 `v0.3.7` / `v0.3.8` / `v0.3.10` 三个 tag，**没有 `v0.4.0` tag**，说「release（可下载产物）」无据。CHANGELOG 的 0.4.1 收口引言同步收紧（「仍能通过闸门」取代「仍可正常加载」）。
   **这条修正让用户面的指引反而更硬**：老宿主留在 0.4.0 不是「无代价的保守选择」，而是避开一整批未在 0.1.x 上复测的实现改动。
+
+---
+
+## 2026-09-29 DSH 0.2.0-rc.1 preset pin 换代（`standingKeyFor` → `acquireScope`）
+
+> 同日**第二处** 0.2.0-rc.1 换代断层（第一处是上午的 peer 区间闸门，见上一节——那条让插件装得上，本条让它用得了）。触发面：真机 `/team_session`（团队 mal-analyze-cli-20260929，`n=4 准备接手继续开发`）两次失败（15:35:40 / 15:46:18），回执「批量建队未全部成功」。
+
+- **取证链（全部只读，改动前）**：① 调用方会话日志 `team_link_export` 导出 → `command/done kind=error` 原文逐字 `- worker-1 → team-link-…-worker-1-356b450e：未创建（创建失败（agentPresets.standingKeyFor is not a function））`，worker-2/3/4「前一个 create 失败后按『失败即停』未尝试」；② `policy.json`：`teams` 无该团队（只有 threat-intel），`pendingCreates` 恰两张 worker-1 孤儿票据（TTL 5 分钟，各随本次失败产生，过期清扫自理）；③ 全 `.dsh` 会话树零 `team-link-*` 目录（会话从未落盘）；④ 宿主 `app.asar` 文本检索：`standingKeyFor` **零命中**，官方模板（`createWebhookSession`）同一时序为 `resolve → acquireScope(preset.id)`（`AsyncDisposable`，`:1030872-1030877`）`→ mount`，注册面签名 `async acquireScope(id?): Promise<{ key: ScopeKey } & AsyncDisposable>`（`:293284-293285`）。⇒ 插件按 0.1.x 模板写的 pin 调用，撞上 0.2.0-rc.1 的运行时改名；且默认测试桩此前**只有** `standingKeyFor`，自家套件验不出这层断层（镜像盲区）。
+- **修法**：`buildTeamSessionCreateOptions` 的 pin 调用改**双代兼容**——`acquireScope` 在场优先 / 否则回退 `standingKeyFor` / 双缺显式抛错点名断层（批次报可行动原因，不再让裸 TypeError 当文案）；scope 沿既有形状只确认「取得到」、不提前 dispose。改动面：`lib/index.js` 1 处 ＋ `host-half.test.mjs`（`makeAgentPresets` 的 `pinSurface` 四档 + `agentPresetsOptions` 透传 + 4 条新断言）。
+- **红相（实跑，夹具先行、实现未动）**：默认夹具换成 0.2.0-rc.1 形状后，套件复刻真机——多条 FAIL 后以 `TypeError: Cannot read properties of undefined (reading 'roles')` 中止于 U16 端到端（`okEnv.store()[0]` undefined＝团队零落地的直接后果），可见与真机**逐字相同**的 `创建失败（agentPresets.standingKeyFor is not a function）`；套件中止故无完整 failed 计数（自报计数只在结尾打印，如实登记）。
+- **绿相（实跑）**：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1310 (failed: 0)`（1306 + 4）；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 305 (failed: 0)`；退出码均 0。
+- **同批文档**：README 徽章与 §十 当前读数（1306 → 1310，另两处 `1306 + 305 条断言` 领头计数同改）· CHANGELOG「未发布」新条目 · 本节。
+- **真机待验（如实登记）**：插件代码随 DSH boot 加载，**重启 DSH 后由用户重发 `/team_session`** 方可闭环；本轮真机证据只有故障面本身。
+
+---
+
+## 2026-09-29 preset 租约释放（同日补：`acquireScope` 是租约，不是可以丢掉的返回值）
+
+> 承接上一节的**更正注记**（本档只追加，原文不修）：上一节「修法」里那句「scope 沿既有形状只确认『取得到』、不提前 dispose」**不成立** —— 它把 `acquireScope` 当成了 `standingKeyFor` 的纯改名。宿主注册面的实现是 `retain(id)` ＋ 一个 `[Symbol.asyncDispose]` 句柄（`users--` ＋ `collect()`），文档原话「**A revision lease; dispose it after the scoped read completes**」。丢掉返回值 ⇒ **每建一个会话泄一个租约**：该 generation 的 `users` 永不归零、`collect()` 永不执行。
+
+- **判据来源（可复核）**：`dsh/node_modules/@deepseek-ai/dsh-agent-preset-registry/lib/index.js:772-788`（`acquireScope` 实现：`retain` ＋ `[Symbol.asyncDispose]` 里做 `generation.users--` 与 `collect`）；官方调用点 `dsh/node_modules/@deepseek-ai/dsh-webhook/lib/index.js:158`（`__addDisposableResource(env_1, await ctx.agentPresets.acquireScope(preset.id), true)`）→ `:216`（`finally` 里 `__disposeResources`）；`standingKeyFor` 在宿主内**零命中**（对 `app.asar` 文本检索）。
+- **修法**：照官方模板同一时序 —— 构建器只**取**，可释放句柄经 Symbol 带外通道（`PRESET_SCOPE_RELEASE`）随 options 交给调用方；`createRootAgent` 在 `agents.create` 的 `finally` 里释放（`setup` 里那次 `mount` 在 create **期间**跑，租约必须活到那一刻）。释放失败只留一行 warn，绝不覆盖 create 的原始错误；旧代（`standingKeyFor` 返回纯值）**不伪造** dispose。Symbol 对宿主 `create` 不可见（只读具名键）、对 `Object.keys` / 展开 / `JSON.stringify` 也不可见 ⇒ options 的**可见形状**与既有断言一字不变。
+- **夹具同步（本轮的重点）**：桩的 `acquireScope` 原先只返回 `{ key }` —— 只镜像自家实现的调用面，于是「永不释放」这层缺陷被永久挡在套件外（与上一节「桩里只有自家在调的方法名」是**同一个盲区**，只是这次挡的是泄漏、不是改名）。现在连句柄一起建模（`[Symbol.asyncDispose]` ＋ `released` 读数）。
+- **新增 4 条宿主断言（可 grep）**：`pin 换代（租约必须释放）` / `pin 换代（失败也要还）` / `pin 换代（旧代不伪造释放）` / `pin 换代（句柄幂等 · 控制项）`。
+- **红相（实跑）**：摘掉调用方的释放（＝只改名不还租约）⇒ `FAIL pin 换代（租约必须释放）` ＋ `FAIL pin 换代（失败也要还）`，`host 1314 (failed: 2)`；另 2 条在两种状态下都该绿（旧代形状 / 幂等控制项），**如实记，不冒充 4/4**。还原后 `lib/index.js` sha256 `D078611F61F6D074836CF52CC2AA1F4EBF8521EDAF306AA1D3231ABCB661C8FE` byte-identical。
+- **绿相（实跑）**：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1314 (failed: 0)`；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 310 (failed: 0)`；退出码均 0。
+
+---
+
+## 2026-09-29 客户端团队面板可读性重设计（owner 截图反馈）
+
+> owner 原话：「团队出来了，但是基本不可读，你自己看图，超长文字弹窗超长，而且文字太密集太多根本不知道应该看哪里」。诊断结论：不是没渲染，是**信息架构** —— 五段默认全展开、段标题与正文同为 12px/600 与 12px/400、面板无高度上限（弹窗跟着长）、三行角色文本每行 ~120 字且同一串 session id 写了两遍。
+
+- **诊断方法（模型看不见真机 GUI ⇒ 先造可复现夹具）**：用**逐字复制的面板样式块** ＋ **真实 payload**（`team_link_status` 的实际输出）搭独立 HTML 夹具，浏览器渲染后量测；再用视觉桥（`vision-bridge` CLI，qwen3.7-plus）独立判读 —— 改前判「非常拥挤，有密集文字墙，角色描述非常拥挤」。
+- **实测读数（夹具，452px 宽）**：改前 `452×941`（面板自身 782px，无上限）；改后默认态 `452×406`、展开态 `452×425`（面板 `max-height:min(46vh,420px)` ＋ 内部滚动）。**5 个板块标题一屏全可见**（改前只有 2 个：`teams` 段独自吃掉 358px / 视口 378px，后三段标题被挤出滚动区）。视觉桥改后判「**没有密集文字墙，界面非常简洁**，5 个板块一眼列全，第一眼落在首项」。
+- **一处过程更正（我自己的错，如实登记）**：夹具第一版把 `team_link_status` **工具输出**的长标题（如「看门狗（policy.watchdogs；…）」）当成了面板标题抄进去，据此差点去「修」一个不存在的问题 —— 面板标题来自客户端字典，本来就是短串（`panelWatchdogs: "看门狗"`）。改夹具对齐真值后复测。
+- **改法**（`lib/client.js`，纯呈现，**不解析宿主字节**）：① 面板加 `max-height` ＋ `overflow-y:auto`；② 段标题升 13px/600、独立一行、带 `::before` 折叠标记，`h3` ＋ `role="button"` ＋ `aria-expanded` ＋ Enter/Space；③ **默认全部折叠**（`data-collapsed` ＋ 一条 CSS 规则 `.dshsl-pn-sec[data-collapsed="true"]>:not(.dshsl-pn-h){display:none}` —— 节点全在树里，只是不显示）；④ 段间分隔线、结论行左侧色条；⑤ 缺数段不折叠。**不加新类名**（`dshsl-pn*` 类↔规则判据不破；`data-collapsed` 是属性不是类）。
+- **新增 5 条客户端断言（可 grep）**：`可读性①`（高度上限）/ `可读性②`（段标题字号严格大于正文 ＋ cursor / `::before` / 折叠规则）/ `可读性③`（默认全折叠）/ `可读性③ 点段标题即展开该段…逐字相同` / `可读性③ 缺数段不折叠`。
+- **红相（实跑）**：`git checkout HEAD -- lib/client.js`（换回修复前实现）⇒ `client 310 (failed: 5)`，**五条全红且套件跑完不崩**。首版判据在旧实现上直接 `header.props.onClick()` 抛 `TypeError` 把套件炸在半路、只报 3 条 —— 正是 `client-half.test.mjs:32-42` 那条 Y7 纪律的坑；给判据加「旧实现形态兜底」（`typeof header.props.onClick !== "function"` ⇒ 判 false）后重跑，取得完整红相。还原后 sha256 `1E86ADF3…` byte-identical。
+- **绿相（实跑）**：`node client-half.test.mjs` → `ALL PASS` / `assertion total: 310 (failed: 0)`（305 + 5）；`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1314 (failed: 0)`。
+- **已知剩余（如实登记）**：展开「团队与角色」后三行角色文本仍长（宿主给的字节、同一 session id 出现两次；客户端不得重写宿主字节）—— 要治得改宿主的行渲染，会同时影响 `team_link_status` 的工具输出，**不在本版**。
+
+---
+
+## 2026-09-29 发版 0.4.2（收口）
+
+- **本版收口 3 个「未发布」条目**：① preset pin 换代双代兼容（上一节）② preset 租约释放（本节）③ 客户端团队面板可读性重设计（本节）。`package.json` `0.4.1` → **`0.4.2`**；README 徽章与 §十 当前读数同改（`1314 = 1310 + 4` / `310 = 305 + 5`）。
+- **跨会话协作声明（如实登记）**：① 与 ② 的实现分别由**另一个会话**（`session-65ac0ae0`，cwd `mal-analyze-cli`）与**本会话**完成，③ 由本会话完成；三者的判据、红绿相读数与文档账均由本会话在提交前**实跑复核**（不是转述）。对方另交了 `team-link-pin-api-fix.patch` ＋ 交接文档，本会话**未采用**：其 6 个文件改动已在工作树里，且本版已在其上补了租约释放。本会话在动文档前确认对方已 `空闲`（末条助手 16:02:53），并靠 FS 版本守卫挡下一次并发写 README。
+

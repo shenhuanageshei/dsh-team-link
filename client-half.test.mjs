@@ -1828,6 +1828,54 @@ if (panelSurfacePresent) {
 	check("🟡#1 台账行/落点行保留缩进: .dshsl-pn-line 与 .dshsl-pn-placement 都给了 white-space:pre-wrap（宿主渲染好的四空格缩进不会被 <p> 折叠掉），徽标与段落间距照 .dshsl-relay* 的既有做法给",
 		/\.dshsl-pn-line\{[^}]*white-space:pre-wrap/.test(pnCssText) && /\.dshsl-pn-placement\{[^}]*white-space:pre-wrap/.test(pnCssText) && /\.dshsl-pn-badge\{[^}]*border-radius/.test(pnCssText));
 
+	// --- 可读性重设计（2026-09-29）：高度上限 ＋ 层级 ＋ 默认折叠 ------------------
+	// 起因是**真机反馈**（owner 截图）：「超长文字弹窗超长，而且文字太密集太多根本不知道应该
+	// 看哪里」。下面五条各钉住一条用户要求，且都不解析宿主字节（客户端只做呈现）。
+	check("可读性① 面板有高度上限（弹窗不再随内容无限长）: .dshsl-pn 同时给了 max-height 与 overflow-y:auto —— 本地视觉夹具读数 452×941 → 452×425",
+		/\.dshsl-pn\{[^}]*max-height:/.test(pnCssText) && /\.dshsl-pn\{[^}]*overflow-y:auto/.test(pnCssText));
+	const pnFontSizeOf = (cls) => {
+		const match = pnCssText.match(new RegExp("\\." + cls + "\\{[^}]*font-size:(\\d+)px"));
+		return match === null ? null : Number(match[1]);
+	};
+	check("可读性② 段标题比正文大一档、且是独立一行（「不知道应该看哪里」的对策）: .dshsl-pn-h 的字号严格大于 .dshsl-pn-line，且带 cursor:pointer 与 ::before 折叠标记",
+		pnFontSizeOf("dshsl-pn-h") !== null && pnFontSizeOf("dshsl-pn-line") !== null
+			&& pnFontSizeOf("dshsl-pn-h") > pnFontSizeOf("dshsl-pn-line")
+			&& /\.dshsl-pn-h\{[^}]*cursor:pointer/.test(pnCssText)
+			&& /\.dshsl-pn-h::before\{[^}]*content:/.test(pnCssText)
+			&& /\.dshsl-pn-sec\[data-collapsed="true"\]>:not\(\.dshsl-pn-h\)\{display:none\}/.test(pnCssText));
+	const pnSecNodes = treeAllByClass(pnReadyTree, "dshsl-pn-sec");
+	const pnCollapsedKeys = pnSecNodes.filter((node) => node.props["data-collapsed"] === "true").map((node) => node.props["data-section"]);
+	check("可读性③ 默认**全部折叠** ⇒ 这一屏先当索引（五段标题一屏看得全；夹具读数：五段标题全可见 · 面板 205px · 无需滚动）",
+		pnSecNodes.length === 5
+			&& pnCollapsedKeys.join(",") === "teams,pending,watchdogs,tasksTail,sessions"
+			&& treeAllByClass(pnReadyTree, "dshsl-pn-h").every((node) => node.props["aria-expanded"] === "false"));
+	check("可读性③ 点段标题即展开该段（state 驱动、重渲染后生效），**且折叠不改数据** —— 展开前后 panelLines 逐字相同（折叠是呈现，不是删除）",
+		(() => {
+			const dialog = mount(makeSessionToolsDialog(scene(popularList, NO_WORKSPACES), primitivesStub), { t: tZh, onClose() {}, panel: { phase: "ready", payload: panelPayload }, onRefresh() {}, onPage() {} });
+			const before = panelLines(flatten(dialog.tree));
+			const header = treeAllByClass(flatten(dialog.tree), "dshsl-pn-h").find((node) => node.props["data-section"] === "teams");
+			// ★ 判据自己兜住「修复前」的形态：旧实现里段标题没有 onClick，直接调用会把整个套件
+			// 抛死在半路（红相读数会因此少报后面几条 —— 本文件 :32-42 那条 Y7 纪律说的就是这个）。
+			if (header === undefined || typeof header.props.onClick !== "function") return false;
+			header.props.onClick();
+			dialog.render();
+			const after = panelLines(flatten(dialog.tree));
+			const opened = treeAllByClass(flatten(dialog.tree), "dshsl-pn-sec").find((node) => node.props["data-section"] === "teams");
+			const others = treeAllByClass(flatten(dialog.tree), "dshsl-pn-sec").filter((node) => node.props["data-section"] !== "teams");
+			return opened.props["data-collapsed"] === "false"
+				&& others.every((node) => node.props["data-collapsed"] === "true")
+				&& after.length === before.length
+				&& after.join("\u0000") === before.join("\u0000");
+		})());
+	check("可读性③ 缺数段**不折叠**（它只有一句降级原因，藏起来等于把「这一段读不到」也一起藏了）",
+		(() => {
+			const gapped = JSON.parse(JSON.stringify(panelPayload));
+			gapped.watchdogs = { present: false, unavailable: { reason: "看门狗段读取失败：宿主 policy.get() 抛错" } };
+			const tree = flatten(mount(makeSessionToolsDialog(scene(popularList, NO_WORKSPACES), primitivesStub), { t: tZh, onClose() {}, panel: { phase: "ready", payload: gapped }, onRefresh() {}, onPage() {} }).tree);
+			const sec = treeAllByClass(tree, "dshsl-pn-sec").find((node) => node.props["data-section"] === "watchdogs");
+			return sec !== undefined && sec.props["data-collapsed"] === "false" && treeByClass(tree, "dshsl-pn-na") !== null;
+		})());
+
 	// --- 评审修复轮 🔵#6：面板子树的数组子节点 key 完备 -----------------------------
 	const panelElementNodes = (tree, out = []) => {
 		if (tree === null || tree === undefined || typeof tree !== "object") return out;

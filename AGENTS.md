@@ -49,6 +49,14 @@
 判据与读数见 [`docs/verification-log.md`](docs/verification-log.md) 的「2026-09-29 DSH 0.2.0-rc.1 兼容性闸门」一节；
 用户面的支持矩阵见 [`README.md`](README.md) 的「宿主版本支持」一节。
 
+**宿主换代还必复核运行时 API 面（2026-09-29 同日补立）**：peer 区间过闸只证明「装得上」，**不证明「用得了」**——
+同一次 0.2.0-rc.1 换代还把 `agentPresets` 的 preset pin 方法从 `standingKeyFor` 改名成了 `acquireScope`（对宿主
+`app.asar` 文本检索 `standingKeyFor` 零命中），闸门全绿、工具全在，`/team_session` 却在创建第一个 worker 时以
+`agentPresets.standingKeyFor is not a function` 失败（真机两次，团队零落地）。⇒ 换代复核必须**同时**静态核对
+本仓实际调用的宿主服务方法名（创建路径的模板时序尤其如此），且**测试桩不得只镜像自家实现的调用面**——桩只提供
+插件正在调的方法，就把「宿主已改名」这层断层永久挡在套件外面（本次即如此）。判据与读数见
+[`docs/verification-log.md`](docs/verification-log.md) 的「2026-09-29 DSH 0.2.0-rc.1 preset pin 换代」一节。
+
 ## 五、网络与推送
 
 - GitHub 直连常报 Recv failure: Connection was reset；本机代理可用时按命令临时指定（**不改全局配置**）：
