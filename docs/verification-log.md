@@ -2253,3 +2253,51 @@ assertion total: 1214 (failed: 7)
 - **本版收口 3 个「未发布」条目**：① preset pin 换代双代兼容（上一节）② preset 租约释放（本节）③ 客户端团队面板可读性重设计（本节）。`package.json` `0.4.1` → **`0.4.2`**；README 徽章与 §十 当前读数同改（`1314 = 1310 + 4` / `310 = 305 + 5`）。
 - **跨会话协作声明（如实登记）**：① 与 ② 的实现分别由**另一个会话**（`session-65ac0ae0`，cwd `mal-analyze-cli`）与**本会话**完成，③ 由本会话完成；三者的判据、红绿相读数与文档账均由本会话在提交前**实跑复核**（不是转述）。对方另交了 `team-link-pin-api-fix.patch` ＋ 交接文档，本会话**未采用**：其 6 个文件改动已在工作树里，且本版已在其上补了租约释放。本会话在动文档前确认对方已 `空闲`（末条助手 16:02:53），并靠 FS 版本守卫挡下一次并发写 README。
 
+---
+
+## 2026-09-30 DEFECT-5：`revive` 复活出来的 worker 第一回合必死（resume 面漏了模板时序）
+
+> 用户原话：「看看这个是什么问题，worker会话重启后报错 —— 处理失败 / 本轮运行失败 prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix") / UNKNOWN」。
+
+### ① 真机故障面（逐条可复核的读数）
+
+- **策略档**：`C:\Users\huangchaowen\.dsh\team-link\policy.json` 里团队 `mal-analyze-cli-20260929` 的 `worker-1..4` 各有一条 `recoveries` 行 `verb=revive`，`at` = `1790743666381 / 1790743828705 / 1790743833605 / 1790743838661` ⇒ 本机 **12:47:46 / 12:50:28 / 12:50:33 / 12:50:38**。
+- **会话日志**：四条 `~/.dsh/sessions/--D-workspace-mal-analyze-cli--/team-link-mal-analyze-cli-20260929-worker-N-<uuid8>/session.v4.jsonl.zstd`（**逐帧**解 zstd：文件是 header frame + 事件帧的顺序拼接，`zlib.zstdDecompressSync` 只解第一帧，需按 `28 B5 2F FD` 魔数逐帧解 —— 四条共 1015 / 898 / … 帧，0 失败）。每条里 `type=turn/end` + `data.reason.kind=error` 的原文：
+  - worker-1：turn 14，`1790743854900`（12:50:54.900）
+  - worker-2：turn 18，`1790743855014`（12:50:55.014）
+  - worker-3：turn 18，`1790743855284`（12:50:55.284）
+  - worker-4：turn 22 / turn 23，`1790743855396`（12:50:55.396）/ `1790743860038`（12:51:00.038）
+  - `error.message` 四处逐字相同：`prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix")`。
+- **对照**：同一晚**未被 revive 过**的 `team-link-0930-threatintel-worker-1..4` 四条日志里，该字符串 **0 命中**（逐文件计数：0 / 0 / 0 / 0）。worker-1 的日志还留下完整的因果链：`turn/end{kind:interrupted}`（12:34:50）→ `session/end-seed`（12:50:28，即 resume 的载入）→ `agent/inbox/spliced`（12:50:54）→ `turn/start` turn 14 → **第一个 `step/end` 之后立即 `turn/end{kind:error}`**（死在提示词组装阶段，一个工具都没跑）。
+
+### ② 根因（机制层，两半）
+
+- `recoverRevive` 调的是 `ctx.agents.resume({ resumeSessionId })`——**一个键都没多给**（修复前 `lib/index.js:10247`）。宿主 `dsh-agent-loop:1970` 是 `setupAndPublish(…, options.agentOptions ?? {}, options.setup, …)`：
+  - **没有 `agentOptions`** ⇒ 复活出来的 agent **没有任何模型选择**；`{{model}}` 的唯一来源是 `ctx.systemPrompt.variable("model", (context) => context.agent?.options.model)`（`dsh-agent-loop:1565`）⇒ 组装 `deployment:persona-prefix` 时该变量无值、抛错（**DEFECT-3 的机制原样复现，文案逐字相同**）。
+  - **没有 `setup`** ⇒ preset **组装源没挂**；`standard` preset（`dsh-web-app/presets/standard.patch.yml`）正是这具 agent 的工具面（bash / pwsh / fs / jobs / skill / goal / plan-mode / compaction / delegation / web）⇒ 即便模型那一关过了，复活出来的 worker 也拿不回自己的工具面（**DEFECT-1 的机制**）。
+- **参照实现（宿主自己的 resume）**：`dsh-api-session-controller:399-410` 给的是三样 —— `resumeSessionId` + `agentOptions: this.agentOptions()`（= `agentDefaultModel.currentSelection()` 的 `{provider, model}`）+ `setup: composeAgent(presetForObservation(observation)).setup`；其中 `composeAgent`（`:358-371`）是 `presets.resolve(presetId)` → `setup` 里 `presets.mount(agentCtx, resolvedId)`，`presetForObservation`（`:475-478`）读的是 `observation.projections.values.agentPreset`（= 盘上那份 header 的 `agentPreset`；实测四份日志的 header 帧里就是 `"agentPreset":"standard"`）。
+- **为什么 0.4.2 没拦住**：DEFECT-1 / DEFECT-3 的修复**全部落在 `agents.create` 面**（`buildTeamSessionCreateOptions`），revive 走的是 `agents.resume`；而旧断言把缺陷**钉成了规格** —— `U26 revive` 原本断言 `Object.keys(resumeCalls[0]).length === 1`（恰好一个键）。
+
+### ③ 修法与判据（`lib/index.js` + 宿主套件）
+
+- **新增 `buildTeamSessionResumeOptions(ctx, sessionId)`**：① 模型选择走与 create 面**同一个**解析器 `resolveTeamSessionModelSelection(ctx, {}, sessionId)`（复活面没有调用方可以给 model ⇒ 永远走「两侧都没给」那一支），解析不出来就**拒绝恢复**；② preset 取 `agent.session.header.agentPreset`（宿主 resume 的 `meta` 就是 `structuredClone(handle.header)`），读不到就传 `undefined` 交给 `resolve` 按宿主缺省解析；③ 模型选择钩子与 create 面同一个 `installTeamSessionModelSelection`。
+- **revive 调用点**改为 `ctx.agents.resume({ resumeSessionId, agentOptions, setup })`；组装失败 ⇒ **零复活、零写入**，报告点名原因/后果/出路。两档失败面**不是同一档**（如实区分）：模型选择解析不出 ⇒ 失败在调用**之前**（`resumeCalls.length === 0`）；存量 preset 解析不出 ⇒ 解析发生在 `setup` 里、`resume` 调用**已在飞**（`resumeCalls.length === 1`）并在组装阶段回滚。
+- **两档口径（有意不对称，如实登记）**：`agentPresets` 服务**缺席** = **可服务降级**（恰一行具名 warn，复活照常）；服务**在场但组成面形状断层**（缺 `resolve` 或 `mount`）= **显式拒绝**（与创建面同一句判词；一个没有人设、没有工具面的代理正是 DEFECT-1「会建 ≠ 能用」的形状）；存量 preset **解析不出来** = **显式失败**（不静默换成另一支组成源，与 create 面「`preset=` 指了未知 id ⇒ 拒绝创建」同口径）。
+- **组装器不取 preset 租约**：`acquireScope` 是 `dsh-webhook` **create** 时序的一环；宿主自己的 resume（`composeAgent`）不取 —— `mount` 自己 `retain` → `bind` → 释放。
+- **新增 10 条 + 改写 1 条断言（可 grep）**：`U26 revive:` · `DEFECT-5 ①` / `②` / `③` / `④` / `⑤` / `⑤b` / `⑥` / `⑦` / `⑦ 口径` · `组成面（mount 缺失·形状断层）`。
+- **夹具同批修复（同一个盲区第三次出现）**：`agents.resume` 桩原先用 `options.sessionId` 当 setup 上下文的 `agentId`，而 resume 面**只有** `options.resumeSessionId` ⇒ 复活面 `agentId` 恒为 `undefined`、桩的 `mount` 按「无 scope」拒绝，**恰好把 DEFECT-5 要钉的那一层挡在套件外**（与 DEFECT-1 那轮「桩只镜像自家实现的调用面」同一个盲区）。同批：复活 stub 的 header 从**持久化记录**里取 `agentPreset`。
+- **红相（实跑，夹具不动、`git checkout -- lib/index.js`）**：`host 1324 (failed: 11)` —— 恰是改写的 1 条 + 新增的 10 条，其余 **1313** 条全绿；还原后 `lib/index.js` sha256 `609F9D47A35BE7AFA07B3C6C31CC192E40209B7F86DDF7AFB4F1811E4F7941E0` byte-identical。
+- **绿相（实跑）**：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1324 (failed: 0)`（1313 + 11）；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 310 (failed: 0)`；退出码均 0。
+- **两档失败面的区分（同批把话说准）**：⑥ 档（模型选择解析不出）失败在 `ctx.agents.resume` **调用之前** ⇒ `resumeCalls.length === 0`；⑦ 档（存量 preset 解析不出）的解析发生在 `setup` **内部** ⇒ `resumeCalls.length === 1` 且无代理被发布（真工厂 setup 抛错即回滚发布；夹具同批把「先发布后 setup」改成「setup 成功后发布」，这半条才成为可读读数）。两档都：零复活、零写入、零留痕。
+- **代码评审修复轮（advisor，VERDICT: PASS；1 条技术性驳回 + 6 条已处置）**：
+  - 🟡#1 README 三处读数滞后 → 同批同步（→ **1324**，含红相 `(failed: 11)` 与 `1324 = 1314 + 10` 的账目；第 2 轮统一复活面口径后多一条断言，计数由 1323 改为 1324，同处一并订正）。
+  - 🟡#2 文档称「组装失败 ⇒ 零 resume、零写入」对 preset 档**言过其实** → 按实现事实改写（见上「两档失败面的区分」），并新增 `DEFECT-5 ⑦ 口径` 断言把两档分开钉住。
+  - 🟡#3 复活面复用了创建面的「出路」（「传 model=<provider>/<model>」在 `team_link_recover` 上**不可执行**，只有 action/team/role） → `resolveTeamSessionModelSelection` 加 `face` 参数，复活面用自己的判词与出路；**create 面文案逐字未改**（其四条既有断言原样绿）。
+  - 🟡#4 质疑「人设文本与实际路由自洽」 → **技术性驳回**，证据两处：`dsh-agent-loop:761` 每个 agent 实例的 `requestHeaderLogged` 初值都是 `false`；`:1167-1178` 的 `prepareRequest` 路由基线取 `this.options.provider/model`，持久化 request header 只在 provider/model 相同那一支里贡献 `reasoningEffort` ⇒ 路由 = `options.model` = `{{model}}` 的取值来源。评审要求的「真机核对一枚『缺省 ≠ 上次用的模型』的 worker」列为**待验项**（本轮无重启窗口）。
+  - 🔵#5 新断言直取下标 → 已改为先判 `length === 1`（②③④），避免 break 时抛 `TypeError` 炸掉整轮（本套件 Y7 纪律）。
+  - 🔵#6 resume 桩「先发布后 setup」与真工厂回滚语义不符 → 已把发布挪到 setup 成功之后，⑦ 补「失败后不留活代理」读数（`agentFor === undefined` ＋ `agentIsLive === false`）。
+  - 🔵#7 create 面只判 `resolve` 就裸调 `mount` → 组成面守卫改**双判**、形状断层显式点名（`resolve=function, mount=undefined` 两个读数都进文案）并拒绝创建；夹具加 `omitMount` 开关，新增 1 条断言。
+  - **第 2 轮评审（0 🟡 / 2 🔵，均来源是本轮的修复本身）**：① 复活面在同一形状断层上仍走**降级**（同一断层两个面两种判词，且 warn 把「形状断层」说成 `service unavailable`）⇒ 已把口径统一成三分法（**缺席 ⇒ 降级 / 在场但断层 ⇒ 两面都显式拒绝 / 完整 ⇒ 正常组装**），新增断言 `DEFECT-5 ⑤b`；② 证据账里残留一句旧措辞「组装失败 ⇒ 零 resume、零写入」⇒ 已按两档事实重写。同批发现并修掉一处**夹具透传缺口**：`rotateEnv` 没有把 `agentPresetsOptions` 转给 `setup` ⇒ `omitMount` fixture 会静默退化成「服务完全正常」（判据变空锁）——这正是本轮反复出现的同一类盲区（夹具不保真），已补透传。
+- **本轮不动**：`lib/client.js` 零改动（故障在宿主侧组装面，与面板无关）。
+- **真机待验（如实登记）**：需**重启 DSH** 后对那四个 worker 重发 `team_link_recover action=revive` 才能闭环；四个会话的日志与历史一字未动，revive 一次即恢复。
+

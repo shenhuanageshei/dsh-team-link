@@ -251,7 +251,7 @@ const STUB_DEFAULT_PRESET = "dsh-default";
  * `preset=<bogus>` case is there to prove a named-but-unresolvable preset fails
  * loudly instead of quietly producing an uncomposable session.
  */
-function makeAgentPresets({ defaultId = STUB_DEFAULT_PRESET, known = [STUB_DEFAULT_PRESET, "coder", "reviewer"], pinSurface = "current" } = {}) {
+function makeAgentPresets({ defaultId = STUB_DEFAULT_PRESET, known = [STUB_DEFAULT_PRESET, "coder", "reviewer"], pinSurface = "current", omitMount = false } = {}) {
 	if (!["current", "legacy", "both", "none"].includes(pinSurface)) throw new Error(`makeAgentPresets: unknown pinSurface ${JSON.stringify(pinSurface)}（可用：current / legacy / both / none）`);
 	const resolved = [];
 	const standings = [];
@@ -300,14 +300,18 @@ function makeAgentPresets({ defaultId = STUB_DEFAULT_PRESET, known = [STUB_DEFAU
 				return { agentPreset: id };
 			},
 		}),
-		async mount(agentCtx, id) {
-			if (agentCtx === undefined || agentCtx === null || typeof agentCtx.agentId !== "string") {
-				throw new Error("agent-presets: refusing to compose an unscoped context; the scope key is what joins an agent to its preset");
-			}
-			if (!known.includes(id)) throw notFound(id);
-			mounts.push({ agentId: agentCtx.agentId, id, ctx: agentCtx });
-			return { id };
-		},
+		// `omitMount` 是「服务在场、组成面只有一半」的形状断层 fixture（代码评审同批）：
+		// 只判 `resolve` 就裸调 `mount` 会在宿主某代改名时把裸 TypeError 当错误文案。
+		...(omitMount ? {} : {
+			async mount(agentCtx, id) {
+				if (agentCtx === undefined || agentCtx === null || typeof agentCtx.agentId !== "string") {
+					throw new Error("agent-presets: refusing to compose an unscoped context; the scope key is what joins an agent to its preset");
+				}
+				if (!known.includes(id)) throw notFound(id);
+				mounts.push({ agentId: agentCtx.agentId, id, ctx: agentCtx });
+				return { id };
+			},
+		}),
 	};
 	return { service, resolved, standings, acquired, released, legacyPinned, mounts, defaultId, pinSurface };
 }
@@ -585,7 +589,8 @@ function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, a
 			actionLog?.push("resume");
 			if (resumeDelayMs > 0) await new Promise((resolve) => { setTimeout(resolve, resumeDelayMs); });
 			const sessionId = options?.resumeSessionId;
-			if (typeof sessionId !== "string" || !resumeRecords.some((record) => record.header?.id === sessionId)) {
+			const record = resumeRecords.find((item) => item.header?.id === sessionId);
+			if (typeof sessionId !== "string" || record === undefined) {
 				throw new Error(`stub factory: no persisted session ${sessionId}`);
 			}
 			if (extraAgents.some((agent) => agent.id === sessionId)) {
@@ -596,19 +601,22 @@ function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, a
 				id: sessionId,
 				status: "idle",
 				resumed: true,
-				session: { header: { id: sessionId, cwd: CWD }, requestHeader: () => undefined },
+				// 真宿主的 `resume` 用**盘上那份 header** 当 `meta`（`dsh-agent-loop` 的
+				// `prepare(id, { meta: structuredClone(handle.header) })`），所以复活出来的
+				// `agent.session.header` 就是持久化的那一个 —— `agentPreset`（DEFECT-5 的
+				// 组装源）连同 `cwd` 一起从记录里来，而不是桩自己编一个。桩若只给 `{id, cwd}`，
+				// 「复活的会话拿回**它自己**那份 preset」这层就被永久挡在套件外面。
+				session: { header: { id: sessionId, cwd: CWD, ...(record.header?.agentPreset === undefined ? {} : { agentPreset: record.header.agentPreset }) }, requestHeader: () => undefined },
 				inject(message) { calls.injected.push(message); },
 				steer(message) { calls.steered.push(message); },
 				followup(message) { calls.followedup.push(message); actionLog?.push("followup"); },
 			};
 			created.push({ agent, calls, options });
-			extraAgents.push(agent);
-			// A resumed session is LIVE again, so it stops being "hidden": that is
-			// exactly the observation §11.9.4 rests on ("复活后 writerGate 按 id 比对
-			// 直接放行"), and it has to move together with the publication above or the
-			// A4 fixture would keep reporting the session as closed.
-			hidden.delete(sessionId);
-			resumedAgents.push(agent);
+			// 发布（进注册表 / 解除 hidden / 记进 `resumedAgents`）在 `setup` **成功之后** ——
+			// 真工厂是先 `setup` 再 publish，setup 抛错则回滚（`dsh-agent-loop` 的
+			// `initializeAgent` catch ⇒ `prepared.dispose()`）；桩若先发布再 setup，一个失败的
+			// setup 会在注册表里留下一枚活代理，「fail-closed 之后没有活代理被留下」这半条
+			// 就在夹具上读不到（DEFECT-5 ⑦ 正是靠这条读数）。
 			if (typeof options.setup === "function") {
 				const setupCalls = { requests: [] };
 				// The fixture's stand-in for the agent's SCOPE identity. The real
@@ -616,11 +624,24 @@ function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, a
 				// persona-prefix composition source; without an identity on the
 				// context this stub could only answer "did some mount happen", which
 				// is the exact confusion DEFECT-1 is about (「建出来了」 ≠ 「能用」).
-				const agentCtx = { agentId: options.sessionId, on(event, listener) { setupCalls[event] = listener; return () => {}; } };
+				// 上下文里的 `agentId` 按**这条路径自己的身份**取：`create` 面给的是
+				// `options.sessionId`，而 resume 面**只有** `options.resumeSessionId`
+				// （宿主的 `ResumeAgentOptions` 没有 `sessionId` 这个键）。原先两处共用
+				// `options.sessionId` ⇒ 复活面上的 `agentId` 恒为 `undefined`、桩的 `mount`
+				// 按「无 scope」拒绝 —— 恰好把 DEFECT-5 要钉的那一层挡在套件外（DEFECT-1
+				// 那轮「桩只镜像自家实现的调用面」是同一个盲区）。
+				const agentCtx = { agentId: options.sessionId ?? options.resumeSessionId, on(event, listener) { setupCalls[event] = listener; return () => {}; } };
 				await options.setup(agentCtx, agent);
 				agent.setupCalls = setupCalls;
 				agent.setupCtx = agentCtx;
 			}
+			extraAgents.push(agent);
+			// A resumed session is LIVE again, so it stops being "hidden": that is
+			// exactly the observation §11.9.4 rests on ("复活后 writerGate 按 id 比对
+			// 直接放行"), and it has to move together with the publication above or the
+			// A4 fixture would keep reporting the session as closed.
+			hidden.delete(sessionId);
+			resumedAgents.push(agent);
 			onCreated?.(agent, options);
 			return { agent, async dispose() { const index = extraAgents.indexOf(agent); if (index >= 0) extraAgents.splice(index, 1); } };
 		},
@@ -654,7 +675,7 @@ function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, a
 				// persona-prefix composition source; without an identity on the
 				// context this stub could only answer "did some mount happen", which
 				// is the exact confusion DEFECT-1 is about (「建出来了」 ≠ 「能用」).
-				const agentCtx = { agentId: options.sessionId, on(event, listener) { setupCalls[event] = listener; return () => {}; } };
+				const agentCtx = { agentId: options.sessionId ?? options.resumeSessionId, on(event, listener) { setupCalls[event] = listener; return () => {}; } };
 				await options.setup(agentCtx, agent);
 				agent.setupCalls = setupCalls;
 				agent.setupCtx = agentCtx;
@@ -3290,7 +3311,7 @@ const rotRoles = () => [
  * and the trust state a rotation operates on. `receiveMode: accept` keeps notice
  * delivery out of the receiver dialog; the notice cases set their mode explicitly.
  */
-function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitResume = false, extraAgents = undefined, omitAgentsCreate = false } = {}) {
+function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, agentPresetsOptions = undefined, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitResume = false, extraAgents = undefined, omitAgentsCreate = false } = {}) {
 	const env = setup({
 		sessions: [],
 		useSettings: true,
@@ -3307,8 +3328,11 @@ function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trus
 		lateCommands,
 		// §10.2.2's preset face rides the same optional channel: `omitAgentPresets`
 		// is the degradation fixture for the auto path too (it creates through the
-		// SAME `buildTeamSessionCreateOptions`).
+		// SAME `buildTeamSessionCreateOptions`). `agentPresetsOptions` 是本轮补上的
+		// 透传（复活面要 `omitMount` 造「服务在场但组成面只有一半」的形状断层 ——
+		// 漏了这行，那个 fixture 会静默退化成「服务完全正常」，判据变空锁）。
 		omitAgentPresets,
+		agentPresetsOptions,
 		// §10.2.2 模板的另一半（真机缺陷 #2）：auto 路径建继任者也走同一个
 		// `createRootAgent` ⇒ 工作区挂载同样要在这儿有它的降级 fixture。
 		omitWorkspaceRegistry,
@@ -3362,8 +3386,8 @@ const rotPair = (id) => ({ a: ROT_SELF, b: id, createdAt: 1 });
  * in this activation — the shape a plugin reload leaves behind. It is added to the
  * `agents.resume` stub's persisted-session list, so only the recover path can bring
  * it back (`agents.get` keeps answering undefined until then). */
-const declareDormantSession = (env, sessionId) => {
-	env.resumeRecords.push({ header: { id: sessionId, cwd: TEAM_WS }, live: false, persisted: true });
+const declareDormantSession = (env, sessionId, extraHeader = undefined) => {
+	env.resumeRecords.push({ header: { id: sessionId, cwd: TEAM_WS, ...(extraHeader ?? {}) }, live: false, persisted: true });
 	return env;
 };
 const pairSummary = (env) => (env.ns.data.pairs ?? []).map((pair) => `${pair.a}↔${pair.b}${pair.provisional === true ? "(provisional)" : ""}`).sort().join(" ");
@@ -4656,7 +4680,12 @@ check("U26 动词封闭: 第三个动词（以及任何 roster 字段写入的�
 	&& __testing.RECOVERY_ACTIONS.size === 2
 	&& !("session" in reviveTool.parameters.properties));
 
-check("U26 revive: 插件自建会话（id 文法 team-link-<team>-<role>-<uuid8>，重载后已无 handle）→ resume 同一个 id，身份不变、roster 不动、信任零改动", reviveEnv.resumeCalls.length === 1 && at(reviveEnv.resumeCalls, 0, {}).resumeSessionId === REVIVE_PLUGIN_ID && Object.keys(at(reviveEnv.resumeCalls, 0, {})).length === 1 && revivePost.current === revivePre.current && revivePost.pending === null && sameJson(revivePost.history, revivePre.history) && (reviveEnv.ns.data.pairs ?? []).length === 0 && reviveOut.includes("已恢复（revive）") && reviveOut.includes("身份不变"));
+// ⚠️ 这条原本钉的是 `Object.keys(resumeCalls[0]).length === 1`（**只有** `resumeSessionId`）
+// —— 那个「恰好一个键」的形状**就是 DEFECT-5 本身**：宿主自己的 resume 要的是三样
+// （`resumeSessionId` + `agentOptions` + `setup`，`dsh-api-session-controller:406-410`），
+// 少了两样复活出来的代理就没有模型选择、也没有 preset 组装源。判据已改为**逐字钉那三个键**
+// （见下面的 DEFECT-5 组）。
+check("U26 revive: 插件自建会话（id 文法 team-link-<team>-<role>-<uuid8>，重载后已无 handle）→ resume 同一个 id，身份不变、roster 不动、信任零改动", reviveEnv.resumeCalls.length === 1 && at(reviveEnv.resumeCalls, 0, {}).resumeSessionId === REVIVE_PLUGIN_ID && Object.keys(at(reviveEnv.resumeCalls, 0, {})).sort().join(",") === "agentOptions,resumeSessionId,setup" && revivePost.current === revivePre.current && revivePost.pending === null && sameJson(revivePost.history, revivePre.history) && (reviveEnv.ns.data.pairs ?? []).length === 0 && reviveOut.includes("已恢复（revive）") && reviveOut.includes("身份不变"));
 check("U26 revive: 复活出来的代理真的进了同一个注册表——writerGate 按 id 比对直接放行，不需要放宽任何门", reviveEnv.agentFor(REVIVE_PLUGIN_ID) !== undefined && __testing.agentIsLive(reviveEnv.ctx, REVIVE_PLUGIN_ID) === true && __testing.writerGate(reviveEnv.team(), REVIVE_PLUGIN_ID).ok === true && __testing.writerGate(reviveEnv.team(), "session-worker-a").error !== undefined);
 check("U26 生命周期: handle 归插件（与 agents.create 同一条生命周期纪律），并如实声明卸载/重载会再次拆掉它", __testing.teamSessionFor(reviveEnv.ctx).hasHandle(REVIVE_PLUGIN_ID) === true && reviveOut.includes("运行时所有权归本插件") && reviveOut.includes("可再次 revive"));
 
@@ -4844,6 +4873,111 @@ const reviveDiagEnv = rotateEnv({ askScript: [], teams: reviveTeam([
 reviveDiagEnv.setHiddenAgent(REVIVE_PLUGIN_ID, true);
 const reviveDiag = await reviveDiagEnv.tool("team_link_recover").execute({ action: "revive", team: "night-shift" }, execFor(reviveDiagEnv.agentFor("session-target")));
 check("U26 诊断读态: 不带 role → 每角色一行（现任 + 活性 + 在飞令牌）+ 恢复入口 + 硬死锁只有一格，**零副作用**（无确认框、无 resume、无写入）", reviveDiag.includes("恢复诊断") && reviveDiag.includes("零副作用") && reviveDiag.includes("角色 coordinator") && reviveDiag.includes("seated-dead（无活代理）") && reviveDiag.includes("角色 worker-a") && reviveDiag.includes("有活代理") && reviveDiag.includes("（无在飞令牌）") && reviveDiag.includes("硬死锁只有一格") && reviveDiagEnv.uq.requests.length === 0 && reviveDiagEnv.resumeCalls.length === 0 && (reviveDiagEnv.role().recoveries ?? []).length === 0);
+
+// ---------------------------------------------------------------------------
+// DEFECT-5（真机 2026-09-30）：revive 面必须走同一条「能跑起来」的组装时序
+// ---------------------------------------------------------------------------
+// 真机现象（用户原话）：「worker会话重启后报错 —— 处理失败 / 本轮运行失败 prompt variable
+// "{{model}}" has no value for this assembly (section "deployment:persona-prefix")」。
+// **取证链（每条都可复核）**：策略档 `~/.dsh/team-link/policy.json` 的 recoveries 行
+// 记着团队 `mal-analyze-cli-20260929` 的 worker-1..4 在本机 12:47:46 / 12:50:28 /
+// 12:50:33 / 12:50:38 各被 `team_link_recover action=revive` 复活过；四个会话日志里
+// **复活后的第一回合**（12:50:54 / :55 / :55 / :55，turn 14 / 18 / 18 / 22）逐字报
+// 同一个错。同一晚未被 revive 过的 threat-intel worker 四条日志里这个错 **0 命中**。
+//
+// **根因与 DEFECT-1 / DEFECT-3 是同一个缺陷类，只是换了一条路径**：`recoverRevive` 调
+// `ctx.agents.resume({ resumeSessionId })`，一个键都没多给——
+//   - 没有 `agentOptions` ⇒ 复活出来的 agent **没有任何模型选择**，而 `{{model}}` 的唯一
+//     来源就是 `context.agent?.options.model`（`dsh-agent-loop:1565`）⇒ 首回合死在
+//     `deployment:persona-prefix` 的 `{{model}}` 上（DEFECT-3 的机制在这里原样复现）；
+//   - 没有 `setup` ⇒ **preset 组装源没挂**，而 `standard` preset 正是这个 agent 的**工具面**
+//     （`dsh-web-app/presets/standard.patch.yml`：bash/pwsh/fs/jobs/plan-mode/… 全在组成里）
+//     ⇒ 就算模型那一关过了，复活出来的 worker 也拿不回它自己的工具面（DEFECT-1 的机制）。
+// 宿主**自己**的 resume（`dsh-api-session-controller:399-410`）给的正是三样：
+// `resumeSessionId` + `agentOptions: {provider, model} = agentDefaultModel.currentSelection()` +
+// `setup: composeAgent(presetForObservation(observation)).setup`（存下来的 preset → mount）。
+// 本组把这三样逐个钉住，外加两档降级与一条 fail-closed。
+
+const REVIVE_STORED_PRESET = "coder";
+/** DEFECT-5 的端到端读数，按**会话 id** 配对（不按位置）：复活那次 resume 调用交给了宿主
+ * 哪几个键、`agentOptions` 是哪一对、preset 挂的是不是**这个会话自己存下来的**那一个、
+ * 模型选择钩子挂在谁的 setup 上下文上。 */
+function resumeCompositionOf(env) {
+	return env.resumeCalls.map((options) => {
+		const id = options.resumeSessionId;
+		const agent = env.resumedAgents.find((item) => item.id === id);
+		const mounted = env.agentPresets.mounts.filter((entry) => entry.agentId === id);
+		return {
+			id,
+			keys: Object.keys(options).sort().join(","),
+			provider: options.agentOptions?.provider,
+			model: options.agentOptions?.model,
+			hook: typeof agent?.setupCalls?.["agent/request"],
+			setupAgentId: agent?.setupCtx?.agentId,
+			mounts: mounted.length,
+			mountedId: mounted[0]?.id ?? null,
+		};
+	});
+}
+const defect5Team = (history) => reviveTeam([{ role: "coordinator", current: REVIVE_PLUGIN_ID, pending: null, history }]);
+const defect5History = [{ session: REVIVE_PLUGIN_ID, from: 1_700_000_000_000, until: null }];
+const defect5Revive = (env) => env.tool("team_link_recover").execute({ action: "revive", team: "night-shift", role: "coordinator" }, execFor(env.agentFor("session-target")));
+
+const defect5Env = rotateEnv({ askScript: ["执行恢复"], teams: defect5Team(defect5History) });
+defect5Env.setHiddenAgent(REVIVE_PLUGIN_ID, true);
+declareDormantSession(defect5Env, REVIVE_PLUGIN_ID, { agentPreset: REVIVE_STORED_PRESET });
+const defect5Out = await defect5Revive(defect5Env);
+const defect5Rows = resumeCompositionOf(defect5Env);
+check("DEFECT-5 ① revive 的 resume 面 = 宿主自己那三样（`resumeSessionId` + `agentOptions` + `setup`）：缺了 `agentOptions`，复活出来的 agent 就没有 `{{model}}` 的值 ⇒ 首回合必死在 persona-prefix（真机 12:50:54 那四条日志）", defect5Out.includes("已恢复（revive）") && defect5Rows.length === 1 && defect5Rows[0].id === REVIVE_PLUGIN_ID && defect5Rows[0].keys === "agentOptions,resumeSessionId,setup" && defect5Rows[0].provider === STUB_DEFAULT_PROVIDER && defect5Rows[0].model === STUB_DEFAULT_MODEL && defect5Env.agentDefaultModel.calls.length === 1);
+check("DEFECT-5 ② preset 组装源：复活的 agent 拿到的是**它自己存下来的** `header.agentPreset`（不是宿主缺省）——mount 恰一次，且挂在**这个会话自己**的 setup 上下文上（工具面与人设都在这支组成里）", defect5Rows.length === 1 && defect5Rows[0].mounts === 1 && defect5Rows[0].mountedId === REVIVE_STORED_PRESET && defect5Rows[0].setupAgentId === REVIVE_PLUGIN_ID && defect5Env.agentPresets.resolved[0] === REVIVE_STORED_PRESET);
+const defect5Hook = await probeModelHook(defect5Env.resumedAgents[0], { provider: STUB_DEFAULT_PROVIDER, model: STUB_DEFAULT_MODEL, reasoningEffort: "high" });
+check("DEFECT-5 ③ 判据是「能用」不是「装了」：模型选择钩子挂在复活这具 agent 自己的 setup 上，且带的就是缺省那一对（同名路由 ⇒ 抹掉继承来的 reasoningEffort）", defect5Rows.length === 1 && defect5Rows[0].hook === "function" && defect5Hook.installed === true && defect5Hook.out.provider === STUB_DEFAULT_PROVIDER && defect5Hook.out.model === STUB_DEFAULT_MODEL && defect5Hook.out.reasoningEffort === undefined);
+
+// 缺省回落：老会话 / 手工会话的 header 里没有 `agentPreset` ⇒ 按宿主缺省解析（同一句
+// 「缺省也解析」的口径），**不是**「读不到就干脆不挂」——那正是 DEFECT-1 的形状。
+const defect5DefaultEnv = rotateEnv({ askScript: ["执行恢复"], teams: defect5Team(defect5History) });
+defect5DefaultEnv.setHiddenAgent(REVIVE_PLUGIN_ID, true);
+declareDormantSession(defect5DefaultEnv, REVIVE_PLUGIN_ID);
+const defect5DefaultOut = await defect5Revive(defect5DefaultEnv);
+const defect5DefaultRows = resumeCompositionOf(defect5DefaultEnv);
+check("DEFECT-5 ④ header 里没有 preset ⇒ 缺省也解析（resolve(undefined) → mount 缺省那一个），复活照常成功", defect5DefaultOut.includes("已恢复（revive）") && defect5DefaultRows.length === 1 && defect5DefaultRows[0].mounts === 1 && defect5DefaultRows[0].mountedId === STUB_DEFAULT_PRESET && defect5DefaultEnv.agentPresets.resolved[0] === undefined);
+
+// 降级（不是 fail-closed）：`agentPresets` 是可服务，缺席只留一行具名 warn —— 与 create 面同口径。
+const defect5NoPresetEnv = rotateEnv({ askScript: ["执行恢复"], omitAgentPresets: true, teams: defect5Team(defect5History) });
+defect5NoPresetEnv.setHiddenAgent(REVIVE_PLUGIN_ID, true);
+declareDormantSession(defect5NoPresetEnv, REVIVE_PLUGIN_ID);
+const defect5NoPresetOut = await defect5Revive(defect5NoPresetEnv);
+const defect5NoPresetRows = resumeCompositionOf(defect5NoPresetEnv);
+check("DEFECT-5 ⑤ preset 服务缺席 ⇒ 降级但绝不静默：复活照常成功（`agentOptions` 照样带着缺省那一对），零 mount，恰留一行 warn 点名这个会话没有 persona-prefix 组装源", defect5NoPresetOut.includes("已恢复（revive）") && defect5NoPresetRows.length === 1 && defect5NoPresetRows[0].provider === STUB_DEFAULT_PROVIDER && defect5NoPresetRows[0].model === STUB_DEFAULT_MODEL && defect5NoPresetEnv.agentPresets.mounts.length === 0 && defect5NoPresetEnv.log.lines.warn.filter((line) => line.includes("agentPresets service unavailable") && line.includes(REVIVE_PLUGIN_ID)).length === 1);
+// 同一形状断层在**两个面上必须同一句判词**（代码评审第 2 轮）：创建面拒绝 ⇒ 复活面也拒绝 ——
+// 降级只留给「服务整个缺席」那一档。理由与创建面同源：没有组装源的代理正是 DEFECT-1
+// 「会建 ≠ 能用」的形状，而复活面存在的意义就是「只把能跑起来的会话救回来」。
+const defect5HalfPresetEnv = rotateEnv({ askScript: ["执行恢复"], agentPresetsOptions: { omitMount: true }, teams: defect5Team(defect5History) });
+defect5HalfPresetEnv.setHiddenAgent(REVIVE_PLUGIN_ID, true);
+declareDormantSession(defect5HalfPresetEnv, REVIVE_PLUGIN_ID);
+const defect5HalfPresetOut = await defect5Revive(defect5HalfPresetEnv);
+check("DEFECT-5 ⑤b 服务在场但组成面只有一半（缺 `mount`）⇒ 与创建面同一句判词：**显式拒绝**（零 resume 调用、零写入、零 warn 降级），不是「照常复活、只是没组装源」", defect5HalfPresetOut.includes("恢复失败（revive，fail-closed）") && defect5HalfPresetOut.includes("组成面形状断层") && defect5HalfPresetOut.includes("mount=undefined") && defect5HalfPresetEnv.resumeCalls.length === 0 && (defect5HalfPresetEnv.role().recoveries ?? []).length === 0 && defect5HalfPresetEnv.log.lines.warn.filter((line) => line.includes("agentPresets service unavailable")).length === 0);
+
+// fail-closed：没有可解析的缺省模型 ⇒ 拒绝恢复（与 create 面同一条口径「宁可不建/不复活一个
+// 跑不起来的代理」）——**零 resume、零写入、零留痕**，报告点名原因与出路。
+const defect5NoModelEnv = rotateEnv({ askScript: ["执行恢复"], omitAgentDefaultModel: true, teams: defect5Team(defect5History) });
+defect5NoModelEnv.setHiddenAgent(REVIVE_PLUGIN_ID, true);
+declareDormantSession(defect5NoModelEnv, REVIVE_PLUGIN_ID);
+const defect5NoModelOut = await defect5Revive(defect5NoModelEnv);
+check("DEFECT-5 ⑥ 模型选择解析不出来 ⇒ 拒绝恢复（fail-closed）：零 resume、零写入、零留痕，报告点名 `agentDefaultModel`、后果（`{{model}}` 无值 ⇒ 首回合死在 persona-prefix）与出路", defect5NoModelOut.includes("恢复失败（revive，fail-closed）") && defect5NoModelOut.includes("agentDefaultModel") && defect5NoModelOut.includes("{{model}}") && defect5NoModelEnv.resumeCalls.length === 0 && (defect5NoModelEnv.role().recoveries ?? []).length === 0 && !defect5NoModelEnv.role().rotationAt && defect5NoModelEnv.ns.data.teams[0].policy.writer === "coordinator");
+
+// 存量 preset 解析不出来 ⇒ 显式失败（**不**静默换成另一个组成源）：一个跑着**别的**工具面、
+// 却顶着这个名字的会话比一次可读的失败更难查——与 create 面「preset= 指了个解析不出来的 id
+// ⇒ 拒绝创建、不静默降级」同口径。
+const defect5GoneEnv = rotateEnv({ askScript: ["执行恢复"], teams: defect5Team(defect5History) });
+defect5GoneEnv.setHiddenAgent(REVIVE_PLUGIN_ID, true);
+declareDormantSession(defect5GoneEnv, REVIVE_PLUGIN_ID, { agentPreset: "gone-preset" });
+const defect5GoneOut = await defect5Revive(defect5GoneEnv);
+check("DEFECT-5 ⑦ 存量 preset 解析不出来 ⇒ 显式失败且点名那个 preset（不静默降级成宿主缺省那支组成），零留痕、且**失败后不留下一枚活代理**（真工厂是 setup 抛错即回滚发布；夹具同批对齐）", defect5GoneOut.includes("恢复失败（revive，fail-closed）") && defect5GoneOut.includes("gone-preset") && (defect5GoneEnv.role().recoveries ?? []).length === 0 && defect5GoneEnv.agentPresets.mounts.length === 0 && defect5GoneEnv.agentFor(REVIVE_PLUGIN_ID) === undefined && __testing.agentIsLive(defect5GoneEnv.ctx, REVIVE_PLUGIN_ID) === false);
+// ⑥ 与 ⑦ 的差别要如实标出来（代码评审 🟡#2）：⑥ 档失败在**调用之前**（零 resume 调用），
+// ⑦ 档的失败发生在 `setup` 里 ⇒ resume **已被调用**、在组装阶段回滚。两档都零复活零写入，
+// 但不是同一种「零 resume」。
+check("DEFECT-5 ⑦ 口径: 存量 preset 的解析发生在 setup 里 ⇒ resume 调用已在飞（`resumeCalls.length === 1`）但**没有**代理被发布；与 ⑥ 的「零 resume 调用」不是同一档（文档同批按此改写）", defect5GoneEnv.resumeCalls.length === 1 && defect5GoneEnv.resumeCalls[0].resumeSessionId === REVIVE_PLUGIN_ID && defect5NoModelEnv.resumeCalls.length === 0 && defect5GoneEnv.resumedAgents.length === 0);
 
 // ---------------------------------------------------------------------------
 // §11.9.4 L2 reappoint（U27/U29）：候选由插件算 · 人类在环 · 逐字复用 prepare/claim
@@ -6404,6 +6538,13 @@ check("pin 换代（旧名回退）: 宿主只有 standingKeyFor（0.1.x 一代�
 const pinNoneEnv = teamSessionEnv({ askScript: ["创建"], agentPresetsOptions: { pinSurface: "none" } });
 const pinNoneOut = await pinNoneEnv.run("n=2 team=pin-surface roles=worker-a,worker-b");
 check("pin 换代（断层点名）: 两个 pin 方法都没有 ⇒ 创建失败且错误文案点名两代已知形状与断层（含两个方法名），不再是裸 TypeError —— 零创建、零 pairs", pinNoneOut.kind === "error" && pinNoneOut.text.includes("acquireScope") && pinNoneOut.text.includes("standingKeyFor") && pinNoneOut.text.includes("创建失败") && !pinNoneOut.text.includes("is not a function") && pinNoneEnv.creates.length === 0 && pinNoneEnv.pairs().length === 0);
+// 组成面**另一半**的形状断层（代码评审 🟡/🔵 同批）：旧守卫只判 `resolve`，`mount` 是在
+// `setup` 里裸调的 ⇒ 宿主某代改掉 `mount` 的名字，用户会看到裸 `TypeError: agentPresets.mount
+// is not a function` 当错误文案（0.4.2 `standingKeyFor` 换代那两次翻车的原文形状）。判据与
+// 复活面同一条：形状断层**显式点名**，且零创建。
+const pinNoMountEnv = teamSessionEnv({ askScript: ["创建"], agentPresetsOptions: { omitMount: true } });
+const pinNoMountOut = await pinNoMountEnv.run("n=2 team=pin-surface roles=worker-a,worker-b");
+check("组成面（mount 缺失·形状断层）: 服务在场但只有 `resolve`、没有 `mount` ⇒ 显式点名断层（两个读数都写出来）且零创建、零 pairs，不再是裸 TypeError", pinNoMountOut.kind === "error" && pinNoMountOut.text.includes("组成面形状断层") && pinNoMountOut.text.includes("mount=undefined") && pinNoMountOut.text.includes("resolve=function") && !pinNoMountOut.text.includes("is not a function") && pinNoMountEnv.creates.length === 0 && pinNoMountEnv.pairs().length === 0);
 
 // 释放面（2026-09-29 同日补）：`standingKeyFor` → `acquireScope` **不是纯改名** ——
 // 宿主注册面的实现是 `retain(id)` ＋ 一个 `[Symbol.asyncDispose]` 句柄（`users--` ＋
