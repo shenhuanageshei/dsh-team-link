@@ -46,7 +46,7 @@
 - **夹具同批修复（这一课的重点）**：`agents.resume` 桩原先用 `options.sessionId` 当 setup 上下文的 `agentId`，而 resume 面**只有** `options.resumeSessionId` ⇒ 复活面上 `agentId` 恒为 `undefined`、桩的 `mount` 按「无 scope」拒绝，**恰好把 DEFECT-5 要钉的那一层挡在套件外**（与 DEFECT-1 那轮「桩只镜像自家实现的调用面」是同一个盲区）；同批两处保真修复：桩的复活 header 从**持久化记录**里取 `agentPreset`，且**发布挪到 `setup` 成功之后**（真工厂是 setup 抛错即回滚发布）——后者让「fail-closed 之后不留活代理」这半条变成可读的读数。
 - **红相（实跑）**：`git checkout -- lib/index.js`（夹具不动）⇒ `host 1324 (failed: 11)` —— 恰是改写的 1 条 + 新增的 10 条，其余 1313 条全绿；还原后 `lib/index.js` sha256 `609F9D47A35BE7AFA07B3C6C31CC192E40209B7F86DDF7AFB4F1811E4F7941E0` byte-identical。
 - **绿相（实跑）**：`node host-half.test.mjs` → `ALL PASS` / `assertion total: 1324 (failed: 0)`（1313 + 11）；`node client-half.test.mjs` → `ALL PASS` / `assertion total: 310 (failed: 0)`；退出码均 0。
-- **真机待验（如实登记）**：插件代码随 DSH boot 加载，需**重启 DSH** 后由用户对那四个 worker 重发 `team_link_recover action=revive` 才能闭环；本轮真机验到的只有故障面本身（四个会话日志的逐字原文 + 策略档的 revive 留痕）。**已存在的四个 worker 会话不受影响**：它们的首回合失败只写进日志，重启后 revive 一次即恢复正常（会话历史一字未动）。
+- **真机复验（2026-10-01，重启窗口后）**：① **跑的是修复后的代码**有铁证 —— worker-1 的 `request/header` 事件里内嵌的 `team_link_recover` 工具描述，重启前那次不含本轮新增句、重启后那次（13:52:34）含「真机缺陷 #5」与「resumeSessionId + agentOptions + setup」；② **故障不再复发** —— 四个 worker 日志里该错误的**真失败**（`turn/end{kind=error}`）全部落在重启（13:34:17）**之前**，之后 0 条（之后仍命中该字符串的 8 处均为 `request/header` 内嵌文本，逐条按事件类型核对）；③ 四个 worker 重启后仍在持续跑（末次 `turn/start` 到本机 02:19–02:22），两个团队 5/5 有活代理。**④ 但插件 revive 通道这次没被真正走通（如实登记）**：重启后唯一的 `team_link_recover` 调用是协调者 13:50:19 连发的四次 revive，四次都被「该角色的现任……**有活动代理**」拒绝 —— 那四个会话实际是宿主自己的 resume 路径（客户端/侧边栏打开）带回来的（策略档 `recoveries` 无新增行）。⇒ 修复后的 revive 路径在生产上仍是**未走过的路**，待下一次自然时机复验；🔵#4 登记的「缺省 ≠ 上次用的模型」那枚 worker 同样仍待验。
 
 ## 0.4.2 — 2026-09-29（发布收口：DSH 0.2.0-rc.1 两处运行时换代断层 ＋ preset 租约释放 ＋ 客户端团队面板可读性重设计）
 
