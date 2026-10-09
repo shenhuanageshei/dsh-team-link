@@ -57,6 +57,9 @@ const CWD = "C:/dev/demo";
 // 落在 os.tmpdir() 之下，顺带让跑测期间的工作树保持干净（不必再靠 .gitignore）。
 // ---------------------------------------------------------------------------
 const TEST_ROOT = mkdtempSync(path.join(tmpdir(), "dsh-team-link-test-"));
+// t-8/task-9 F: 崩溃路径的兜底 —— 套件末尾的 rmSync 只在**跑完**时执行，中途 uncaught 会留一份
+// 临时根（本轮调试期实测留了 8 份）。挂一个 exit 钩子：正常退出与 uncaught 崩溃都会走到它。
+process.on("exit", () => { try { rmSync(TEST_ROOT, { recursive: true, force: true }); } catch { /* 收尾不许再抛 */ } });
 
 /** Per-fixture policy-home counter (see setup): every fixture gets its own DSH_HOME so
  * the file backend can never leak one fixture's roster into the next. */
@@ -159,6 +162,59 @@ function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegiste
 			},
 		},
 	};
+}
+
+
+/**
+ * 批 2（FR-1/FR-2）: agent 作用域 \`systemPrompt\` 服务桩。
+ * 真宿主里每个 agent 的 \`agent.ctx.systemPrompt\` 就是这个面（本机三个用户插件都在用同一条路，
+ * 设计档 §4 层 3-f 有先例）。桩记录每一次 \`section()\` 的**逐字参数**与每个 disposer 的调用次数
+ * —— U2（注册参数）/U3（换届换段）/U4（代理消失不泄漏）都读这两个读数，而不是抄一份进测试。
+ *
+ * 三个降级旋钮各对应 U1 的一条到达路径：\`omitSection\`（面在、没有 section）/ \`omitOrder\`
+ * （没有 getSectionOrder）/ \`sectionThrows\`（注册抛错）。
+ */
+function makeSystemPrompt({ orders = { TEAM_POLICY: 900 }, omitSection = false, omitOrder = false, sectionThrows = false } = {}) {
+	const sections = [];
+	const service = {
+		...(omitSection ? {} : {
+			section(options) {
+				if (sectionThrows) throw new Error("stub systemPrompt.section refused");
+				const record = { name: options?.name, order: options?.order, text: options?.text, disposed: 0 };
+				sections.push(record);
+				return () => { record.disposed += 1; };
+			},
+		}),
+		...(omitOrder ? {} : {
+			getSectionOrder(name) { return orders[String(name)]; },
+		}),
+	};
+	return {
+		service,
+		sections,
+		/** 某个名字的活段（未被 dispose 的那些）。 */
+		live: (name = undefined) => sections.filter((record) => record.disposed === 0 && (name === undefined || record.name === name)),
+		/** 直接在那个段的函数型 text 上渲染一次（不经过宿主装配）。 */
+		render: (record, assembly) => record.text(assembly),
+	};
+}
+
+/**
+ * 批 2（FR-2）: \`sessionProjections\` 服务桩。读数形状按 **2026-10-09 实读宿主 asar 核对过**的
+ * 三个 key（\`contextPressure\` v5 / \`tokenUsage\` v2 / \`sessionStats\` v1，见 lib/index.js 里那一段
+ * 注释）；\`readings\` 缺席的 key 就是「投影未注册」那一档。\`calls\` 记录每一次 stateOf 的
+ * （sessionId, key），用来证明资源行**只读**、且读的是哪几个 key。
+ */
+function makeSessionProjections({ readings = {}, omit = false, throws = false } = {}) {
+	const calls = [];
+	const service = omit ? {} : {
+		stateOf(session, key) {
+			calls.push({ sessionId: session?.header?.id, key });
+			if (throws) throw new Error("stub sessionProjections.stateOf exploded");
+			return readings[key];
+		},
+	};
+	return { service, calls, readings };
 }
 
 /** Scripted userQuestions service: ask() pops the next scripted answer. */
@@ -567,7 +623,7 @@ async function probeModelHook(agent, resolved) {
  * so a batch that fans out would report a peak above the ≤2 bound while the
  * serial loop reports 1.
  */
-function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, actionLog = undefined, createDelayMs = 0, inFlight = undefined, resumeRecords = [], resumeCalls = [], resumeDelayMs = 0, resumedAgents = [] } = {}) {
+function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, actionLog = undefined, createDelayMs = 0, inFlight = undefined, resumeRecords = [], resumeCalls = [], resumeDelayMs = 0, resumedAgents = [], systemPrompt = undefined } = {}) {
 	const created = [];
 	const creates = [];
 	/** In-flight bookkeeping for the §10.2.6 并发 red line (G2): the PROVIDER side
@@ -616,6 +672,8 @@ function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, a
 				id: sessionId,
 				status: "idle",
 				resumed: true,
+				// 批 2: 复活的会话回到现任 ⇒ 段要能重新挂上（同 create 面）。
+				...(systemPrompt === undefined ? {} : { ctx: { systemPrompt } }),
 				// 真宿主的 `resume` 用**盘上那份 header** 当 `meta`（`dsh-agent-loop` 的
 				// `prepare(id, { meta: structuredClone(handle.header) })`），所以复活出来的
 				// `agent.session.header` 就是持久化的那一个 —— `agentPreset`（DEFECT-5 的
@@ -670,6 +728,8 @@ function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, a
 			const agent = {
 				id: options.sessionId,
 				status: "idle",
+				// 批 2: 新建出来的会话也是 roster 成员 ⇒ sync 会给它注册段，所以它同样带 systemPrompt 面。
+				...(systemPrompt === undefined ? {} : { ctx: { systemPrompt } }),
 				session: { header: { id: options.sessionId, cwd: options.meta?.cwd ?? CWD, ...(options.meta?.origin === undefined ? {} : { origin: options.meta.origin }) }, requestHeader: () => undefined },
 				inject(message) { calls.injected.push(message); },
 				steer(message) { calls.steered.push(message); },
@@ -894,6 +954,13 @@ function setup({
 	/** 批 1（FR-7 红相夹具）：把 `scope.update` 的落盘推迟这么多毫秒 —— 真宿主的设置写入是异步的，
 	 * 于是「快路径折叠在 `apply` 返回之后才落定」那个窗口才在套件里真的出现。默认 0 = 桩的历史行为。 */
 	settingsUpdateDelayMs = 0,
+	/** 批 2: agent 作用域的 systemPrompt 面（U1 的降级夹具 = omitSystemPrompt；见 makeSystemPrompt）。 */
+	omitSystemPrompt = false,
+	systemPromptOptions = undefined,
+	/** 批 2: 会话投影读数（FR-2 的资源行）；omitProjections 是「服务缺席」那一档。 */
+	projectionsReadings = undefined,
+	omitProjections = false,
+	projectionsThrows = false,
 	selfCwd,
 	omitUserQuestions = false,
 	surfaceReadHook,
@@ -941,6 +1008,14 @@ function setup({
 			};
 		},
 	};
+	// 批 2（FR-1/FR-2）: 两个新面 —— agent 作用域的 systemPrompt（段注册）与会话投影（资源行）。
+	// 真宿主两个都在场，所以默认提供；两个 omit 旋钮各是 U1 / §9 的一条降级到达路径。
+	const systemPrompt = makeSystemPrompt(systemPromptOptions ?? {});
+	const attachSystemPrompt = (agent) => {
+		if (!omitSystemPrompt) agent.ctx = { ...(agent.ctx ?? {}), systemPrompt: systemPrompt.service };
+		return agent;
+	};
+	const projectionsStub = makeSessionProjections({ readings: projectionsReadings ?? {}, omit: omitProjections, throws: projectionsThrows });
 	const registeredTools = [];
 	const routes = [];
 	const { agent: senderAgent, calls: senderCalls } = makeSenderAgent(selfStatus, selfCwd ?? CWD);
@@ -979,7 +1054,7 @@ function setup({
 	const resumeRecords = [];
 	const resumeCalls = [];
 	const resumedAgents = [];
-	const agentFactory = makeAgents(createdAgents, hidden, { failAt: failCreateAt, onCreated: createdHook, actionLog, createDelayMs, inFlight: createInFlight, resumeRecords, resumeCalls, resumeDelayMs, resumedAgents });
+	const agentFactory = makeAgents(createdAgents, hidden, { failAt: failCreateAt, onCreated: createdHook, actionLog, createDelayMs, inFlight: createInFlight, resumeRecords, resumeCalls, resumeDelayMs, resumedAgents, systemPrompt: omitSystemPrompt ? undefined : systemPrompt.service });
 	const agents = {
 		get(id) {
 			if (hidden.has(id)) return undefined;
@@ -1024,6 +1099,9 @@ function setup({
 	query.corpusSessionIds = () => [...new Set([...(query.records ?? []).map((record) => record.header?.id), ...resumeRecords.map((record) => record.header?.id)])];
 	ctx.provide("sessionQuery", query);
 	ctx.provide("agents", agents);
+	// 批 2: 段注册要 agent 作用域的 systemPrompt —— 每个 agent 出厂就带着它（真宿主如此）。
+	for (const agent of [senderAgent, targetAgent, runnerAgent, ...extraAgentObjects]) attachSystemPrompt(agent);
+	if (!omitProjections) ctx.provide("sessionProjections", projectionsStub.service);
 	// `omitUserQuestions` models a shell without the confirmation service (the
 	// M2 retirement cleanup and the M1 send gates must both degrade, not crash).
 	if (!omitUserQuestions) ctx.provide("userQuestions", uq.service);
@@ -1151,7 +1229,7 @@ function setup({
 	const invoke = (rawInput, agent = senderAgent) => ({ commandId: "cmd-test", agent, rawInput, attachments: [], signal: new AbortController().signal });
 	/** G2 handle: the provider-side peak of concurrent `agents.create` calls. */
 	const maxCreateInFlight = () => createInFlight.max;
-	return { policyHome: policyDir, ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideConnection, connection, provideCommands, agentPresets, workspaceRegistry, sessionTitle, agentDefaultModel, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
+	return { policyHome: policyDir, systemPrompt, projections: projectionsStub, ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideConnection, connection, provideCommands, agentPresets, workspaceRegistry, sessionTitle, agentDefaultModel, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
 }
 
 function execFor(agent) {
@@ -9566,7 +9644,10 @@ check("投递面（对照）: 同一款 fixture、同一个目标集合，仅把
 	digestOf(wbAwaitEnv).length >= 1 && alarmsOf(wbAwaitEnv).length === 0);
 
 // --- FR-7（U12）: attach 重挂 -----------------------------------------------------
-const wbRearmRow = (id) => wbRow({ id, team: "wb-rearm", targets: ["session-target"], createdAt: 1_700_000_000_000, expiresAt: 1_700_000_000_000 + 12 * 3600_000 });
+// ★ t-8 复验 🟡（task-9 C）：`expiresAt` 必须相对**真实墙钟** —— 旧夹具用的是 2023-11-15 的常量，
+// 按真实时间早已过期，它们拿到定时器靠的是「全过期 ⇒ 留一个清扫专用定时器」那条兜底支
+// （复验者实测：只删兜底 ⇒ 8 红）。改成 now+12h 之后，这些行走的是**活的**那一支，兜底支不再替它们背书。
+const wbRearmRow = (id) => wbRow({ id, team: "wb-rearm", targets: ["session-target"], createdAt: Date.now(), expiresAt: Date.now() + 12 * 3600_000 });
 // 红相机制 1（晚挂）：activation 时既没有服务、也没有文件 ⇒ apply 那一刻注册表不可读。
 const wbRearmLateRow = wbRearmRow("wd-rearm-late");
 const wbRearmLateEnv = setup({ sessions: [], lateSettings: true, selfCwd: TEAM_WS, settingsSeed: { "team-link": { watchdogs: [wbRearmLateRow] } } });
@@ -9731,9 +9812,30 @@ const wbIsoSchedule = wbIsoWatchdog.schedule;
 wbIsoWatchdog.schedule = () => { throw new Error("boom: schedule refused"); };
 const wbIsoOut = await wbIsoEnv.run("n=1 team=wb-iso roles=worker-a task=建队");
 wbIsoWatchdog.schedule = wbIsoSchedule;
-check("G① 失败隔离（验证者 🟡3）: 工作台注册失败**只回一行读数**（未注册（写入失败…）——建队本身不受影响），命令照旧成功、会话已建、roster 已写",
-	wbIsoOut.kind === "success" && wbIsoOut.text.includes("工作台（FR-3a）：未注册（写入失败") && wbIsoEnv.creates.length === 1
-		&& wbIsoEnv.store().some((team) => team.name === "wb-iso") && wbIsoEnv.log.lines.warn.length === 0);
+// ★ t-14 B（评审 #3 🟡）：这条判据原来只钉「写入失败」那半句 —— 而夹具打的正是 schedule 抛错，
+// 于是它把「已落盘、只是本进程没挂定时器」误报成「写入失败」。现在两段文案分开钉：
+// ① 行**真的写进 settings 了**（读命名空间，不看报文）；② 报文如实说「已写入但定时器未挂上」；
+// ③ 一行 warn 点名；④ 命令本身照旧成功（失败隔离不变）。
+const wbIsoAuto = () => (wbIsoEnv.settings.namespaces.get("team-link").data.watchdogs ?? []).filter((entry) => entry.origin === "auto");
+check("G① 写入段与挂表段分开报（t-14 B）: schedule 抛错时那条 auto 注册**已经落盘**（命名空间里读得到），报文如实说「已写入 <id>：首挂失败（…），已由 rearm 补上」——不再谎称「写入失败」；命令照旧成功、会话已建、roster 已写",
+	wbIsoOut.kind === "success" && wbIsoOut.text.includes("工作台（FR-3a）：已写入 ") && wbIsoOut.text.includes("首挂失败") && wbIsoOut.text.includes("已由 rearm 补上")
+		&& wbIsoAuto().length === 1 && wbIsoOut.text.includes(wbIsoAuto()[0].id) && wbIsoEnv.creates.length === 1
+		&& wbIsoEnv.store().some((team) => team.name === "wb-iso") && !wbIsoOut.text.includes("未注册（写入失败"));
+check("G① 留痕与补救（t-14 B）: 该分支留**恰一行** warn 点名「已写入，但定时器未挂上」与补救结果；夹具里 rearm 真的把定时器补上了（timers 里有这条 id）—— 报文与事实一致",
+	wbIsoEnv.log.lines.warn.filter((line) => line.includes("已写入，但定时器未挂上")).length === 1
+		&& wbIsoEnv.log.lines.warn.some((line) => line.includes(wbIsoAuto()[0]?.id ?? "wd-") && line.includes("已由 rearm 补上"))
+		&& wbIsoWatchdog.timers.has(wbIsoAuto()[0]?.id ?? "wd-"));
+// 两条分支各自的文案（单元级 · 判据直接驱动真函数，夹具给最小 policy/watchdog 替身）：
+const wbIsoUnitCtx = { logger: { warn: () => {} } };
+const wbIsoUnitPolicy = (update) => ({ get: () => ({ watchdogs: [] }), update });
+const wbIsoUnitWatchdog = (schedule) => ({ schedule, rearm: () => {}, timers: new Map() });
+const wbIsoUnitRequest = { watcherSession: "session-self", team: "wb-iso-unit", targets: ["session-target"], now: 1_700_000_000_000 };
+const wbIsoWriteFail = await __testing.armTeamWatchdog(wbIsoUnitCtx, wbIsoUnitPolicy(async () => { throw new Error("update refused"); }), wbIsoUnitWatchdog(() => {}), wbIsoUnitRequest);
+const wbIsoArmFail = await __testing.armTeamWatchdog(wbIsoUnitCtx, wbIsoUnitPolicy(async () => {}), wbIsoUnitWatchdog(() => { throw new Error("schedule refused"); }), wbIsoUnitRequest);
+check("G① 分支①（update 失败）: 文案「写入失败（…）——本次没有落盘」，不带 entry（没落盘就没有注册可报）",
+	wbIsoWriteFail.entry === undefined && String(wbIsoWriteFail.error).includes("写入失败") && String(wbIsoWriteFail.error).includes("本次没有落盘") && !String(wbIsoWriteFail.error).includes("定时器未挂上"));
+check("G① 分支②（schedule 失败，rearm 也没能补上）: 文案「已写入但定时器未挂上（…）」且 **entry 在场**（写入确实落盘了），绝不出现「写入失败」",
+	wbIsoArmFail.entry !== undefined && String(wbIsoArmFail.error).includes("已写入但定时器未挂上") && wbIsoArmFail.armed === false && !String(wbIsoArmFail.error).includes("写入失败"));
 
 // --- G②（验证者 🟡3）: 另两条 attach 窗口（refused / detached）也重挂 --------------
 const wbRearmRefusedRow = wbRearmRow("wd-rearm-refused");
@@ -9765,6 +9867,251 @@ const wbListOut = await wbWatchTool.execute({ action: "list" }, execFor(wbEnv.se
 check("G③（验证者 🔵7）: watch list 的手工行逐字带「 · 来源 manual」（改前它一个来源字都不带）", wbListOut.includes("· 来源 manual"));
 check("G③（验证者 🔵7）: auto 行的来源那一格是完整那句（不占手工额度 + 投工作台摘要），两档不会看混",
 	wbListOut.includes("· 来源 auto（建队时自动注册，不占手工额度，投工作台摘要）"));
+// ===========================================================================
+// 批 2 · FR-1 协调者宪章段 ＋ FR-2 会话资源段（合并注册 / 生命周期 / 降级）
+// 归属：docs/2026-10-09-team-autonomy-design.md §5（FR-1/FR-2）· §6（伪代码）·
+// §7.2/§7.4 · §8（U1–U6/U15）· §9（边界）。
+// 两条评审裁定（第二轮设计评审 #2/#9，task-7 转述）也在这一段里钉住。
+//
+// ★ 宿主读数面（2026-10-09 实读宿主 asar 核对，非推测）——夹具按同一形状建模：
+//   contextPressure v5 { contextWindow?, pressureTokens?, surfaceTokens, … } ·
+//   tokenUsage v2 { totals{uncachedInputTokens,outputTokens,cacheReadTokens,cacheWriteTokens}, last{turn,step,buckets} } ·
+//   sessionStats v1 { turns, steps, … } ⇒ **turns 在场**（批 2 的先行核实结论）。
+// ===========================================================================
+
+/** 一条角色行（规范形状；与 teamRow 同一套字段）。 */
+const wb2Role = (role, current) => ({
+	role, current, pending: null, rotationAt: 0, provisional: null, rotationStatus: "",
+	history: current === null ? [] : [{ session: current, from: 1_700_000_000_000, until: null, note: "" }],
+});
+/** 一支队伍（协调者 session-self + worker-a session-worker-a）。 */
+const wb2Team = (name = "wb2-team", roles = undefined) => ({
+	name, createdAt: 1_700_000_000_000, workspace: TEAM_WS, policy: { writer: "coordinator" },
+	mode: "sessions", leadSessionId: "",
+	roles: roles ?? [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "session-worker-a")],
+});
+/** 批 2 的夹具：名册直接种进命名空间（服务在 activation 就在场 ⇒ apply 那一刻就读得到 ⇒ 注册钩子②当场跑）。 */
+const wb2Env = ({ teams = [wb2Team()], extraAgents = [{ id: "session-worker-a", status: "idle", cwd: TEAM_WS }], projections = undefined, ...rest } = {}) => setup({
+	sessions: [], useSettings: true, selfCwd: TEAM_WS, extraAgents,
+	settingsSeed: { "team-link": { teams } },
+	...(projections === undefined ? {} : { projectionsReadings: projections }),
+	...rest,
+});
+/** 一条投影读数（形状按宿主 asar 核对的三个 key）。 */
+const wb2Readings = (overrides = {}) => ({
+	contextPressure: { contextWindow: 1_000_000, pressureTokens: 250_000, surfaceTokens: 200_000 },
+	tokenUsage: { totals: { uncachedInputTokens: 100, outputTokens: 200, cacheReadTokens: 300, cacheWriteTokens: 400 }, last: { turn: 7, step: 3 } },
+	sessionStats: { turns: 7, steps: 21 },
+	...overrides,
+});
+
+// --- U2：注册参数逐字 —— 只对活代理、只对现任、宪章只给协调者 -----------------------
+const wb2EnvBase = wb2Env({ projections: wb2Readings() });
+const wb2Sections = __testing.sectionsFor(wb2EnvBase.ctx);
+const wb2LiveRecords = wb2EnvBase.systemPrompt.live();
+const wb2SectionsRecords = wb2EnvBase.systemPrompt.sections;
+check("U2 注册: 名册里的两个活现任各拿到**恰一个**段 —— name=team-link:role、order 取 getSectionOrder(\"TEAM_POLICY\")（夹具答 900）、text 是**函数**",
+	wb2Sections !== undefined && wb2Sections.registered.size === 2 && wb2LiveRecords.length === 2
+		&& wb2LiveRecords.every((record) => record.name === "team-link:role" && record.order === 900 && typeof record.text === "function"));
+/** 按注册表里的顺序取「那个会话的段」：注册表是 sessionId -> plan，段记录是同序 push 的。 */
+// 段的**归属**按注册顺序读：planSections 先过一遍协调者、再过 worker —— 所以 [0] 是协调者的段、[1] 是
+// worker 的段。注意不能用「文本里含 sessionId」去认领：worker 的义务行点名的是**角色**（worker-a）
+// 而不是会话 id（session-worker-a），按 id 找会一个都匹配不上。下面两条各自带内容守卫。
+const wb2Records = wb2EnvBase.systemPrompt.sections;
+// Y7 纪律：红相里这些记录可能**根本不存在**（注册机制被停掉时）—— 一律经 at() 安全读，
+// 让断言自己变红而不是让整轮崩溃（崩溃会让红相读数说谎：后面的断言一条都不打印）。
+const wb2TextAt = (list, index) => { const record = at(list, index); return record === undefined ? "" : record.text({}); };
+const wb2CoordText = () => wb2TextAt(wb2Records, 0);
+const wb2WorkerText = () => wb2TextAt(wb2Records, 1);
+check("U2 宪章只给现任协调者: 协调者那一段是宪章（含「职责边界」与「你是团队 wb2-team 的协调者」）＋资源行；worker 那段是义务行（点名角色与向谁汇报 + 不要静默等待），**不含**宪章",
+	wb2Records.length === 2 && wb2CoordText().startsWith("你是团队 wb2-team 的协调者（现任会话 session-self）") && wb2CoordText().includes("职责边界")
+		&& wb2WorkerText().startsWith("你是团队 wb2-team 的角色 worker-a") && wb2WorkerText().includes("向本队协调者汇报") && wb2WorkerText().includes("不要静默等待")
+		&& !wb2WorkerText().includes("职责边界"));
+// --- task-11（t-9 存疑 #2 的裁定）: worker 义务行走**角色寻址**，不含裸会话 id ----------
+// 红相（见交付报告）：把义务行改回嵌裸 id（或按 coordinatorId 渲染）⇒ 本条红。
+check("task-11 角色寻址: worker 版段里**不含任何裸会话 id 形状**（session-… / team-link-… 都不许出现），且含 team:<团队>/coordinator 角色寻址 —— 而协调者版**不受影响**（它点名的是它自己）",
+	wb2WorkerText() !== "" && !/session-[0-9a-zA-Z_-]+|team-link-[0-9a-zA-Z_-]+/u.test(wb2WorkerText())
+		&& wb2WorkerText().includes("team:wb2-team/coordinator")
+		&& wb2CoordText().includes("现任会话 session-self"));
+check("U2 注册: 缺席的现任**不注册**（名册里有 worker-b 但无活代理 ⇒ 它那一格没有段，且不产生多余 warn）",
+	(() => { const env = wb2Env({ teams: [wb2Team("wb2-team", [wb2Role("coordinator", "session-self"), wb2Role("worker-b", "session-absent")])] }); return __testing.sectionsFor(env.ctx).registered.size === 1 && env.log.lines.warn.filter((line) => line.includes("角色/资源段未注册")).length === 0; })());
+
+// --- U6：资源行与 stateOf 一致（逐项）＋缺字段⇒未知 ---------------------------------
+const wb2ResourceLine = (text) => text.split("\n").find((line) => line.startsWith("[team-link 会话资源]")) ?? "";
+const wb2SelfLine = wb2ResourceLine(wb2CoordText());
+check("U6 资源行: 窗口 / 压力（含百分比）/ 累计 / 轮次逐项与 stateOf 读数一致（夹具给的就是那三个 key 的读数）",
+	wb2SelfLine.includes("窗口 1.00M") && wb2SelfLine.includes("压力 250.0K（25.0%）")
+		&& wb2SelfLine.includes("累计 ≈1.0K") && wb2SelfLine.includes("第 7 轮"));
+check("U6 纯读: 资源行只读那三个 key（calls 逐个点名：contextPressure / tokenUsage / sessionStats，按会话点名），桩上不存在任何写方法 ⇒ 评审裁定 #2 的「直读、零缓存」",
+	new Set(wb2EnvBase.projections.calls.map((call) => call.key)).size === 3
+		&& ["contextPressure", "tokenUsage", "sessionStats"].every((key) => wb2EnvBase.projections.calls.some((call) => call.key === key))
+		&& wb2EnvBase.projections.calls.length >= 3
+		&& wb2EnvBase.projections.calls.every((call) => call.sessionId === "session-self" || call.sessionId === "session-worker-a")
+		&& Object.keys(wb2EnvBase.projections.service).join(",") === "stateOf");
+check("U6 缺字段 ⇒ 未知（不显示 NaN / undefined）: 三个投影都在场但字段缺 —— 窗口/压力/累计/轮次各自说「未知」或「轮次未知」",
+	(() => {
+		const env = wb2Env({ projections: { contextPressure: {}, tokenUsage: {}, sessionStats: {} } });
+		const text = wb2TextAt(env.systemPrompt.live(), 0);
+		return text.includes("窗口 未知") && text.includes("压力 未知（未知）") && text.includes("累计 ≈未知") && text.includes("轮次未知") && !/NaN|undefined/u.test(text);
+	})());
+check("U6 turns 核实（正相）: sessionStats.turns 在场 ⇒ 渲染「第 N 轮」（批 2 的先行核实结论：宿主 v1 投影确实带 turns）",
+	wb2SelfLine.includes("第 7 轮"));
+check("U6 turns 核实（反相/§9 降级）: sessionStats 缺席或 turns 不可读 ⇒ 「轮次未知」，绝不编数",
+	(() => { const env = wb2Env({ projections: wb2Readings({ sessionStats: undefined }) }); return wb2TextAt(env.systemPrompt.live(), 0).includes("轮次未知"); })()
+		&& (() => { const env = wb2Env({ projections: wb2Readings({ sessionStats: {} }) }); return wb2TextAt(env.systemPrompt.live(), 0).includes("轮次未知"); })());
+check("U6 三种不可读各说各的: 服务缺席 / 投影未注册 / 读取抛错 —— 三种原因都写进行里，且都是字符串不抛错",
+	(() => { const absent = wb2Env({ omitProjections: true }); const unreg = wb2Env(); const thrown = wb2Env({ projectionsThrows: true });
+		return wb2TextAt(absent.systemPrompt.live(), 0).includes("不可读（sessionProjections 缺席）")
+			&& wb2TextAt(unreg.systemPrompt.live(), 0).includes("不可读（投影未注册）")
+			&& wb2TextAt(thrown.systemPrompt.live(), 0).includes("不可读（投影读取抛错"); })());
+
+// --- 评审 #3：行数预算 --------------------------------------------------------------
+check("评审 #3 行数预算: 宪章段 ≤8 行（当前 7 行）、资源行**恰 1 行**（无换行）",
+	__testing.renderCharterLines("t", "s").split("\n").length <= 8
+		&& __testing.renderCharterLines("t", "s").split("\n").length === 7
+		&& __testing.renderResourceLine(wb2EnvBase.ctx, wb2EnvBase.senderAgent).split("\n").length === 1);
+check("评审 #3 行数预算（合成）: 协调者那一段整段**恰 8 行**（宪章 7 + 资源 1；预算上界 9）",
+	wb2CoordText().split("\n").length === 8);
+
+// --- U1：降级（三种到达路径）＋ 对照（恰好一行 warn） -------------------------------
+const wb2WarnCount = (env) => env.log.lines.warn.filter((line) => line.includes("角色/资源段未注册")).length;
+check("U1 降级（a · 无 agent.ctx.systemPrompt）: 零注册 + **恰好一行** warn，不抛错；那一行点名回退路径（工具返回重钉）",
+	(() => { const env = wb2Env({ omitSystemPrompt: true }); return __testing.sectionsFor(env.ctx).registered.size === 0 && wb2WarnCount(env) === 1 && env.log.lines.warn.some((line) => line.includes("回退到「工具返回重钉」路径")); })());
+check("U1 降级（b · 面在、没有 section 方法）: 同上（零注册 + 恰一行）",
+	(() => { const env = wb2Env({ systemPromptOptions: { omitSection: true } }); return __testing.sectionsFor(env.ctx).registered.size === 0 && wb2WarnCount(env) === 1; })());
+check("U1 降级（c · 没有 getSectionOrder）: 同上（零注册 + 恰一行）—— 两条必备面缺任何一条都不注册",
+	(() => { const env = wb2Env({ systemPromptOptions: { omitOrder: true } }); return __testing.sectionsFor(env.ctx).registered.size === 0 && wb2WarnCount(env) === 1; })());
+check("U1 降级（d · section 注册抛错）: 零注册 + 恰一行 warn（同一个一次性门，不搞 warn 风暴）",
+	(() => { const env = wb2Env({ systemPromptOptions: { sectionThrows: true } }); return __testing.sectionsFor(env.ctx).registered.size === 0 && wb2WarnCount(env) === 1; })());
+check("U1 对照（★ 负相：不冒充）: 面齐全时**零** warn 且两段都在 —— 上面四条拒的是「面不可用」，不是「这一段本来就不注册」",
+	wb2WarnCount(wb2EnvBase) === 0 && wb2Sections.registered.size === 2);
+
+// --- U5：函数型 text 同步、恒返回字符串、异常吞掉降级为空串 -------------------------
+const wb2RecordCoord = at(wb2SectionsRecords, 0, { text: () => "" });
+const wb2Rendered = wb2RecordCoord.text({});
+check("U5 text 恒返回字符串且**同步**: 直接调用拿到的就是 string（不是 Promise），两次渲染逐字相同（同一输入同一输出）",
+	typeof wb2Rendered === "string" && !(wb2Rendered instanceof Promise) && wb2RecordCoord.text({}) === wb2Rendered && wb2Rendered.length > 0);
+check("U5 异常吞掉降级为空串: 渲染体里抛出的异常**不冒泡**（装配不会因此失败），降级为空串 + 经 onError 留痕",
+	// ★ t-8 复验 🟡（task-9 D）：整块包一层 try —— 守卫若被摘掉，这里会抛 Error("hostile plan")，
+	// 裸抛会让整轮中止、后面的断言一条都不打印（红相读数说谎，违 Y7 纪律）。包起来之后红相是一条
+	// 干净的 FAIL 行。
+	(() => {
+		try {
+			const reported = [];
+			const hostile = { team: "t", sessionId: "s", role: "coordinator", kind: "coordinator", coordinatorId: "s" };
+			const text = __testing.renderRoleAndResources({ get: () => undefined }, { session: { header: { id: "s" } } }, { ...hostile, get kind() { throw new Error("hostile plan"); } }, (error) => reported.push(String(error)));
+			return text === "" && reported.length === 1 && reported[0].includes("hostile plan");
+		} catch {
+			return false;
+		}
+	})());
+check("U5 渲染体不吃宿主抛错: 投影 stateOf 抛错 ⇒ 行内如实说「不可读（投影读取抛错…）」，整段照旧是字符串",
+	(() => { const env = wb2Env({ projectionsThrows: true }); const text = wb2TextAt(env.systemPrompt.live(), 0); return typeof text === "string" && text.includes("投影读取抛错") && !text.includes("职责边界\n\n"); })());
+
+// --- U3：换现任 ⇒ 旧段 dispose、新段注册（零残留） ---------------------------------
+const wb2SwapEnv = wb2Env({
+	teams: [wb2Team("wb2-team", [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "session-worker-a"), wb2Role("worker-b", "session-worker-b")])],
+	extraAgents: [{ id: "session-worker-a", status: "idle", cwd: TEAM_WS }, { id: "session-worker-b", status: "idle", cwd: TEAM_WS }],
+	projections: wb2Readings(),
+});
+const wb2Swap = __testing.sectionsFor(wb2SwapEnv.ctx);
+const wb2SwapOut = await wb2SwapEnv.tool("team_link_roster").execute({ action: "set-role", team: "wb2-team", role: "coordinator", session: "session-worker-b" }, execFor(wb2SwapEnv.senderAgent));
+check("U3 换现任: 旧现任的段被 **dispose**（disposer 真被调用）且注册表里不再有它 —— 宪章不会挂在卸任者身上",
+	wb2SwapOut.includes("已设置：团队 wb2-team 的角色 coordinator") && at(wb2SwapEnv.systemPrompt.sections, 0, {}).disposed === 1 && !wb2Swap.registered.has("session-self"));
+check("U3 换现任: 新现任拿到段、**宪章内容跟着换人**，旁观者（worker-a）逐字未动、活段数仍等于活现任数（一次 sync 之内完成换段，零残留）",
+	wb2Swap.registered.has("session-worker-b") && wb2Swap.registered.get("session-worker-b").kind === "coordinator"
+		// 换现任之后名册里剩两个活现任（worker-a 与新的协调者 worker-b）：活段数 == 活现任数。
+		&& wb2SwapEnv.systemPrompt.live().length === 2 && wb2SwapEnv.systemPrompt.live().every((record) => record.disposed === 0)
+		&& wb2TextAt(wb2SwapEnv.systemPrompt.sections, 3).startsWith("你是团队 wb2-team 的协调者（现任会话 session-worker-b）")
+		&& at(wb2SwapEnv.systemPrompt.sections, 1, {}).disposed === 0 && wb2TextAt(wb2SwapEnv.systemPrompt.sections, 1).startsWith("你是团队 wb2-team 的角色 worker-a"));
+
+// --- U4：代理消失 ⇒ disposer 被调用（不泄漏） -------------------------------------
+const wb2GoneEnv = wb2Env({ projections: wb2Readings() });
+const wb2Gone = __testing.sectionsFor(wb2GoneEnv.ctx);
+wb2GoneEnv.setHiddenAgent("session-worker-a", true);
+await wb2GoneEnv.tool("team_link_roster").execute({ action: "upsert-team", team: "wb2-team" }, execFor(wb2GoneEnv.senderAgent));
+check("U4 代理消失: 名册还留着它，但代理没了 ⇒ 段被 dispose、注册表里零残留（不泄漏）",
+	wb2GoneEnv.systemPrompt.sections.some((record) => record.disposed === 1) && !wb2Gone.registered.has("session-worker-a") && wb2Gone.registered.size === 1);
+
+// --- 评审裁定 #9：rearm 跳过过期条目 ----------------------------------------------
+const wb2ExpiredRow = { id: "wd-expired-0001", team: null, watcherSession: "session-self", targets: ["session-target"], silentMinutes: 10, intervalMinutes: 5, expiresAt: 1_000, createdAt: 500, origin: "manual" };
+const wb2LiveRow = { id: "wd-live-0001", team: null, watcherSession: "session-self", targets: ["session-target"], silentMinutes: 10, intervalMinutes: 5, expiresAt: Date.now() + 12 * 3600_000, createdAt: Date.now(), origin: "manual" };
+// ★ t-8 复验 🟡（task-9 C）：**两条活行**。只有一条活行时，「expired 恒 true」这个变异与正确实现
+// 观察等价（兜底支挑的就是 expiresAt 最大那条 = 那条活行 ⇒ 定时器集合一样）⇒ 全绿。两条活行之下，
+// 恒 true 只剩兜底支的**一条**定时器 ⇒ 与「两条活行都挂上」区分得开。
+const wb2LiveRow2 = { ...wb2LiveRow, id: "wd-live-0002", expiresAt: Date.now() + 6 * 3600_000 };
+const wb2RearmEnv = setup({ sessions: [], useSettings: true, selfCwd: TEAM_WS, settingsSeed: { "team-link": { watchdogs: [wb2ExpiredRow, wb2LiveRow, wb2LiveRow2] } } });
+const wb2RearmTimers = __testing.watchdogFor(wb2RearmEnv.ctx).timers;
+check("#9（评审裁定）rearm 按 expiresAt 过滤: 过期条目不挂定时器、**两条活条目都挂上**（修复前：逐条 schedule ⇒ 过期那条也有定时器；「expired 恒 true」下只剩兜底那一条 ⇒ 本条红）",
+	!wb2RearmTimers.has(wb2ExpiredRow.id) && wb2RearmTimers.has(wb2LiveRow.id) && wb2RearmTimers.has(wb2LiveRow2.id) && wb2RearmTimers.size === 2);
+const wb2AllExpiredEnv = setup({ sessions: [], useSettings: true, selfCwd: TEAM_WS, settingsSeed: { "team-link": { watchdogs: [wb2ExpiredRow] } } });
+const wb2AllExpiredW = __testing.watchdogFor(wb2AllExpiredEnv.ctx);
+check("#9 对照（★ 负相：跳过 ≠ 不清理）: 全部过期时仍留**一个**清扫专用定时器（否则那些行永远清不掉），它一跑就把过期行收掉",
+	wb2AllExpiredW.timers.size === 1 && wb2AllExpiredW.timers.has(wb2ExpiredRow.id));
+await wb2AllExpiredW.patrol({ now: Date.now() });
+check("#9 清扫: 那次巡逻真的把过期行清掉了（policy 里零注册 + 定时器清空）",
+	wb2AllExpiredEnv.settings.namespaces.get("team-link").data.watchdogs.length === 0 && wb2AllExpiredW.timers.size === 0);
+// ★ t-14 A（评审 #2 🟡 · 真行为缺陷）：**多条**全过期时清扫必须持续推进。
+// 机理：定时器回调走的是 `patrol({ id: entry.id })`（单条巡逻），全过期时兜底只给最新那条挂清扫
+// 定时器 ⇒ 它被收掉（stopTimer）之后，其余过期行**再也没有定时器**，永远留在 policy 里。
+// 判据按定时器回调的真实形状逐步驱动（不是一次性 patrol 全量 —— 那会绕开这个形状）。
+const wb2ExpiredA = { ...wb2ExpiredRow, id: "wd-expired-a", expiresAt: 1_000 };
+const wb2ExpiredB = { ...wb2ExpiredRow, id: "wd-expired-b", expiresAt: 2_000 };
+const wb2TwoExpiredEnv = setup({ sessions: [], useSettings: true, selfCwd: TEAM_WS, settingsSeed: { "team-link": { watchdogs: [wb2ExpiredA, wb2ExpiredB] } } });
+// ★ 先等 attach 后置链落定：链尾会调一次 notifyAttached()（⇒ rearm），若它落在测量窗内会把
+// 「removeWatchdog 有没有接棒」这件事遮住（本轮实测：它恰好在我第一趟 patrol 的间隙补挂了 a）。
+await waitForChain(wb2TwoExpiredEnv, 1);
+const wb2TwoExpiredW = __testing.watchdogFor(wb2TwoExpiredEnv.ctx);
+const wb2TwoRows = () => wb2TwoExpiredEnv.settings.namespaces.get("team-link").data.watchdogs;
+check("#9 对照（t-14 A · 前置）: 两条全过期时兜底只挂**一个**清扫定时器（挑最新那条 b）—— 这就是停摆的形状",
+	wb2TwoExpiredW.timers.size === 1 && wb2TwoExpiredW.timers.has(wb2ExpiredB.id));
+await wb2TwoExpiredW.patrol({ now: Date.now(), id: wb2ExpiredB.id });
+check("#9 对照（t-14 A · 核心判据）: 清扫定时器那条被收掉之后，**剩下那条过期行必须接棒**（removeWatchdog 尾部幂等 rearm）—— 修复前这里 timers=0 且 a 永远留在 policy 里",
+	!wb2TwoRows().some((entry) => entry.id === wb2ExpiredB.id) && wb2TwoExpiredW.timers.has(wb2ExpiredA.id));
+await wb2TwoExpiredW.patrol({ now: Date.now(), id: wb2ExpiredA.id });
+check("#9 对照（t-14 A · 收尾）: 接棒那条也跑完之后 —— **两条都被清掉**、定时器归零（★ 这一趟是我**手动驱动**的：停摆与否由上一句判定 —— 修复前生产里压根不会有第二趟，因为没人给剩下那条挂定时器）",
+	wb2TwoRows().length === 0 && wb2TwoExpiredW.timers.size === 0);
+
+// --- U15 红线：inject / 三道门 / relay 字面量 --------------------------------------
+const wb2RelayAt = hostSource.indexOf("function relayUserMessage(");
+const wb2RelayBlock = wb2RelayAt === -1 ? "" : hostSource.slice(wb2RelayAt, hostSource.indexOf("\n}", wb2RelayAt));
+check("U15 红线（批 2 复核）: 模块级 inject 恒 4 项 · 三道门元数未动 · 本批一个字都没碰 relayUserMessage（它仍恰三成员）",
+	JSON.stringify(indexModule.inject) === JSON.stringify(["sessionReferenceResolver", "tools", "sessionQuery", "agents"])
+		&& __testing.writerGate.length === 2 && __testing.retireGate.length === 2 && __testing.rotateGate.length === 3
+		&& wb2RelayBlock.length > 0 && !/team-link:role|sections|renderRoleAndResources/u.test(wb2RelayBlock));
+// --- B（task-9 · t-8 验证者探针 → 仓库断言）: 换届 claim 的段生命周期 ----------------
+// 这条路径此前**零覆盖**（复验者实测：把 A 那一行移到写入之后，出货套件照旧全绿）。判据读真控制器：
+// prepare（现任发起）→ claim（继任者凭令牌）→ 段必须换人。
+// 红相＝A 未修（那一次 sync 落在 policy.update 之前）：见交付报告 §二 —— 探针读数 before/after。
+const wb3TeamRow = {
+	name: "night-shift", createdAt: 1_700_000_000_000, workspace: TEAM_WS, policy: { writer: "coordinator" },
+	mode: "sessions", leadSessionId: "",
+	roles: [wb2Role("coordinator", ROT_SELF), wb2Role("worker-a", "session-worker-a")],
+};
+const wb3Env = setup({
+	sessions: [], useSettings: true, selfCwd: TEAM_WS,
+	extraAgents: [{ id: "session-worker-a", status: "idle", cwd: TEAM_WS }, { id: SUCCESSOR, status: "idle", cwd: TEAM_WS }],
+	settingsSeed: { "team-link": { teams: [wb3TeamRow] } },
+	projectionsReadings: wb2Readings(),
+	askScript: [["session-worker-a"]],
+});
+const wb3Sections = __testing.sectionsFor(wb3Env.ctx);
+const wb3SelfRecord = at(wb3Env.systemPrompt.sections, 0, { disposed: -1, text: () => "" });
+const wb3WorkerRecord = at(wb3Env.systemPrompt.sections, 1, { disposed: -1, text: () => "" });
+const wb3WorkerTextBefore = wb3WorkerRecord.text({});
+const wb3WorkerPlanBefore = wb3Sections.registered.get("session-worker-a");
+const wb3Before = { self: wb3Sections.registered.has(ROT_SELF), succ: wb3Sections.registered.has(SUCCESSOR) };
+const wb3Rotate = wb3Env.tool("team_link_rotate");
+const wb3Prep = await wb3Rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: SUCCESSOR }, execFor(wb3Env.senderAgent));
+const wb3Claim = await wb3Rotate.execute({ action: "claim", team: "night-shift", role: "coordinator", token: tokenOf(wb3Prep) }, execFor(wb3Env.agentFor(SUCCESSOR)));
+const wb3Current = () => (wb3Env.settings.namespaces.get("team-link").data.teams[0].roles.find((entry) => entry.role === "coordinator") ?? {}).current ?? null;
+const wb3SuccRecord = wb3Env.systemPrompt.sections.find((record) => record.disposed === 0 && record.text({}).includes(SUCCESSOR) && record.text({}).includes("协调者"));
+check("B 换届 claim 的段生命周期（t-8 复验 🟡 → 仓库断言）: claim 成功之后 —— ① 旧现任的协调者段被 **dispose**；② 继任者拿到**协调者版**段（宪章点名继任者）；③ 旁观 worker 段逐字未动、注册对象都没换；④ 注册表里旧现任零残留",
+	wb3Env.agentFor(SUCCESSOR) !== undefined && wb3Claim.length > 0 && wb3Current() === SUCCESSOR
+		&& wb3Before.self === true && wb3Before.succ === false
+		&& wb3SelfRecord.disposed === 1 && !wb3Sections.registered.has(ROT_SELF)
+		&& wb3Sections.registered.get(SUCCESSOR)?.kind === "coordinator" && wb3SuccRecord !== undefined
+		&& wb3WorkerRecord.disposed === 0 && wb3WorkerRecord.text({}) === wb3WorkerTextBefore && wb3Sections.registered.get("session-worker-a") === wb3WorkerPlanBefore);
 rmSync(escDir, { recursive: true, force: true });
 rmSync(tmpDir, { recursive: true, force: true });
 rmSync(TEAM_TMP, { recursive: true, force: true });
