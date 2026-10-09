@@ -114,6 +114,8 @@ stateDiagram-v2
 > 图例：**E1**＝`Running → Idle`（"刚干完"）；**E2**＝`Idle → AwaitTask`（"空闲待派"，措辞与"失联"严格分离）；**E3**＝`→ Suspect`（走原有告警 tick，A1 抑制原样）。
 >
 > **E2 门槛口径（2026-10-09 doc-sync，评审 #1 + 复核 🟡1 收敛）**：E2 的条件**只有**「空闲 ∧ 无在飞任务」——**不带静默门槛**。
+> **E2 的「无在飞任务」只读 goal 那一半（2026-10-09 v1.4）**：实现判 `goal === null || goal.phase !== "active"`（paused/blocked/complete/无 goal 都算空闲待派）。consult #26 §4.3 的另一个半（tasks.md 里该成员未收口行）**本批未接入**，台账那一半登记为后续批——这是**已披露的简化**，不是静默降级（代码注释同处声明）。
+>
 > 为什么删掉原先图上的「静默 > 10min」：一旦静默 ≥ `silentMinutes`（默认 10），该目标先被判 `silent-idle` 进 **alarm 组**（优先级更高），`idleAwait` 会**恒空、E2 永不可达**。
 > ⇒ **E2 与 E3 的互斥由 alarm 优先级保证**（不是靠门槛）；投递侧的 ≥10min 去抖仍由 §6 的 `debounced(entry, now)` 承担。**本项改档不改码**。
 
@@ -162,15 +164,13 @@ function renderResourceLine(ctx, agent) {
   const p = sp.stateOf(agent.session, "contextPressure");         // { contextWindow?, pressureTokens?, surfaceTokens }
   const u = sp.stateOf(agent.session, "tokenUsage");              // { totals{...}, last{turn,step} }
   if (p === undefined && u === undefined) return "[team-link 会话资源] 不可读（投影未注册）";
-  return `[team-link 会话资源] 窗口 ${fmt(p?.contextWindow)} · 压力 ${pct(p)}% · 压缩阈值 ${fmt(threshold(p))}（自动压缩开） · 累计 ≈${fmt(sum(u))} · 第 ${u?.last?.turn ?? "?"} 轮`;
+  return `[team-link 会话资源] 窗口 ${fmt(p?.contextWindow)} · 压力 ${pct(p)}% · 压缩阈值 ${fmt(threshold(p))}（宿主投影不含该读数） · 累计 ≈${fmt(sum(u))} · 第 ${u?.last?.turn ?? "?"} 轮`;
 }
 
 /** FR-5：判读行——「预算耗尽」只允许出现在这里，且只能是"不成立"。 */
-function verdictLine(pressure, threshold) {
-  if (threshold === undefined) return "预算判读：阈值不可读（口径未知，不作判读）。";
-  return pressure < threshold
-    ? "预算判读：未到压缩阈值，自动压缩未触发——「预算耗尽」不成立。"
-    : "预算判读：已到压缩阈值——宿主即将自动压缩，无需停手；确需换人请走 team_link_rotate。";
+function verdictLine(readings) {   // 2026-10-09 父侧裁定：宿主投影不含压缩阈值 ⇒ 不做「低于阈值」比较
+  if (readingsUnavailable) return "预算判读：读数不可得，不作判读。";
+  return "预算判读：未见收口理由——本系统按压力自动压缩，结构上不存在「预算耗尽」；确需换人请走 team_link_rotate。";
 }
 
 /** FR-3：patrolOne 的扩展（尾段）。前置：entry 为注册项；watcher 可能是 running。
@@ -205,7 +205,7 @@ async function patrolOneWithDigest(entry, now) {
 | --- | --- | --- | --- |
 | `sections: Map<sessionId, disposer>` | 注册器 | 注销器 / attach 清扫 | 段注册句柄 |
 | `lastAgentState: Map<regId+target, "running"|"idle">` | patrol | patrol | 判"刚转空闲" |
-| `pulseCache: { at, text }` | patrol（定时刷新） | 函数型 text | 让 provider **同步**可读 |
+| ~~`pulseCache`~~（**2026-10-09 删除**） | —— | —— | 评审判定它与「函数型 text 直读 `stateOf`」是两套并存的同步可读机制；裁定＝**直读、零缓存**（实现见 lib/index.js:2909 区注释），本行留痕见 §13 v1.4 |
 | `digested: Map<regId+target, { at, signature }>` | patrol（投递成功才记；失败记 `signature: null`） | patrol / 判据 U9 | 投递去抖的**状态指纹**闸；失败那支记 null ⇒ 下个窗口重投（t-5 补判别力断言） |
 
 ### 7.3 只读投影（宿主）
@@ -236,16 +236,17 @@ async function patrolOneWithDigest(entry, now) {
 | U7 | 判读行两种措辞都**不含**「预算耗尽／收口」字样（唯一例外：判读行里的"不成立"） | FR-5 |
 | U8 | 轮换标记四边界（99/100/101 轮；199.9M/200.0M/200.1M）只在一侧出现 | FR-6 |
 | U9 | digest 只在"有可行动内容"时投；全队 ok 且无迁移 ⇒ **零投递** | FR-3 |
-| U10 | digest 在观察者 running 时**仍投**（若 D-A1 获批）；告警类 tick 的 A1 抑制**原样** | FR-3 |
+| U10 | digest 在观察者 running / **armed-active** 时**仍投**（D-A1 已裁定『准』，条件已生效）；告警类 tick 的 A1 抑制**原样** | FR-3 |
 | U11 | auto 注册不占手工额度；手工 ≥3 条后仍可 auto | FR-3 |
 | U12 | attach 重挂：重启后 `policy.watchdogs` 每项都有定时器（**红相**＝摘掉重挂 ⇒ 断言红） | FR-7 |
 | U13 | 零写入：第 ⑧ 段在场时「调用前后 settings 与磁盘逐字节不变」原断言仍绿 | FR-5 |
-| U14 | 不新增事件类型；投递 `source` 恰三成员（`host-half.test.mjs:1440` 原样绿） | NF-1 |
+| U14 | 不新增事件类型；投递 `source` 恰三成员（`host-half.test.mjs:1536/1539` 原样绿；as-of 2026-10-09） | NF-1 |
 | U15 | 模块级 `inject` 恒 4 项；`writerGate` 函数体逐字节不变 | NF-2/3 |
 | U16 | 状态卡首行仍是 placementLine（`:11131`）；"七段"描述同次编辑改"八段" | FR-8 |
+| U18 | **FR-4 四处重钉面**：调用方是现任协调者时含宪章行，非现任/队不在名册时缺席（四处逐点） | FR-4 |
 | U17 | **总开关**：`sections.role=false` ⇒ 零段注册；`sections.resources=false` ⇒ 资源行**三处全缺**；`watch clear` 掉的 auto 注册**同进程内不自愈**；**且 `PolicyConfig` 键集断言与 README 红线描述同批更新**（本批唯一触碰红线的点） | FR-9 |
 
-**负向断言（必须存在）**：U1（缺席不许抛）、U5（渲染异常不许冒泡）、U7（禁用词）、U9（无事不许打扰）、U12（不许只在注册时挂定时器）。
+**负向断言（必须存在）**：U1（缺席不许抛）、U5（渲染异常不许冒泡）、U7（禁用词）、U9（无事不许打扰）、U12（不许只在注册时挂定时器）、U18（非现任不许重钉）。
 
 ## §9 边界
 
@@ -254,7 +255,7 @@ async function patrolOneWithDigest(entry, now) {
 | 空集 | 无 worker / roster 无现任协调者 / 无投影服务 / 无 watchdogs | 不注册、不推送、读数行明说「不可读」；**fail-visible（如实标注），不 fail-closed，也不编数** |
 | 畸形 | `contextWindow` 缺失、`pressureTokens` 非数、target 会话已被删 | 显示「未知」；被删会话的 target **不跳过**——它会被读成 dead 并**列进「需处置」**，在 digest 里如实标注（2026-10-09 改口径，复核 🔵8） |
 | 并发 | 两个注册同时写 `policy.update`；patrol 与换届清扫同刻 | 沿用既有 read-modify-write 与去抖；注册失败 ⇒ 返回失败文案、**不静默** |
-| 重启 | policy 里的注册、进程内的 `sections`/`lastAgentState`/`pulseCache` 全失 | **FR-7 重挂定时器**；段注册在代理出现时重建；投影由宿主重建 |
+| 重启 | policy 里的注册、进程内的 `sections`/`lastAgentState`/`digested` 全失（`pulseCache` 已于 v1.4 删除） | **FR-7 重挂定时器**（**重挂前按 `expiresAt` 过滤**：过期条目不挂巡逻定时器；全过期时留**一个**清扫定时器并在 `removeWatchdog` 尾部幂等 `rearm` 接棒——2026-10-09 批 2/3 落地）；段注册在代理出现时重建；投影由宿主重建 |
 | 读数缺席（turns） | `sessionStats` 未注册或 `turns` 不可读（批 2 夹具先行核实，见 §7.3） | 第 ⑧ 段落为「轮次未知」，FR-6 **只按 tokens 标记**（轮次判据挂起）；如实标注，**不编数** |
 | 开关关闭 | `sections.*=false` 或用户 `watch clear` | 零段注册 / 资源行三处全缺 / auto 注册不自愈；**不抛错、不静默改回** |
 | 升级 | 宿主换代（API 改名/面消失） | 全部新面**特征探测**；缺失 ⇒ 降级到"工具返回重钉"路径 + 一行 warn（沿 preset 换代两次翻车的教训） |
@@ -350,5 +351,6 @@ async function patrolOneWithDigest(entry, now) {
 | 2026-10-09 | v1.0 首次成文（按 `METHODOLOGY.md` 必备九章重写；两批合并；含 12 决策点人话版） |
 | 2026-10-09 | **v1.1**：并入用户对 12 个决策点的裁定（§12）；D-A6 由「本批不做」改记「**挂起（保留协调者动手能力）**」；D-B5 由「建议」改记「**做**」（部署面，另附补丁片段） |
 | 2026-10-09 | **v1.2（评审 advisor-dsh-46 后按「全按建议改」修订）**：FR-9 总开关＋U17（#1）· 行数预算口径（#2）· turns 降级与批 2 先行核实（#3）· D-B6 派批 3（#4）· worker 注册钩子两条路径（#5）· §13→§12 章节重排与 order 写法统一（#6/#7）。**审判 token 对 v1.1 签发，本条修订全部采纳评审员自己的建议，口径未扩大** |
+| 2026-10-09 | **v1.4（doc-sync 第二轮，批 1–3 收口）**：① E2 的「无在飞任务」明确＝**只读 goal 那一半**（台账一半延后）；② 删 §7.2 `pulseCache` 行、§6 伪代码的压缩阈值改成「未知（宿主投影不含该读数）」；③ **判读行口径（父侧裁定）**：不做「低于阈值」比较，只给「压力/窗口/累计/轮次」四项 + 结论二选一，「预算耗尽」只允许以**否定式**出现在判读行；④ 第 ⑧ 段的**会话集合**＝调用方自己 + 有界读窗（≤10 行），且**没有**「来源（manual/auto）」格（那是看门狗属性，会话没有）；⑤ `sections.role=false` 时工具返回面的**重钉行也一并关闭**；⑥ §8 补 **U18**（四处重钉面）与行数预算判据（宪章 ≤8 / 资源行 1 / 第⑧段 ≤12）；⑦ U10 的悬置条件删除（D-A1 已准）、U14 的 as-of 行号刷新；⑧ §9 重启行写明**重挂按 expiresAt 过滤 + 全过期接棒**；⑨ FR-1/FR-2 的**注册面口径**（一会话只挂一段、协调者版优先）与 **sync 触发面**（attach + 5 处名册写入点；`/team_session` 全已登记早退支不触发）登记在案 |
 | 2026-10-09 | **v1.3（doc-sync 窗口）**：① §5.1 E2 门槛口径澄清（去静默门槛 + E2/E3 互斥由 alarm 优先级保证，改档不改码）；② §7.2 补 `digested` 行；③ 新增 `createdAt` 语义（最近一次 arm 时刻）；④ §9「跳过 target」措辞改为「列进需处置」；⑤ 实施计划同步 N1/N2（版本引用、批 3 判据补 U17）；⑥ verification-log 记批 1 交付读数与"同树并发跑 check 会假红"纪律 |
 | 2026-10-09 | **v1.2 的副作用（事故）**：父侧在评审 PASS 后直接改了被审文档且未重审 ⇒ 令牌的文档集指纹失配（`0a503b5c…` → `e5e216ca…`）⇒ 批 1 派单秒级失败（`eng-dsh-29`，子会话只有 header、工作区零改动）。处置＝重审取新 token 后重派；纪律已写入实施计划 §6 |
