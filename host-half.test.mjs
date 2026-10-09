@@ -4,8 +4,9 @@
 // then exercises the three -pro tools against stubbed services.
 // Run after the node_modules junctions are in place (see README).
 import { Context } from "@deepseek-ai/cordis";
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,6 +47,16 @@ function at(list, index, fallback = undefined) {
 // ---------------------------------------------------------------------------
 
 const CWD = "C:/dev/demo";
+
+// ---------------------------------------------------------------------------
+// 临时目录（有界修复轮 A 项）：**每一次进程跑自己的一份独一无二的根**。
+// 修复前是四个固定名字（`.test-tmp` / `.test-tmp-escape` / `.test-tmp-lone` /
+// `.test-tmp-team`，都在工作树里），并发复跑时互相踩对方的目录。
+// 实测（2026-10-09，两个并发作业，修复前）：A 进程 ALL PASS，B 进程在
+// `.test-tmp/session-target-<ts>.json` 上 ENOENT 崩、退出码 1。
+// 落在 os.tmpdir() 之下，顺带让跑测期间的工作树保持干净（不必再靠 .gitignore）。
+// ---------------------------------------------------------------------------
+const TEST_ROOT = mkdtempSync(path.join(tmpdir(), "dsh-team-link-test-"));
 
 /** Per-fixture policy-home counter (see setup): every fixture gets its own DSH_HOME so
  * the file backend can never leak one fixture's roster into the next. */
@@ -104,7 +115,7 @@ function makeTargetAgent(status = "idle") {
  * through a real cordis plugin fiber (see `provideSettingsFiber`) and the fiber's
  * own teardown effect is what retires the stub.
  */
-function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, settingsUpdateThrows = false } = {}) {
+function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegisterThrows = false, legacyGetThrows = false, settingsUpdateThrows = false, settingsUpdateDelayMs = 0 } = {}) {
 	const namespaces = new Map();
 	let alive = true;
 	let refusing = Boolean(settingsRegisterThrows);
@@ -138,6 +149,10 @@ function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegiste
 					// 评审 round-3 🟡 #1: register 成功但 update 抛错 —— 折叠必失败的唯一到达路径。
 					// 状态**先不动**（不 Object.assign）：折叠失败后窗口数据必须仍在文件那一侧。
 					if (settingsUpdateThrows) throw new Error("settings update refused by stub");
+					// 批 1（FR-7）: 真宿主的 `scope.update` 是**异步**的（真实 I/O），而这份桩默认同步落盘
+					// —— 于是「快路径折叠在 `apply` 返回之后才落定」那个窗口在套件里根本不出现。
+					// `settingsUpdateDelayMs` 把那半拍补回来（默认 0 = 桩的历史行为，其余夹具一字不动）。
+					if (settingsUpdateDelayMs > 0) await new Promise((resolve) => { setTimeout(resolve, settingsUpdateDelayMs); });
 					Object.assign(state.data, structuredClone(patch));
 					},
 				};
@@ -876,6 +891,9 @@ function setup({
 	legacyRegisterThrows = false,
 	legacyGetThrows = false,
 	settingsUpdateThrows = false,
+	/** 批 1（FR-7 红相夹具）：把 `scope.update` 的落盘推迟这么多毫秒 —— 真宿主的设置写入是异步的，
+	 * 于是「快路径折叠在 `apply` 返回之后才落定」那个窗口才在套件里真的出现。默认 0 = 桩的历史行为。 */
+	settingsUpdateDelayMs = 0,
 	selfCwd,
 	omitUserQuestions = false,
 	surfaceReadHook,
@@ -993,7 +1011,7 @@ function setup({
 	resumeRecords.push(...sessions, ...[senderAgent, targetAgent, runnerAgent, ...extraAgentObjects].map((agent) => ({ header: { id: agent.id, cwd: agent.session?.header?.cwd ?? CWD }, live: !hidden.has(agent.id), persisted: true })));
 	const uq = makeUserQuestions([...askScript]);
 	const settings = useSettings || lateSettings
-		? makeSettings(pendingSeed === undefined ? settingsSeed : { ...(settingsSeed ?? {}), "team-link": { ...((settingsSeed ?? {})["team-link"] ?? {}), pendingCreates: [...((settingsSeed ?? {})["team-link"]?.pendingCreates ?? []), ...(Array.isArray(pendingSeed) ? pendingSeed : [pendingSeed])] } }, { settingsRegisterThrows, legacyRegisterThrows, legacyGetThrows, settingsUpdateThrows })
+		? makeSettings(pendingSeed === undefined ? settingsSeed : { ...(settingsSeed ?? {}), "team-link": { ...((settingsSeed ?? {})["team-link"] ?? {}), pendingCreates: [...((settingsSeed ?? {})["team-link"]?.pendingCreates ?? []), ...(Array.isArray(pendingSeed) ? pendingSeed : [pendingSeed])] } }, { settingsRegisterThrows, legacyRegisterThrows, legacyGetThrows, settingsUpdateThrows, settingsUpdateDelayMs })
 		: undefined;
 	ctx.provide("sessionReferenceResolver", resolver);
 	ctx.provide("tools", { register(tool) { registeredTools.push(tool); return () => {}; } });
@@ -1068,10 +1086,10 @@ function setup({
 	// --- 策略持久化自持化（设计档 §3.2）: 每个夹具一个**私有** DSH_HOME ---------
 	// 文件后端在 settings 缺席时接管落点，所以夹具必须各占一个 home —— 共用一个会
 	// 让后建的夹具读到前一个夹具的 teams（真机上正是「换个工作区团队就没了」的反面）。
-	// 目录落在 `.test-tmp-team/policy/` 下，随本套件末尾的 `rmSync(TEAM_TMP)` 一起清掉；
+	// 目录落在本进程独有的 `TEST_ROOT/policy/` 下，随本套件末尾的 `rmSync(TEST_ROOT)` 一起清掉；
 	// `policyHome: false` 是 U7 的第三支：既无 DSH_HOME 也无 homedir ⇒ 路径解析失败。
 	policyHomeSeq += 1;
-	const policyDir = policyHome === false ? null : path.resolve(".test-tmp-team", "policy", String(policyHomeSeq));
+	const policyDir = policyHome === false ? null : path.join(TEST_ROOT, "policy", String(policyHomeSeq));
 	// 守卫判 **`policyDir`** 而不是入参 `policyHome`（代码评审修复轮 🔵#6）：`policyHome: false`
 	// 时 `policyDir` 才是 null，而旧守卫 `policyHome !== null` 在这一支是**真**（`false !== null`），
 	// 于是「既无路径又给了种子」会一路走到 `path.join(null, …)` 抛 TypeError。现在两种输入在
@@ -1383,7 +1401,7 @@ const exportEvents = [
 	{ type: "tool/result", seq: 4, time: 4, data: { turn: 1, step: 1, message: { id: "r1", role: "user", source: { kind: "tool", callId: "c1" }, content: [{ type: "tool-result", toolCallId: "c1", content: [{ type: "text", text: "结果文本" }] }] } } },
 ];
 const exportEnv = setup({ sessions, eventsBySession: { "session-target": exportEvents } });
-const tmpDir = path.resolve(".test-tmp");
+const tmpDir = path.join(TEST_ROOT, "export");
 rmSync(tmpDir, { recursive: true, force: true });
 const exportTool = exportEnv.tool("team_link_export");
 const exportOut = await exportTool.execute({ sessionId: "session-target", outputDir: tmpDir }, execFor(exportEnv.senderAgent));
@@ -1409,7 +1427,7 @@ check("export of unknown session reports failure", exportMissing.includes("导�
 // name is sanitised, so the artifacts keep their `<id>-<timestamp>` readability.
 const escEvents = [{ type: "user/message", seq: 1, time: 1, data: { id: "e1", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "越界会话" }] } }];
 const escEnv = setup({ sessions: [{ header: { id: "../../escaped", createdAt: 1000, cwd: CWD }, live: true, persisted: true }], eventsBySession: { "../../escaped": escEvents } });
-const escDir = path.resolve(".test-tmp-escape");
+const escDir = path.join(TEST_ROOT, "escape");
 rmSync(escDir, { recursive: true, force: true });
 const escOut = await escEnv.tool("team_link_export").execute({ sessionId: "../../escaped", outputDir: escDir }, execFor(escEnv.senderAgent));
 const escFiles = escOut.split("\n").map((line) => line.replace("- ", "").trim()).filter((line) => line.endsWith(".md") || line.endsWith(".json"));
@@ -1608,7 +1626,7 @@ const truncEnv = setup({
 	sessions: [{ header: { id: "session-long", createdAt: 6000, cwd: CWD }, live: false, persisted: true }],
 	eventsBySession: { "session-long": [{ type: "user/message", seq: 1, time: 1, data: { id: "l1", role: "user", source: { kind: "user" }, content: [{ type: "text", text: longText }] } }] },
 });
-const truncDir = path.resolve(".test-tmp-lone");
+const truncDir = path.join(TEST_ROOT, "lone");
 rmSync(truncDir, { recursive: true, force: true });
 const truncOut = await truncEnv.tool("team_link_export").execute({ sessionId: "session-long", outputDir: truncDir }, execFor(truncEnv.senderAgent));
 const truncMdPath = truncOut.split("\n").map((line) => line.replace("- ", "").trim()).find((line) => line.endsWith(".md"));
@@ -1760,7 +1778,7 @@ const oneShotSurface = (time, text = "在干活") => [{
  * @param goals - goal views by session id.
  * @param targets - `{ sessionId: { events, status } }`.
  */
-function watchdogEnv({ goals = {}, targets = {}, selfStatus, selfGoal } = {}) {
+function watchdogEnv({ goals = {}, targets = {}, selfStatus, selfGoal, watchdogs = undefined } = {}) {
 	const ids = Object.keys(targets);
 	const eventsBySession = {};
 	for (const id of ids) eventsBySession[id] = targets[id].events;
@@ -1771,6 +1789,10 @@ function watchdogEnv({ goals = {}, targets = {}, selfStatus, selfGoal } = {}) {
 		selfStatus,
 		goals: { ...goals, ...(selfGoal !== undefined ? { "session-self": selfGoal } : {}) },
 		extraAgents: ids.map((id) => ({ id, status: targets[id].status ?? "idle" })),
+		// 批 1（FR-3/FR-7）：把一个既有注册直接种进命名空间 —— 这就是「重启后盘上的注册」
+		// 那一档夹具（本批的两条新判据面都活在**已有注册**上：workbench digest 只对
+		// origin:"auto" 那一条开放，attach 重挂整件事也只在持久化注册上有意义）。
+		...(watchdogs === undefined ? {} : { settingsSeed: { "team-link": { watchdogs } } }),
 	});
 	return { ...env, eventsBySession, watch: env.tool("team_link_watch"), watchdog: __testing.watchdogFor(env.ctx) };
 }
@@ -1938,7 +1960,7 @@ check("after dispose the patrol is inert (no tick)", disposeEnv.senderCalls.foll
 // M2 (§3.3.1/§3.3.2): roster — writer policy, version history, retirement, mirror
 // ---------------------------------------------------------------------------
 
-const TEAM_TMP = path.resolve(".test-tmp-team");
+const TEAM_TMP = path.join(TEST_ROOT, "team");
 const TEAM_WS = path.join(TEAM_TMP, "ws");
 rmSync(TEAM_TMP, { recursive: true, force: true });
 
@@ -7042,7 +7064,10 @@ check("U19 inject: ... and the host module really is the four-entry shape: `appl
 // provider actually takes), not from a hand-copied list.
 const U19_POLICY_KEYS = ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"];
 const u19Base = u19ConcurrencyEnv.settings.namespaces.get("team-link").base;
-check("U19 schema: the registered policy namespace still declares exactly its eight keys — the ② round's own pendingCreates plus the seven that pre-date it, and nothing else", sameJson(Object.keys(u19Base).sort(), U19_POLICY_KEYS) && sameJson(Object.keys(u19ConcurrencyEnv.settings.namespaces.get("team-link").data).sort(), ["pairs", "pendingCreates", "teams"]));
+// 批 1（FR-3a）: the WORKED surface gained `watchdogs` — 因为 `/team_session` 现在会经**既有的**
+// `watchdogs` 键自动注册一条工作台注册（§7.1「既有键的加性扩展」）。上半句（**声明面** = 八个键）
+// 一字未动，这条判据要钉的「没有新顶层键」因此仍成立：新增的是既有数组里一行的 `origin` 字段。
+check("U19 schema: the registered policy namespace still declares exactly its eight keys — the ② round's own pendingCreates plus the seven that pre-date it, and nothing else", sameJson(Object.keys(u19Base).sort(), U19_POLICY_KEYS) && sameJson(Object.keys(u19ConcurrencyEnv.settings.namespaces.get("team-link").data).sort(), ["pairs", "pendingCreates", "teams", "watchdogs"]));
 const sendToolU19 = u19ConcurrencyEnv.tool("team_link_send");
 const sendParams = sendToolU19.parameters;
 check("U19 schema: team_link_send's argument surface is unchanged (mutually-exclusive addressing, the message, the §3.4 envelope) — and the real key is `message`, not `text`", sameJson(Object.keys(sendParams.properties).sort(), ["message", "meta", "targetSessionId", "targets"]) && sameJson(sendParams.required, ["message"]) && sendParams.type === "object" && sendParams.properties.message.type === "string" && sendParams.properties.targets.type === "array" && sendParams.properties.targetSessionId.type === "string");
@@ -8958,7 +8983,8 @@ check("🟡#2 detach 窗口判据: 折叠留痕如实说「provider 被 detach �
 // re-created at the END of the run, so `rmSync` at import time cleans the PREVIOUS
 // run but leaves the current run's two files behind — every suite run leaked two
 // gitignored files. The teardown below owns it now, together with the escape dir
-// and the three team fixtures. (The `.test-tmp*` names are all in .gitignore.)
+// and the three team fixtures. (有界修复轮 A 项之后，这些目录全在本进程独有的
+// `TEST_ROOT`（os.tmpdir() 之下）里，工作树一个字节都不落。)
 // ===========================================================================
 // C 批（客户端面 · C1）· §3.0 跨半边取数通道：只读路由 GET /team-link/panel
 // 设计档 docs/client-panel-batch-design-2026-09-27.md §3.0/§3.1/§3.2/§3.4；
@@ -9357,9 +9383,393 @@ check("🔵#5 null 判据: 状态词对三种输入逐字 —— 已定义（run
 		&& agentStateBlock.includes("行为修正")
 		&& agentStateBlock.includes("=== null"));
 
+// ===========================================================================
+// 批 1 · 团队自治与资源真值 —— FR-3 工作台 digest ＋ FR-7 attach 重挂
+// 归属：docs/2026-10-09-team-autonomy-design.md §5（FR-3/FR-7）· §6（伪代码）·
+// §7（origin/team 的加性 schema）· §8（U9–U12/U14/U15）。
+//
+// 本块自持的口径（设计档 §5.1 的状态机，逐条对照）：
+//  · E1「刚转空闲」＝ 上一次巡逻读到 running、这一次不是（**迁移**，不需要目标说一个字）；
+//  · E2「空闲待派」＝ 空闲 ∧ 手上无在飞任务（无 goal / paused / blocked / complete；
+//    armed 的 active goal 是**自续跑**，属「在飞」⇒ 进不了本组，也不因它投递）；
+//  · 「需处置」＝ TICKABLE_VERDICTS 三态（silent-idle / goal-disarmed / dead），**优先级最高**
+//    —— 一个目标只进一个组（同一段正文里既「需处置」又「空闲待派」是自相矛盾）；
+//  · 可行动内容 ＝ 空闲待派 ∪ 刚转空闲 ∪ 需处置 非空（「谁在跑」单独不构成打扰理由）；
+//  · 同一注册两条摘要：间隔 ≥10min **且** 状态指纹有变化，否则零投递（U9「无事不许打扰」）。
+//  · 投递面**只对 auto 注册**开放（origin:"auto"，即 /team_session 自动挂的那一条）：手工注册的
+//    既有行为逐字不变（consult #26 D3「手工 register 的 watchIdle 默认值 = false（既有行为逐字不变）」），
+//    它仍走原来那条告警通道。
+// ===========================================================================
+
+/** 一条 auto 注册行（§7.1 的形状：origin 与 team 是 auto 那一档的两个标记）。 */
+const wbRow = ({ id = "wd-auto-0001", team = "wb-team", watcherSession = "session-self", targets = [], silentMinutes = 10, intervalMinutes = 10, createdAt = 1_700_000_000_000, expiresAt = 1_700_000_000_000 + 12 * 3600000, origin = "auto" } = {}) =>
+	({ id, team, watcherSession, targets, silentMinutes, intervalMinutes, createdAt, expiresAt, origin });
+/** 两条通道的取数器：告警 tick 以 `[watchdog]` 开场，工作台摘要以 `[workbench]` 开场。 */
+const alarmsOf = (env) => env.senderCalls.followedup.filter((message) => message.content[0].text.startsWith("[watchdog]"));
+const digestOf = (env) => env.senderCalls.followedup.filter((message) => message.content[0].text.startsWith("[workbench]"));
+const textOfFirst = (list) => (at(list, 0) === undefined ? "" : at(list, 0).content[0].text);
+const pausedGoal = { phase: "paused", activation: "disarmed", roundsStarted: 3, maxGoalRounds: 70 };
+
+// --- FR-3a / U11: /team_session 建队成功处自动注册一条覆盖全队的看门狗 --------------
+const wbEnv = teamSessionEnv({ askScript: ["创建", "创建"] });
+const wbOut = await wbEnv.run("n=2 team=wb-team roles=worker-a,worker-b task=做接口");
+const wbNs = wbEnv.settings.namespaces.get("team-link").data;
+const wbAutoRows = () => (wbNs.watchdogs ?? []).filter((entry) => entry.origin === "auto");
+const wbWorkerIds = wbEnv.creates.map((entry) => entry.sessionId);
+check("U11 auto 注册: 建队成功处自动挂**一条**覆盖全队的看门狗 —— origin=auto / team=团队名 / 观察者=调用者 / targets 覆盖全队成员（两个新建 worker 都在，且不含观察者自己）",
+	wbAutoRows().length === 1 && wbAutoRows()[0].team === "wb-team" && wbAutoRows()[0].watcherSession === "session-self"
+		&& wbWorkerIds.length === 2 && wbWorkerIds.every((id) => wbAutoRows()[0].targets.includes(id)) && !wbAutoRows()[0].targets.includes("session-self"));
+check("U11 auto 注册: 完成回报如实点名这条注册（id ＋「自动注册」＋ 不占手工额度的口径），读者不必去翻 settings",
+	wbOut.kind === "success" && wbOut.text.includes("工作台") && wbOut.text.includes(wbOut.text.match(/wd-[0-9a-f-]{36}/u)?.[0] ?? "（没有 id）") && wbOut.text.includes("自动注册") && wbOut.text.includes("不占手工额度"));
+const wbAutoId = wbAutoRows()[0]?.id ?? "";
+const wbSecond = await wbEnv.run("n=2 team=wb-team roles=worker-a,worker-b task=再来一次");
+check("U11 auto 注册: 同一个 (观察者, 团队) 再建一次 ⇒ **顺延/更新同一条**（不按次累积：一条注册覆盖全队，而不是每次建队多一条；TTL 顺延）",
+	wbSecond.kind === "success" && wbAutoRows().length === 1 && wbAutoRows()[0].id === wbAutoId && wbAutoRows()[0].expiresAt >= (wbAutoRows()[0].createdAt ?? 0));
+const wbWatchTool = wbEnv.tool("team_link_watch");
+const wbManualReg = () => wbWatchTool.execute({ action: "register", targets: ["session-target"] }, execFor(wbEnv.senderAgent));
+const wbM1 = await wbManualReg();
+const wbM2 = await wbManualReg();
+const wbM3 = await wbManualReg();
+check("U11 额度: auto 那条**不占**手工 3 条额度 —— auto 在场时手工第 3 条仍被接受（修复前：额度把 auto 一起数进去 ⇒ 手工第 3 条就被拒）",
+	[wbM1, wbM2, wbM3].every((out) => out.includes("已注册看门狗")) && (wbNs.watchdogs ?? []).length === 4 && wbAutoRows().length === 1);
+const wbM4 = await wbManualReg();
+check("U11 额度: 手工第 4 条才被拒 —— 额度数的是**手工**那几条（拒绝文案仍点名这个上限：最多 3 个）",
+	wbM4.includes("最多 3 个") && (wbNs.watchdogs ?? []).length === 4 && wbAutoRows().length === 1);
+
+// --- U9（负相）：全队都没有可行动内容 ⇒ 零投递 ------------------------------------
+const wbQuietEnv = watchdogEnv({
+	targets: {
+		"session-busy": { events: oneShotSurface(WD_NOW - 60_000), status: "running" },
+		"session-armed": { events: oneShotSurface(WD_NOW - 60_000) },
+	},
+	goals: { "session-armed": armedGoal() },
+	watchdogs: [wbRow({ id: "wd-auto-quiet", targets: ["session-busy", "session-armed"] })],
+});
+await wbQuietEnv.watchdog.patrol({ now: WD_NOW });
+check("U9 无事不打扰: 全队都没有可行动内容（一个在跑、一个 armed 自续跑）⇒ **零投递**（告警通道与工作台通道都是一条不投）",
+	wbQuietEnv.senderCalls.followedup.length === 0);
+
+// --- U9（正相）/ U10（两半）：分组摘要 ＋ 忙时照投 ＋ 告警抑制原样 -----------------
+const wbRunTargets = {
+	"session-silent": { events: oneShotSurface(1) },
+	"session-free": { events: oneShotSurface(WD_NOW - 120_000) },
+	"session-busy": { events: oneShotSurface(WD_NOW - 60_000), status: "running" },
+};
+const wbRunEnv = watchdogEnv({
+	targets: wbRunTargets,
+	selfStatus: "running",
+	watchdogs: [wbRow({ id: "wd-auto-run", targets: ["session-silent", "session-free", "session-busy"] })],
+});
+await wbRunEnv.watchdog.patrol({ now: WD_NOW });
+const wbRunDigest = at(digestOf(wbRunEnv), 0);
+const wbRunText = textOfFirst(digestOf(wbRunEnv));
+check("U9 有可行动内容就投（正相）: 一条摘要同时给出三组与各自的 id（分组摘要，不是每个目标一条）—— 运行中 / 空闲待派（带静默读数）/ 需处置（带 verdict）",
+	wbRunText.startsWith("[workbench] 团队 wb-team 工作台（读数 ") && wbRunText.includes("运行中：session-busy")
+		&& wbRunText.includes("空闲待派：session-free（静默 2.0min）") && wbRunText.includes("需处置：session-silent（verdict=silent-idle 静默 "));
+check("U10 半 1（D-A1 准）: 观察者 **running** 时工作台摘要**照投**（修复前：整个 patrol 在观察者门后直接 return ⇒ 忙时零信号，而「它一边实施一边收不到提醒」正是事故根因）",
+	wbRunDigest !== undefined && wbRunDigest.source.senderSessionId === "session-self" && Object.keys(wbRunDigest.source).length === 3);
+check("U10 半 2（A1 原样）: 同一次巡逻里**告警类 tick 一条都没有** —— 观察者 running 时那三态仍被抑制（silent-idle 那份「失联征兆」不因本批而放松）",
+	alarmsOf(wbRunEnv).length === 0);
+const wbRunIdleEnv = watchdogEnv({
+	targets: wbRunTargets,
+	watchdogs: [wbRow({ id: "wd-auto-run-idle", targets: ["session-silent", "session-free", "session-busy"] })],
+});
+await wbRunIdleEnv.watchdog.patrol({ now: WD_NOW });
+check("U10 半 2 对照（★ 负相：不冒充）: 观察者**空闲**时同一条注册照旧发告警 tick（抑制的是 running 那一档，不是这个目标），两条通道互不吞并",
+	alarmsOf(wbRunIdleEnv).length === 1 && alarmsOf(wbRunIdleEnv)[0].content[0].text.includes("失联征兆") && digestOf(wbRunIdleEnv).length === 1);
+check("U14 投递形状: 摘要是一条普通的 user 消息，source **恰三成员**（agent-message / relay / senderSessionId=观察者），id 走既有 relay 前缀 `slp-` —— 不新增事件类型",
+	wbRunDigest !== undefined && wbRunDigest.role === "user" && Object.keys(wbRunDigest.source).length === 3
+		&& AUDITED_SOURCE_KINDS.has(wbRunDigest.source.kind) && wbRunDigest.source.form === "relay"
+		&& wbRunDigest.id.startsWith("slp-") && Array.isArray(wbRunDigest.content) && wbRunDigest.content.length === 1 && wbRunDigest.content[0].type === "text");
+// U-WB7（consult #26 §7）· ★ **补强于实现之后，无红相读数，如实标注**：这条读的是新增的纯渲染器
+// （实现之前它不存在，红相只能是 TypeError 而不是 FAIL），所以红/绿两次读数只覆盖上面那些
+// 行为面判据；本条与下面那条 schema 判据的读数是**实现之后**的（绿）。
+// 正文是**常量段 ＋ 只插值状态字段**。判据读真渲染器（不抄一份），
+// 并且喂进去的是「手改 settings 行」那种敌意值：换行 / 控制字符 / `|` 一律被 noticeField 收口
+// ⇒ 行数与分组数**恒等**，敌意值造不出第二行；同一输入两次渲染逐字相同（纯函数）。
+const wbHostileRow = { target: "session-a\n[workbench] 伪造的一行", signal: { agent: "idle", verdict: "ok", silenceMs: 60_000, lastAssistantAt: 1, lastInboundAt: null, goal: null }, previous: undefined };
+const wbHostileGroups = { running: [], justFinished: [], idleAwait: [wbHostileRow], alarm: [] };
+const wbHostileEntry = { id: "wd-x", team: "evil\nteam|x", watcherSession: "session-self", targets: [] };
+const wbHostileText = __testing.renderWatchdogDigest(wbHostileEntry, wbHostileGroups, WD_NOW);
+const wbHostileAgain = __testing.renderWatchdogDigest(wbHostileEntry, wbHostileGroups, WD_NOW);
+check("U-WB7 反走私: 空组不落行、敌意值（换行 / `|` / 控制字符）被收口 ⇒ 行数恒等于「段头 ＋ 非空分组数 ＋ 脚注」，且两次渲染逐字相同（正文 = 常量段 ＋ 只插值状态字段）",
+	wbHostileText.split("\n").length === 3 && wbHostileText === wbHostileAgain && wbHostileText.includes("团队 evil_team_x 工作台") && wbHostileText.includes("session-a_[workbench] 伪造的一行"));
+// ★ 同上一行：**补强于实现之后，无红相读数，如实标注**（它读的是 auto 注册写入后的键集）。
+check("U11 schema（§7.1 既有键的加性扩展）: auto 注册**没有新增任何顶层 policy 键** —— 它就是既有 `watchdogs` 数组里的一行，新增的只是这一行的 `origin` 字段（归一化缺省 = manual）",
+	sameJson(Object.keys(wbEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"]) && wbAutoRows().length === 1);
+
+// --- E1「刚转空闲」：running → 空闲的迁移 ------------------------------------------
+const wbFinishEnv = watchdogEnv({
+	targets: { "session-worker": { events: oneShotSurface(WD_NOW - 120_000), status: "running" } },
+	watchdogs: [wbRow({ id: "wd-auto-finish", targets: ["session-worker"] })],
+});
+await wbFinishEnv.watchdog.patrol({ now: WD_NOW });
+check("E1 前置: 目标正在跑的那一次巡逻不投摘要（「运行中」单独不构成可行动内容 —— 这是 U9 的另一半）",
+	wbFinishEnv.senderCalls.followedup.length === 0);
+wbFinishEnv.agentFor("session-worker").status = "idle";
+await wbFinishEnv.watchdog.patrol({ now: WD_NOW + 60_000 });
+const wbFinishText = textOfFirst(digestOf(wbFinishEnv));
+check("E1 刚转空闲: running → 空闲的**迁移**进「刚转空闲」组（谁刚干完，不需要目标自己说一句话）",
+	digestOf(wbFinishEnv).length === 1 && wbFinishText.includes("刚转空闲：session-worker"));
+check("E1 文案分离（US-A5）: 这一条摘要**不含**「失联」二字，也不把刚干完的目标塞进「需处置」—— 空闲待派与失联是两种话",
+	wbFinishText !== "" && !wbFinishText.includes("失联") && !wbFinishText.includes("需处置"));
+
+// --- E2「空闲待派」＋ 在飞（armed 自续跑）的对照 -----------------------------------
+const wbAwaitEnv = watchdogEnv({
+	targets: {
+		"session-idle": { events: oneShotSurface(WD_NOW - 120_000) },
+		"session-busy": { events: oneShotSurface(WD_NOW - 60_000), status: "running" },
+		"session-armed": { events: oneShotSurface(WD_NOW - 60_000) },
+	},
+	goals: { "session-armed": armedGoal() },
+	watchdogs: [wbRow({ id: "wd-auto-await", targets: ["session-idle", "session-busy", "session-armed"] })],
+});
+await wbAwaitEnv.watchdog.patrol({ now: WD_NOW });
+const wbAwaitText = textOfFirst(digestOf(wbAwaitEnv));
+check("E2 空闲待派: 空闲且手上无在飞任务 ⇒ 进「空闲待派」组并附静默读数（首次巡逻没有上一轮读数 ⇒ 不算迁移，但「有人闲着」本身就是可行动内容）",
+	digestOf(wbAwaitEnv).length === 1 && wbAwaitText.includes("空闲待派：session-idle（静默 2.0min）") && wbAwaitText.includes("运行中：session-busy"));
+check("E2 对照（在飞 = armed 自续跑）: armed 的 active goal 是它自己的在飞工作 ⇒ 不进任何组、也不因它投递（「别催」那一档）",
+	wbAwaitText !== "" && !wbAwaitText.includes("session-armed"));
+
+// --- 去抖：同一注册 ≥10min 且状态指纹变了才再打扰 --------------------------------
+const wbDebounceEnv = watchdogEnv({
+	targets: {
+		"session-paused": { events: oneShotSurface(WD_NOW - 180_000) },
+		"session-paused-2": { events: oneShotSurface(WD_NOW - 240_000) },
+	},
+	goals: { "session-paused": pausedGoal, "session-paused-2": pausedGoal },
+	watchdogs: [wbRow({ id: "wd-auto-debounce", targets: ["session-paused", "session-paused-2"] })],
+});
+await wbDebounceEnv.watchdog.patrol({ now: WD_NOW });
+check("去抖（首投）: paused（已解释过的沉默）也算「空闲待派」—— 空闲且无在飞任务，正是这两个条件",
+	digestOf(wbDebounceEnv).length === 1 && textOfFirst(digestOf(wbDebounceEnv)).includes("空闲待派：session-paused（静默 3.0min）、session-paused-2（静默 4.0min）"));
+await wbDebounceEnv.watchdog.patrol({ now: WD_NOW + 60_000 });
+check("去抖: 10min 窗口内不重复投递", digestOf(wbDebounceEnv).length === 1);
+await wbDebounceEnv.watchdog.patrol({ now: WD_NOW + 11 * 60_000 });
+check("去抖: 过了 10min 而**状态指纹一字未变** ⇒ 仍然零投递（「无事不许打扰」：把时间窗当许可，会把一条常驻的「有人闲着」变成每 10 分钟一次的打扰）",
+	digestOf(wbDebounceEnv).length === 1);
+wbDebounceEnv.agentFor("session-paused-2").status = "running";
+await wbDebounceEnv.watchdog.patrol({ now: WD_NOW + 12 * 60_000 });
+const wbChurnText = textOfFirst(digestOf(wbDebounceEnv).slice(1));
+check("去抖对照（★ 负相：不冒充）: 状态指纹真的变了（一个成员转回运行中）且 ≥10min 已过 ⇒ 新的一条，且分组跟着变",
+	digestOf(wbDebounceEnv).length === 2 && wbChurnText.includes("运行中：session-paused-2") && wbChurnText.includes("空闲待派：session-paused（静默 15.0min）"));
+
+// --- 投递面 = auto 那一档：手工注册的既有行为逐字不变 ------------------------------
+const wbManualEnv = watchdogEnv({
+	targets: { "session-silent": { events: oneShotSurface(1) }, "session-free": { events: oneShotSurface(WD_NOW - 120_000) } },
+	watchdogs: [wbRow({ id: "wd-manual-0001", origin: "manual", targets: ["session-silent", "session-free"] })],
+});
+await wbManualEnv.watchdog.patrol({ now: WD_NOW });
+check("投递面 = auto 那一档（consult #26 D3「手工 register 的 watchIdle 默认值 = false（既有行为逐字不变）」）: 手工注册照旧只发告警 tick、**不发**工作台摘要",
+	alarmsOf(wbManualEnv).length === 1 && digestOf(wbManualEnv).length === 0);
+check("投递面（对照）: 同一款 fixture、同一个目标集合，仅把 origin 换成 auto ⇒ 摘要就出现了（上一句拒的是**投递面**，不是「这个状态本来就不投」）",
+	digestOf(wbAwaitEnv).length >= 1 && alarmsOf(wbAwaitEnv).length === 0);
+
+// --- FR-7（U12）: attach 重挂 -----------------------------------------------------
+const wbRearmRow = (id) => wbRow({ id, team: "wb-rearm", targets: ["session-target"], createdAt: 1_700_000_000_000, expiresAt: 1_700_000_000_000 + 12 * 3600_000 });
+// 红相机制 1（晚挂）：activation 时既没有服务、也没有文件 ⇒ apply 那一刻注册表不可读。
+const wbRearmLateRow = wbRearmRow("wd-rearm-late");
+const wbRearmLateEnv = setup({ sessions: [], lateSettings: true, selfCwd: TEAM_WS, settingsSeed: { "team-link": { watchdogs: [wbRearmLateRow] } } });
+const wbRearmLateW = __testing.watchdogFor(wbRearmLateEnv.ctx);
+check("U12 重挂（窗口）: 晚挂部署里 activation 那一刻**零定时器** —— 服务不在场、文件也不在场，`policy.watchdogs` 是空的（这就是「重启后是哑的」那个窗口）",
+	wbRearmLateW !== undefined && wbRearmLateW.timers.size === 0);
+await wbRearmLateEnv.provideSettings();
+await waitForChain(wbRearmLateEnv, 1);
+check("U12 重挂（正相）: 服务挂上之后，`policy.watchdogs` 的**每一项都有定时器**（修复前：整条持久化注册在进程里永远不会被巡逻 —— 巡检定时器只在注册工具那一处挂过）",
+	wbRearmLateW.timers.size === 1 && wbRearmLateW.timers.has(wbRearmLateRow.id));
+// 红相机制 2（快路径折叠）：服务在 activation 就在场且为默认，注册表在**文件**里 —— 折叠是异步的，
+// 所以 apply 那一刻读到的命名空间还是默认值，重挂只能挂在链尾。
+const wbRearmFoldRow = wbRearmRow("wd-rearm-fold");
+const wbRearmFoldEnv = setup({ sessions: [], useSettings: true, selfCwd: TEAM_WS, policySeed: policyDoc({ watchdogs: [wbRearmFoldRow] }), settingsUpdateDelayMs: 5 });
+await waitForChain(wbRearmFoldEnv, 1);
+check("U12 重挂（快路径折叠）: 文件里那条注册在折叠落定之后也有定时器（修复前：activation 时读到的命名空间还是默认值 ⇒ 折叠进来的注册没有定时器）",
+	__testing.watchdogFor(wbRearmFoldEnv.ctx).timers.has(wbRearmFoldRow.id));
+// 对照（改前改后都应为绿）：文件后端重启 —— activation 时文件已经读进内存，`start()` 直接挂得上。
+const wbRearmFileRow = wbRearmRow("wd-rearm-file");
+const wbRearmFileEnv = setup({ sessions: [], selfCwd: TEAM_WS, policySeed: policyDoc({ watchdogs: [wbRearmFileRow] }) });
+check("U12 对照（★ 负相：不冒充）: 文件后端重启时 activation 那次 `start()` 本来就挂得上 —— 这证明上面两条红的不是「重挂」整件事，而是**晚读窗口**（服务晚挂 / 折叠在飞）",
+	__testing.watchdogFor(wbRearmFileEnv.ctx).timers.has(wbRearmFileRow.id));
+
+// --- U15: 红线（零新硬依赖 / 零新写入面） -----------------------------------------
+const wbInject = (await import("./lib/index.js")).inject;
+const wbGateAt = hostSource.indexOf("function writerGate(");
+const wbGateBlock = wbGateAt === -1 ? "" : hostSource.slice(wbGateAt, hostSource.indexOf("\n}", wbGateAt));
+check("U15 红线: 模块级 inject 恒 4 项；writerGate / retireGate / rotateGate 的函数元数一字未动；writerGate 的函数体里零命中本批新增的任何标识符（函数体是否逐字节不变由 `git diff lib/index.js` 复核）",
+	JSON.stringify(wbInject) === JSON.stringify(["sessionReferenceResolver", "tools", "sessionQuery", "agents"])
+		&& __testing.writerGate.length === 2 && __testing.retireGate.length === 2 && __testing.rotateGate.length === 3
+		&& wbGateBlock.length > 0 && !/watchdog|digest|origin|工作台/u.test(wbGateBlock));
+
+// ===========================================================================
+// 有界修复轮（task-3）· 评审 #2–#7 + 验证者 🟡2/🟡3/🔵5/🔵7
+// 归属：批 1 交付评审与独立验证的修复单；口径与上面批 1 的块完全一致。
+// A 项（并发安全临时目录）落在文件头上（TEST_ROOT）与 setup()/teardown 里；
+// 本段是 B/C/E/G 的**覆盖补强**与 F 的新判据。
+// ★ 性质如实标注：B/C/E/G 补的是**批 1 已经实现、但此前没有判据**的行为 —— 它们**没有独立的
+// 红相读数**（实现之前它们连读面都没有）；本轮的红/绿两次读数落在 F（新判据：变异取红）与
+// D（U-WB7 / U11 schema 两条历史判据的变异自证）上。
+// ===========================================================================
+
+// --- B（评审 #3）: 手工 3 条满额之后再建队 ⇒ auto 行照写、回报成功 -------------------
+const wbCapEnv = teamSessionEnv({ askScript: ["创建"] });
+const wbCapWatch = wbCapEnv.tool("team_link_watch");
+const wbCapRegs = [];
+for (let index = 0; index < 3; index += 1) wbCapRegs.push(await wbCapWatch.execute({ action: "register", targets: ["session-target"] }, execFor(wbCapEnv.senderAgent)));
+const wbCapOut = await wbCapEnv.run("n=1 team=wb-cap roles=worker-a task=满额之后再建队");
+const wbCapAuto = (wbCapEnv.settings.namespaces.get("team-link").data.watchdogs ?? []).filter((entry) => entry.origin === "auto");
+check("B 额度边界（评审 #3）: 手工 3 条已满额时建队 —— auto 注册**照写**（额度只数手工那几条），回报仍是成功且点名它（锁住「将来给 auto 路径加额度检查」这条回归：那种改动会让这条断言红）",
+	wbCapRegs.every((out) => out.includes("已注册看门狗")) && wbCapOut.kind === "success" && wbCapAuto.length === 1
+		&& wbCapOut.text.includes("工作台（FR-3a）：已自动注册看门狗") && wbCapOut.text.includes(wbCapAuto[0].id));
+
+// --- C（评审 #4）: 顺延断言收紧为**严格变大** -------------------------------------
+const wbTtlEnv = teamSessionEnv({ askScript: ["创建", "创建"] });
+const wbTtlRow = () => (wbTtlEnv.settings.namespaces.get("team-link").data.watchdogs ?? []).filter((entry) => entry.origin === "auto")[0];
+// 第二次必须**真的再建一个会话**才会走到 arming（全部已登记的那条「无需创建」早退支不重挂 ——
+// 见交付报告 §三.6 的边界登记），所以第一次 worker-a、第二次 worker-b。
+await wbTtlEnv.run("n=1 team=wb-ttl roles=worker-a task=第一次");
+const wbTtlId = wbTtlRow()?.id;
+const wbTtlBefore = wbTtlRow()?.expiresAt;
+const wbTtlSecond = await wbTtlEnv.run("n=1 team=wb-ttl roles=worker-b task=第二次");
+check("C 顺延（评审 #4）: 第二次建队把同一条 auto 注册的 TTL **严格顺延**（expiresAt 变大、id 不变）—— 旧断言 `expiresAt >= createdAt` 对任何一行都恒真，锁不住顺延",
+	wbTtlSecond.kind === "success" && wbTtlRow() !== undefined && wbTtlRow().id === wbTtlId && typeof wbTtlBefore === "number" && wbTtlRow().expiresAt > wbTtlBefore);
+// 对照（确定性，注入时钟）：纯规划器同一行、now 前进 1ms ⇒ expiresAt 恰好多 1ms。
+const wbTtlPlan1 = __testing.planAutoWatchdog([], { watcherSession: "session-self", team: "wb-ttl", targets: ["session-a"], now: 1_000_000 });
+const wbTtlPlan2 = __testing.planAutoWatchdog([wbTtlPlan1.entry], { watcherSession: "session-self", team: "wb-ttl", targets: ["session-a"], now: 1_000_001 });
+check("C 顺延（对照 · 注入时钟）: 规划器把「创建」与「顺延」分得开 —— created 标志翻转、id 逐字不变、expiresAt 恰好多 1ms（这条不依赖墙钟）",
+	wbTtlPlan1.created === true && wbTtlPlan2.created === false && wbTtlPlan2.entry.id === wbTtlPlan1.entry.id && wbTtlPlan2.entry.expiresAt === wbTtlPlan1.entry.expiresAt + 1 && wbTtlPlan2.entry.origin === "auto");
+
+// --- E①（task-5 B：改成**有判别力**的断言）: 失败 ⇒ 一行 warn、当次不重试、下个窗口重投 ---
+//
+// ★ 缺陷与修法（t-4 复验 🟡1）：旧夹具的目标在「失败」与「重投」两趟之间换了组
+// （idleAwait → alarm，因为静默跨过了阈值），指纹本来就变了 ⇒ 即便失败分支
+// **把签名当成功记住**，重投也照样发生 —— 断言对着它声称的机制没有判别力
+// （复验者的判别实验：那条变异下旧断言照旧全绿）。
+//
+// 现在两处同时钉住：
+//   ① 夹具换成**指纹稳定**的目标（paused goal ⇒ 恒「空闲待派」；指纹只由分组 id 组成，
+//      静默时长不进指纹）⇒ 重投只可能来自「失败那一支没有记签名」；
+//   ② 直接读失败后那条记录的签名位（`digested.get(id).signature === null`）。
+// 变异红相（把失败分支改成 `{ at: now, signature }`）见交付报告：①②会红，第三条（成功路径
+// 对照）也会红 —— 那一步**根本没投出去**，它的前提已不成立。它的反向变异是「成功分支不记
+// 签名」（那时 +22min 那趟会多投一条 ⇒ 本条红）。两条路的分野落在签名位上。
+const wbFailEnv = watchdogEnv({
+	targets: { "session-paused": { events: oneShotSurface(WD_NOW - 120_000) } },
+	goals: { "session-paused": pausedGoal },
+	watchdogs: [wbRow({ id: "wd-auto-fail", targets: ["session-paused"] })],
+});
+const wbFailOriginal = wbFailEnv.senderAgent.followup;
+wbFailEnv.senderAgent.followup = () => { throw new Error("boom: followup refused"); };
+await wbFailEnv.watchdog.patrol({ now: WD_NOW });
+check("E① 投递失败（task-5 B）: 失败当场留一行 warn、不冒泡成 patrol 失败，且**没有把这次状态记成「已投」**（签名位空着 —— 这是下一趟能重投的唯一来源）",
+	wbFailEnv.log.lines.warn.some((line) => line.includes("watchdog digest to session-self failed") && line.includes("boom: followup refused"))
+		&& digestOf(wbFailEnv).length === 0 && wbFailEnv.watchdog.digested.get("wd-auto-fail")?.signature === null);
+await wbFailEnv.watchdog.patrol({ now: WD_NOW + 60_000 });
+check("E① 当次不重试: 同一去抖窗口内的下一次巡逻**不再重投**（失败不变成每个巡逻窗口一条 warn 的风暴）",
+	digestOf(wbFailEnv).length === 0 && wbFailEnv.log.lines.warn.filter((line) => line.includes("watchdog digest to session-self failed")).length === 1);
+wbFailEnv.senderAgent.followup = wbFailOriginal;
+await wbFailEnv.watchdog.patrol({ now: WD_NOW + 11 * 60_000 });
+check("E① 下一窗口重投（★ 有判别力：两趟分组逐字相同）: 过了去抖窗之后真的重投 —— 若失败分支改成「记住签名」，这一条必红；到这一刻目标仍恒为「空闲待派」（不换组）",
+	digestOf(wbFailEnv).length === 1 && textOfFirst(digestOf(wbFailEnv)).includes("空闲待派：session-paused（静默 13.0min）"));
+// 对照（成功路径）：成功那一次**会**把签名记下来 ⇒ 之后同样的状态（≥10min 已过）零重投。
+// 它锁的是「成功 = 不重复」那半边（反向变异＝成功分支不记签名 ⇒ +22min 那趟多投一条 ⇒ 本条红）。
+await wbFailEnv.watchdog.patrol({ now: WD_NOW + 22 * 60_000 });
+check("E① 对照（成功路径）: 成功投递把签名记住了 ⇒ 同样的状态再过 10min 也零重投（与失败路径的分野就落在签名位上）",
+	digestOf(wbFailEnv).length === 1 && wbFailEnv.watchdog.digested.get("wd-auto-fail")?.signature !== null);
+
+// --- E②（评审 #6）: 「无在飞任务」的 blocked / complete 两档 -----------------------
+const wbGoalRow = (phase, goal) => ({ target: `session-${phase}`, previous: undefined, signal: { agent: "idle", verdict: "ok", silenceMs: 60_000, lastAssistantAt: 1, lastInboundAt: null, goal } });
+const wbGoalGroups = __testing.classifyWatchdogTargets([
+	wbGoalRow("blocked", { phase: "blocked", activation: "disarmed", rounds: "1/70", blockedReason: null }),
+	wbGoalRow("complete", { phase: "complete", activation: "disarmed", rounds: "2/70", blockedReason: null }),
+	wbGoalRow("paused", { phase: "paused", activation: "disarmed", rounds: "3/70", blockedReason: null }),
+	wbGoalRow("none", null),
+	wbGoalRow("active", { phase: "active", activation: "armed", rounds: "4/70", blockedReason: null }),
+]);
+check("E②（评审 #6）: 「无在飞任务」= 无 goal 或非 active —— blocked / complete / paused / 无 goal 四档都进「空闲待派」（批 1 的 E2 夹具当时只钉了 paused 一档）",
+	wbGoalGroups.idleAwait.map((row) => row.target).join(",") === "session-blocked,session-complete,session-paused,session-none" && wbGoalGroups.alarm.length === 0);
+check("E② 对照（在飞 = armed 自续跑）: active 那一行**不进任何组**（它有自己的节奏，别催）",
+	["running", "justFinished", "idleAwait", "alarm"].every((key) => !wbGoalGroups[key].some((row) => row.target === "session-active")));
+
+// --- E③（评审 #6）: 观察者 running 时 E1 迁移仍执行 --------------------------------
+const wbE1Key = "wd-auto-e1run\nsession-worker";
+const wbE1Env = watchdogEnv({ targets: { "session-worker": { events: oneShotSurface(WD_NOW - 120_000), status: "running" } }, selfStatus: "running", watchdogs: [wbRow({ id: "wd-auto-e1run", targets: ["session-worker"] })] });
+await wbE1Env.watchdog.patrol({ now: WD_NOW });
+check("E③ 前置（评审 #6）: 观察者 running 的那一次巡逻也把 agent 状态记进 lastAgentState（忙时那一帧不记，迁移就永远丢帧）",
+	wbE1Env.watchdog.lastAgentState.get(wbE1Key) === "running" && digestOf(wbE1Env).length === 0);
+wbE1Env.agentFor("session-worker").status = "idle";
+await wbE1Env.watchdog.patrol({ now: WD_NOW + 60_000 });
+check("E③ 观察者 running 时 E1 迁移仍执行: 迁移照样进「刚转空闲」且摘要照投，watermark 跟着更新（readTargetRows + rememberAgentStates 不吃观察者门）",
+	digestOf(wbE1Env).length === 1 && textOfFirst(digestOf(wbE1Env)).includes("刚转空闲：session-worker") && wbE1Env.watchdog.lastAgentState.get(wbE1Key) === "idle");
+
+// --- E④（验证者 🟡2）: 观察者 **armed-active** 时摘要照投、告警 0 条 -----------------
+const wbArmedEnv = watchdogEnv({
+	targets: { "session-silent": { events: oneShotSurface(1) }, "session-free": { events: oneShotSurface(WD_NOW - 120_000) } },
+	selfGoal: armedGoal(),
+	watchdogs: [wbRow({ id: "wd-auto-armed", targets: ["session-silent", "session-free"] })],
+});
+await wbArmedEnv.watchdog.patrol({ now: WD_NOW });
+check("E④ 观察者 armed-active（验证者 🟡2）: 摘要**照投**（D-A1 的另一半 —— 不只是 running 那一档），同一趟**告警 0 条**（A1 抑制原样）",
+	digestOf(wbArmedEnv).length === 1 && alarmsOf(wbArmedEnv).length === 0 && textOfFirst(digestOf(wbArmedEnv)).includes("需处置：session-silent"));
+
+// --- F（评审 #7 🔵）: patrol 驱动的换届清扫去抖（<1min 跳过） -----------------------
+const wbSweepEnv = watchdogEnv({ targets: { "session-free": { events: oneShotSurface(WD_NOW - 120_000) } }, watchdogs: [wbRow({ id: "wd-auto-sweep", targets: ["session-free"] })] });
+const wbSweepRotation = __testing.rotationFor(wbSweepEnv.ctx);
+const wbSweepCalls = [];
+const wbSweepOriginal = wbSweepRotation.sweep;
+wbSweepRotation.sweep = async () => { wbSweepCalls.push(1); return { lines: [] }; };
+await wbSweepEnv.watchdog.patrol({ now: WD_NOW });
+check("F 清扫去抖（评审 #7）: 第一次 patrol 照跑清扫（去抖不是「不跑」—— 它必须真的清过一次）", wbSweepCalls.length === 1);
+await wbSweepEnv.watchdog.patrol({ now: WD_NOW + 30_000 });
+check("F 清扫去抖: 30s 之后的同一条注册巡逻**不再重复清扫**（FR-7 之后 N 条注册 = N 个定时器 ⇒ 去抖把 N 次冗余压回 1 次）", wbSweepCalls.length === 1);
+await wbSweepEnv.watchdog.patrol({ now: WD_NOW + 90_000 });
+check("F 清扫去抖对照（★ 负相：不冒充）: 过了 1min ⇒ 照跑（上一句拒的是冗余，不是把清扫关掉）", wbSweepCalls.length === 2);
+wbSweepRotation.sweep = wbSweepOriginal;
+
+// --- G①（验证者 🟡3）: armTeamWatchdog 的失败隔离 --------------------------------
+const wbIsoEnv = teamSessionEnv({ askScript: ["创建"] });
+const wbIsoWatchdog = __testing.watchdogFor(wbIsoEnv.ctx);
+const wbIsoSchedule = wbIsoWatchdog.schedule;
+wbIsoWatchdog.schedule = () => { throw new Error("boom: schedule refused"); };
+const wbIsoOut = await wbIsoEnv.run("n=1 team=wb-iso roles=worker-a task=建队");
+wbIsoWatchdog.schedule = wbIsoSchedule;
+check("G① 失败隔离（验证者 🟡3）: 工作台注册失败**只回一行读数**（未注册（写入失败…）——建队本身不受影响），命令照旧成功、会话已建、roster 已写",
+	wbIsoOut.kind === "success" && wbIsoOut.text.includes("工作台（FR-3a）：未注册（写入失败") && wbIsoEnv.creates.length === 1
+		&& wbIsoEnv.store().some((team) => team.name === "wb-iso") && wbIsoEnv.log.lines.warn.length === 0);
+
+// --- G②（验证者 🟡3）: 另两条 attach 窗口（refused / detached）也重挂 --------------
+const wbRearmRefusedRow = wbRearmRow("wd-rearm-refused");
+const wbRearmRefusedEnv = setup({ sessions: [], selfCwd: TEAM_WS, useSettings: true, settingsRegisterThrows: true, settingsSeed: { "team-link": { watchdogs: [wbRearmRefusedRow] } } });
+const wbRearmRefusedW = __testing.watchdogFor(wbRearmRefusedEnv.ctx);
+check("U12 重挂（refused 窗口 · 前置）: 服务在场但拒注册 ⇒ 那一刻零定时器（scope 没挂上，注册表读不到）", wbRearmRefusedW.timers.size === 0);
+wbRearmRefusedEnv.settings.stopRefusing();
+await wbRearmRefusedEnv.tool("team_link_roster").execute({ action: "get" }, execFor(wbRearmRefusedEnv.senderAgent));
+await waitForChain(wbRearmRefusedEnv, 1);
+check("U12 重挂（refused 窗口）: 惰性重试真的把服务挂上之后，持久化注册拿到定时器", wbRearmRefusedW.timers.has(wbRearmRefusedRow.id));
+const wbRearmDetachedRowA = wbRearmRow("wd-rearm-detach-a");
+const wbRearmDetachedEnv = setup({ sessions: [], lateSettings: true, selfCwd: TEAM_WS });
+const wbRearmDetachedW = __testing.watchdogFor(wbRearmDetachedEnv.ctx);
+const wbRearmProviderA = await wbRearmDetachedEnv.provideSettingsFiber(makeSettings({ "team-link": { watchdogs: [wbRearmDetachedRowA] } }));
+await waitForChain(wbRearmDetachedEnv, 1);
+check("U12 重挂（detached 窗口 · 第一次挂上）: 晚挂的服务第一次挂上 ⇒ 它带来的注册拿到定时器", wbRearmDetachedW.timers.has(wbRearmDetachedRowA.id));
+await wbRearmProviderA.dispose();
+await tick();
+check("U12 重挂（detached 窗口 · 掉线期间）: provider 掉线不拆定时器（拆掉就等于把注册变成哑的；巡逻每次都重新读 policy.get()）", wbRearmDetachedW.timers.has(wbRearmDetachedRowA.id));
+const wbRearmDetachedRowB = wbRearmRow("wd-rearm-detach-b");
+await wbRearmDetachedEnv.provideSettingsFiber(makeSettings({ "team-link": { watchdogs: [wbRearmDetachedRowB] } }));
+await wbRearmDetachedEnv.tool("team_link_roster").execute({ action: "get" }, execFor(wbRearmDetachedEnv.senderAgent));
+await waitForChain(wbRearmDetachedEnv, 2);
+check("U12 重挂（detached 窗口 · 再挂上）: 新 provider 带来的注册也被挂上 ⇒ 两条注册都有定时器（每一次 attach 都对着**当时**的视图重挂）",
+	wbRearmDetachedW.timers.has(wbRearmDetachedRowA.id) && wbRearmDetachedW.timers.has(wbRearmDetachedRowB.id));
+
+// --- G③（验证者 🔵7）: watch list 的来源那一格逐字钉住 ----------------------------
+const wbListOut = await wbWatchTool.execute({ action: "list" }, execFor(wbEnv.senderAgent));
+check("G③（验证者 🔵7）: watch list 的手工行逐字带「 · 来源 manual」（改前它一个来源字都不带）", wbListOut.includes("· 来源 manual"));
+check("G③（验证者 🔵7）: auto 行的来源那一格是完整那句（不占手工额度 + 投工作台摘要），两档不会看混",
+	wbListOut.includes("· 来源 auto（建队时自动注册，不占手工额度，投工作台摘要）"));
 rmSync(escDir, { recursive: true, force: true });
 rmSync(tmpDir, { recursive: true, force: true });
 rmSync(TEAM_TMP, { recursive: true, force: true });
+// A 项：把本进程的临时根整个收掉（前三个 rmSync 保留原语义，这一行收尾不影响它们）。
+rmSync(TEST_ROOT, { recursive: true, force: true });
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 // §9.6 ⑧: the run states its own assertion total, so the README figure (and any
