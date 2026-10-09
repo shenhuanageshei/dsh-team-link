@@ -1856,7 +1856,7 @@ const oneShotSurface = (time, text = "在干活") => [{
  * @param goals - goal views by session id.
  * @param targets - `{ sessionId: { events, status } }`.
  */
-function watchdogEnv({ goals = {}, targets = {}, selfStatus, selfGoal, watchdogs = undefined } = {}) {
+function watchdogEnv({ goals = {}, targets = {}, selfStatus, selfGoal, watchdogs = undefined, teams = undefined, sections = undefined } = {}) {
 	const ids = Object.keys(targets);
 	const eventsBySession = {};
 	for (const id of ids) eventsBySession[id] = targets[id].events;
@@ -1870,7 +1870,7 @@ function watchdogEnv({ goals = {}, targets = {}, selfStatus, selfGoal, watchdogs
 		// 批 1（FR-3/FR-7）：把一个既有注册直接种进命名空间 —— 这就是「重启后盘上的注册」
 		// 那一档夹具（本批的两条新判据面都活在**已有注册**上：workbench digest 只对
 		// origin:"auto" 那一条开放，attach 重挂整件事也只在持久化注册上有意义）。
-		...(watchdogs === undefined ? {} : { settingsSeed: { "team-link": { watchdogs } } }),
+		...(watchdogs === undefined && teams === undefined && sections === undefined ? {} : { settingsSeed: { "team-link": { ...(watchdogs === undefined ? {} : { watchdogs }), ...(teams === undefined ? {} : { teams }), ...(sections === undefined ? {} : { sections }) } } }),
 	});
 	return { ...env, eventsBySession, watch: env.tool("team_link_watch"), watchdog: __testing.watchdogFor(env.ctx) };
 }
@@ -5351,7 +5351,7 @@ check("Y1 对照（批次 2 改写）: 同一个非 coordinator 角色走 `reviv
 // §11.9.5①: the whole surface stays two verbs, and the second one does not grow a
 // "write any roster field" cousin.
 check("U29 红线: 恢复路径不新增日志事件类型——宿主动作仍只有既有的几种（settings 写 + 确认框 + 广播投递 + resume，本轮没有第四种），writerGate 原样，policy 的顶层键一个不多", reapEnv.actionLog.every((entry) => entry === "create" || entry === "followup" || entry === "resume") && __testing.writerGate.length === 2 && sameJson(Object.keys(reapEnv.ns.data).sort(), ["blockedSenders", "pairs", "receiveMode", "rememberTargets", "teams", "trustedSenders"]));
-check("U29 schema: 恢复没有新增任何顶层 policy key（recoveries 是 role 行内字段）——八项一个不多", sameJson(Object.keys(reapEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"]) && reapEnv.role().recoveries !== undefined && reapEnv.ns.data.recoveries === undefined);
+check("U29 schema: 恢复没有新增任何顶层 policy key（recoveries 是 role 行内字段）——八项一个不多", sameJson(Object.keys(reapEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && reapEnv.role().recoveries !== undefined && reapEnv.ns.data.recoveries === undefined);
 
 // --- 缺口1 的第三半：claim 的超时读数**不得**与 fail-closed 同形 -----------------------
 //
@@ -5525,7 +5525,7 @@ const pendingFoldNs = pendingFoldEnv.settings.namespaces.get("team-link");
 check("U9 对照 (pendingCreates) 前置: the fold itself happened — the window's roster write reached the namespace (so a missing intent below cannot be blamed on a fold that never ran)", (pendingFoldNs?.data.teams ?? []).map((team) => team.name).join(",") === "night-shift" && pendingFoldEnv.log.lines.warn.some((line) => line.includes("unattached startup window")));
 check("U9 对照 (pendingCreates): a §10.2.6 intent written inside the startup window SURVIVES the fold into the settings namespace — the durable orphan record the next boot's sweep reports is not dropped by adopting the window", (pendingFoldNs?.data.pendingCreates ?? []).length === 1 && (pendingFoldNs?.data.pendingCreates ?? [])[0].sessionId === pendingFoldId && (pendingFoldNs?.data.pendingCreates ?? [])[0].role === "worker-b" && (pendingFoldNs?.data.pendingCreates ?? [])[0].team === "night-shift");
 check("U9 对照 (pendingCreates): the folded rows are the window's own normalized rows — every field of the intent survived, not just its presence", (pendingFoldNs?.data.pendingCreates ?? []).length === 1 && (pendingFoldNs?.data.pendingCreates ?? []).every((entry) => entry.createdAt > 0 && entry.expiresAt > entry.createdAt && entry.by === "session-self" && Object.keys(entry).sort().join(",") === "by,createdAt,expiresAt,role,sessionId,team"));
-check("U9 对照 (pendingCreates): the fold is the wholesale write {@link policyIsAtDefaults} licenses, so it carries all EIGHT policy keys — the new one beside the seven that pre-date ②, with the window's roster and the pair granted for the one worker that WAS created inside them", sameJson(Object.keys(pendingFoldNs?.data ?? {}).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"]) && (pendingFoldNs?.data.teams ?? []).length === 1 && (pendingFoldNs?.data.pairs ?? []).length === 1 && at(pendingFoldNs?.data.pairs, 0, {}).b === at(pendingFoldEnv.creates, 0, {}).sessionId);
+check("U9 对照 (pendingCreates): the fold is the wholesale write {@link policyIsAtDefaults} licenses, so it carries all NINE policy keys（FR-9 的 sections 是第九个）— the new one beside the seven that pre-date ②, with the window's roster and the pair granted for the one worker that WAS created inside them", sameJson(Object.keys(pendingFoldNs?.data ?? {}).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && (pendingFoldNs?.data.teams ?? []).length === 1 && (pendingFoldNs?.data.pairs ?? []).length === 1 && at(pendingFoldNs?.data.pairs, 0, {}).b === at(pendingFoldEnv.creates, 0, {}).sessionId);
 
 // --- U10 (§3.3.2 创建即认领 / §9.2.2): bootstrap, no hijack, gates untouched ---
 const u10Env = teamEnv({ teams: [] });
@@ -7140,12 +7140,12 @@ check("U19 inject: ... and the host module really is the four-entry shape: `appl
 // constants (U16 asserts that), so the red line is that no further key appeared.
 // The declared surface is read from the REGISTERED namespace's base (what the
 // provider actually takes), not from a hand-copied list.
-const U19_POLICY_KEYS = ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"];
+const U19_POLICY_KEYS = ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"];
 const u19Base = u19ConcurrencyEnv.settings.namespaces.get("team-link").base;
 // 批 1（FR-3a）: the WORKED surface gained `watchdogs` — 因为 `/team_session` 现在会经**既有的**
 // `watchdogs` 键自动注册一条工作台注册（§7.1「既有键的加性扩展」）。上半句（**声明面** = 八个键）
 // 一字未动，这条判据要钉的「没有新顶层键」因此仍成立：新增的是既有数组里一行的 `origin` 字段。
-check("U19 schema: the registered policy namespace still declares exactly its eight keys — the ② round's own pendingCreates plus the seven that pre-date it, and nothing else", sameJson(Object.keys(u19Base).sort(), U19_POLICY_KEYS) && sameJson(Object.keys(u19ConcurrencyEnv.settings.namespaces.get("team-link").data).sort(), ["pairs", "pendingCreates", "teams", "watchdogs"]));
+check("U19 schema: the registered policy namespace still declares exactly its **nine** keys —— ② 的 pendingCreates 与 FR-9 的 sections 加在更早的七项之上，其余一个不多", sameJson(Object.keys(u19Base).sort(), U19_POLICY_KEYS) && sameJson(Object.keys(u19ConcurrencyEnv.settings.namespaces.get("team-link").data).sort(), ["pairs", "pendingCreates", "teams", "watchdogs"]));
 const sendToolU19 = u19ConcurrencyEnv.tool("team_link_send");
 const sendParams = sendToolU19.parameters;
 check("U19 schema: team_link_send's argument surface is unchanged (mutually-exclusive addressing, the message, the §3.4 envelope) — and the real key is `message`, not `text`", sameJson(Object.keys(sendParams.properties).sort(), ["message", "meta", "targetSessionId", "targets"]) && sameJson(sendParams.required, ["message"]) && sendParams.type === "object" && sendParams.properties.message.type === "string" && sendParams.properties.targets.type === "array" && sendParams.properties.targetSessionId.type === "string");
@@ -8557,7 +8557,7 @@ check("U1 文件后端: 无 settings 服务时一次写入落在 <DSH_HOME>/team
 check("U1 文件后端: 文件 schema 是 {schema,savedAt,foldedAt,policy}，policy 键集**镜像** settings 命名空间的八个键",
 	u1Doc !== null && u1Doc.schema === 1 && typeof u1Doc.savedAt === "string" && Number.isFinite(Date.parse(u1Doc.savedAt))
 		&& u1Doc.foldedAt === null && u1Doc.policy !== null
-		&& Object.keys(u1Doc.policy).sort().join(",") === ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"].sort().join(","));
+		&& Object.keys(u1Doc.policy).sort().join(",") === ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"].sort().join(","));
 check("U1 文件后端: 读回一致 —— 磁盘上的 roster 与本次 `roster get` 看到的是同一份",
 	u1Doc !== null && Array.isArray(u1Doc.policy.teams) && u1Doc.policy.teams.length === 1 && u1Doc.policy.teams[0].name === "threat-intel"
 		&& (await u1Roster.execute({ action: "get" }, execFor(u1Env.senderAgent))).includes("threat-intel"));
@@ -8652,7 +8652,10 @@ check("U4 裁决: 留痕一行说清「服务胜出 + 文件归档了」",
 		&& u4Env.log.lines.info.some((line) => line.includes("memory window: not folded (settings namespace already in use)")));
 
 // U5 —— §3.5 三态首行：roster get 与 team_link_status 都要说得出状态存在哪。
-const u5ServiceEnv = teamEnv([teamRow({ name: "served-team" })]);
+// ★ t-13 🟡2（task-16 B）：这里原来写的是 `teamEnv([teamRow(...)])` —— 数组传给了「选项对象」形参，
+// 名册其实是**空的**（夹具在撒谎：它自称有 served-team，实际一个团队都没有）。改对之后 U5 的覆盖才变真：
+// 名册非空 ⇒ 段①数出 1 个团队、调用方是该队现任协调者 ⇒ 状态卡第 2 行多出 FR-4 的重钉行（下面两处随之更新）。
+const u5ServiceEnv = teamEnv({ teams: [teamRow({ name: "served-team" })] });
 const u5ServiceRoster = (await u5ServiceEnv.tool("team_link_roster").execute({ action: "get" }, execFor(u5ServiceEnv.senderAgent))).split("\n");
 const u5ServiceStatus = (await statusCall(u5ServiceEnv, {})).split("\n");
 const u5FileRoster = (await u1Env.tool("team_link_roster").execute({ action: "get" }, execFor(u1Env.senderAgent))).split("\n");
@@ -8667,12 +8670,14 @@ check("U5 落点行: 落点未定/不可用 ⇒ 首行是 ⚠ 三态行，且**�
 	u5MemoryRoster[0] === "⚠ 存储：仅进程内存（重启即失）—— 原因：路径解析失败"
 		&& u5MemoryStatus[0] === "⚠ 存储：仅进程内存（重启即失）—— 原因：路径解析失败");
 check("U5 落点行: 首行之下就是各自原来的第一行（落点行是新增，不是替换）",
-	u5ServiceRoster[1].startsWith("团队注册表") && u5FileRoster[1].startsWith("团队注册表") && u5ServiceStatus[1].includes("团队状态卡"));
+	u5ServiceRoster[1].startsWith("团队注册表") && u5FileRoster[1].startsWith("团队注册表")
+		// 名册非空 + 调用方是现任协调者 ⇒ 第 2 行是 FR-4 的重钉行，卡标题顺延到第 3 行（首行仍是落点行）。
+		&& u5ServiceStatus[1].startsWith("角色重钉：") && u5ServiceStatus[2].includes("团队状态卡"));
 // 分歧审计修复轮 🔵#9：段①标题那一处「来源：…」也报落点，而它此前是**写死**的「设置
 // team-link 的 teams 键」—— 文件后端部署里于是出现两个互相打架的落点（首行「存储：文件
 // …」、下一段「来源：设置 …」）。判据与首行同源，三态各说一句。
 check("U5 落点行: 状态卡段①的「来源」**跟随落点** —— 设置 / 文件 / 内存三态各说一句（🔵#9）",
-	u5ServiceStatus.some((line) => line === "--- 团队与角色（共 0 个团队；来源：设置 team-link 的 teams 键）---")
+	u5ServiceStatus.some((line) => line === "--- 团队与角色（共 1 个团队；来源：设置 team-link 的 teams 键）---")
 		&& u5FileStatus.some((line) => line === `--- 团队与角色（共 1 个团队；来源：文件 ${u1File} 的 teams 键）---`)
 		&& u5MemoryStatus.some((line) => line === "--- 团队与角色（共 0 个团队；来源：进程内存的 teams 键（重启即失））---"));
 check("U5 落点行: 落点不是设置服务时，段①**不再**说「来源：设置」（首行与段①不许互相打架）",
@@ -9574,7 +9579,7 @@ check("U-WB7 反走私: 空组不落行、敌意值（换行 / `|` / 控制字�
 	wbHostileText.split("\n").length === 3 && wbHostileText === wbHostileAgain && wbHostileText.includes("团队 evil_team_x 工作台") && wbHostileText.includes("session-a_[workbench] 伪造的一行"));
 // ★ 同上一行：**补强于实现之后，无红相读数，如实标注**（它读的是 auto 注册写入后的键集）。
 check("U11 schema（§7.1 既有键的加性扩展）: auto 注册**没有新增任何顶层 policy 键** —— 它就是既有 `watchdogs` 数组里的一行，新增的只是这一行的 `origin` 字段（归一化缺省 = manual）",
-	sameJson(Object.keys(wbEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "teams", "trustedSenders", "watchdogs"]) && wbAutoRows().length === 1);
+	sameJson(Object.keys(wbEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && wbAutoRows().length === 1);
 
 // --- E1「刚转空闲」：running → 空闲的迁移 ------------------------------------------
 const wbFinishEnv = watchdogEnv({
@@ -10112,6 +10117,171 @@ check("B 换届 claim 的段生命周期（t-8 复验 🟡 → 仓库断言）: 
 		&& wb3SelfRecord.disposed === 1 && !wb3Sections.registered.has(ROT_SELF)
 		&& wb3Sections.registered.get(SUCCESSOR)?.kind === "coordinator" && wb3SuccRecord !== undefined
 		&& wb3WorkerRecord.disposed === 0 && wb3WorkerRecord.text({}) === wb3WorkerTextBefore && wb3Sections.registered.get("session-worker-a") === wb3WorkerPlanBefore);
+// ===========================================================================
+// 批 3 · FR-5 第⑧段 + 判读行 / FR-6 轮换标记 / FR-4 四处重钉 / FR-9 总开关
+// 判据：U7（禁用词）· U8（轮换四边界）· U13（零写）· U16（首行/第2行/描述八段）·
+// U17（总开关三处 + 键集 + README 同批）· U18（四处重钉：现任含 / 非现任缺席）。
+// 父侧裁定口径：宿主投影不含压缩阈值 ⇒ 判读行不做「低于阈值」比较；「预算耗尽」只许否定式。
+// ===========================================================================
+
+/** 批 3 夹具：调用会话就是 wb4-team 的现任协调者（settings 直接种名册与开关）。 */
+const wb4Env = ({ readings = wb2Readings(), sections = undefined, extraAgents = [], sessions = [], eventsBySession = {}, teams = undefined, omitProjections = false, projectionsThrows = false } = {}) => setup({
+	sessions, eventsBySession, useSettings: true, selfCwd: TEAM_WS, extraAgents, omitProjections, projectionsThrows,
+	settingsSeed: { "team-link": { teams: teams ?? [wb2Team("wb4-team")], ...(sections === undefined ? {} : { sections }) } },
+	projectionsReadings: readings,
+});
+const wb4CharterLine = (team) => __testing.charterReinforceLine(team);
+/** README 的键集描述（U17 的「同批更新」判据读它）。 */
+const readmeSource = await readFile(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
+const wb4StatusLines = async (env) => String(await env.tool("team_link_status").execute({}, execFor(env.senderAgent))).split("\n");
+const wb4SectionOf = (lines, head) => {
+	const start = lines.findIndex((line) => line.startsWith(head));
+	if (start === -1) return [];
+	const out = [];
+	for (let index = start; index < lines.length; index += 1) {
+		if (index > start && lines[index].startsWith("--- ")) break;
+		out.push(lines[index]);
+	}
+	return out;
+};
+
+// --- U16：首行仍是落点行、第 2 行是重钉行、描述改成八段 ----------------------------
+const wb4EnvBase = wb4Env();
+const wb4Status = await wb4StatusLines(wb4EnvBase);
+const wb4StatusText = wb4Status.join("\n");
+check("U16 首行与第 2 行: 首行仍是 placementLine（可核落点，R2 红线），第 2 行是 FR-4 的角色重钉（调用方是现任协调者）",
+	wb4Status[0].startsWith("存储：") && wb4Status[1] === wb4CharterLine("wb4-team") && wb4Status[2].includes("团队状态卡"));
+check("U16 描述: team_link_status 的工具描述由「七段」改「八段」并列出新段（⑧ 资源/预算）",
+	(() => { const desc = String(wb4EnvBase.tool("team_link_status").description ?? ""); return desc.includes("八段") && desc.includes("⑧") && !desc.includes("七段"); })());
+
+// --- U18：四处重钉（现任含 / 非现任缺席） -----------------------------------------
+const wb4CreateEnv = wb4Env({ teams: [] });
+const wb4CreateOut = String(await wb4CreateEnv.tool("team_link_roster").execute({ action: "upsert-team", team: "wb4-fresh" }, execFor(wb4CreateEnv.senderAgent)));
+check("U18 重钉点①（upsert-team 创建分支）: 创建即认领 ⇒ 回报带一行宪章要点", wb4CreateOut.includes(wb4CharterLine("wb4-fresh")));
+const wb4BuildEnv = teamSessionEnv({ askScript: ["创建"] });
+const wb4BuildOut = await wb4BuildEnv.run("n=1 team=wb4-build roles=worker-a task=建队");
+check("U18 重钉点②（/team_session 完成回报）: 调用方成为现任协调者 ⇒ 回报带一行宪章要点", wb4BuildOut.kind === "success" && wb4BuildOut.text.includes(wb4CharterLine("wb4-build")));
+const wb4ForeignEnv = wb4Env({ teams: [wb2Team("wb4-other", [wb2Role("coordinator", "session-someone-else")])] });
+const wb4ForeignStatus = await wb4StatusLines(wb4ForeignEnv);
+check("U18 重钉点③（team_link_status 第 2 行）· 非现任缺席: 调用方不是现任协调者 ⇒ 第 2 行没有重钉行（首行仍是落点行）",
+	wb4ForeignStatus[0].startsWith("存储：") && !wb4ForeignStatus.join("\n").includes("角色重钉："));
+// 该 fixture 必须**同时**种名册 —— FR-4 的判据是「观察者是该队现任协调者」，没有名册就永远是 false。
+const wb4DigestEnv = watchdogEnv({ targets: { "session-free": { events: oneShotSurface(WD_NOW - 120_000) } }, teams: [wb2Team("wb4-team")], watchdogs: [wbRow({ id: "wd-auto-fr4", team: "wb4-team", targets: ["session-free"] })] });
+await wb4DigestEnv.watchdog.patrol({ now: WD_NOW });
+const wb4DigestText = textOfFirst(digestOf(wb4DigestEnv));
+check("U18 重钉点④（digest 脚注）· 现任含: 观察者是该队现任协调者（名册里 coordinator=session-self）⇒ 摘要脚注带一行宪章要点",
+	wb4DigestText.includes(wb4CharterLine("wb4-team")) && wb4DigestText.includes("角色重钉："));
+const wb4DigestOtherEnv = watchdogEnv({ targets: { "session-free": { events: oneShotSurface(WD_NOW - 120_000) } }, watchdogs: [wbRow({ id: "wd-auto-fr4b", team: "wb4-nobody", targets: ["session-free"] })] });
+await wb4DigestOtherEnv.watchdog.patrol({ now: WD_NOW });
+// ★ t-13 🟡1（task-16 A）：上面那条钉的是「队**不在**名册里」——它证明不了现任比对。下面这条才是：
+// 队在场、coordinator 是**别人** ⇒ 脚注必须缺席（变异：把 isIncumbentCoordinator 改成恒真 ⇒ 本条红）。
+const wb4DigestForeignEnv = watchdogEnv({ targets: { "session-free": { events: oneShotSurface(WD_NOW - 120_000) } }, teams: [wb2Team("wb4-team", [wb2Role("coordinator", "session-someone-else")])], watchdogs: [wbRow({ id: "wd-auto-fr4c", team: "wb4-team", targets: ["session-free"] })] });
+await wb4DigestForeignEnv.watchdog.patrol({ now: WD_NOW });
+check("U18 重钉点④ · 非现任缺席（队**在场**、现任是别人）: 名册里有 wb4-team 但它的 coordinator 不是观察者 ⇒ 脚注不带重钉行（这一条才钉住现任比对）",
+	textOfFirst(digestOf(wb4DigestForeignEnv)).includes("[workbench]") && !textOfFirst(digestOf(wb4DigestForeignEnv)).includes("角色重钉："));
+check("U18 重钉点④ · 非现任缺席（该队根本不在名册里）: 对照项 —— 两种情况都缺席",
+	textOfFirst(digestOf(wb4DigestOtherEnv)).includes("[workbench]") && !textOfFirst(digestOf(wb4DigestOtherEnv)).includes("角色重钉："));
+// --- 第 ⑧ 段：逐项读数 + U7 判读行 + 行数预算 -------------------------------------
+const wb4Section = wb4SectionOf(wb4Status, "--- 资源/预算");
+const wb4Verdict = at(wb4Section, wb4Section.length - 1, "");
+check("第 ⑧ 段: 段头 + 会话行 + 判读行，整段 ≤12 行（评审行数预算；本夹具 1 个会话 ⇒ 3 行）",
+	wb4Section.length === 3 && wb4Section.length <= __testing.BUDGET_SECTION_MAX_LINES && wb4Section[0].startsWith("--- 资源/预算（⑧") && wb4Verdict.startsWith("预算判读："));
+check("第 ⑧ 段逐项与投影一致: 压力 25.0%（窗口 1.00M） · 累计 ≈1.0K · 第 7 轮",
+	wb4Section.some((line) => line.includes("session-self") && line.includes("压力 25.0%") && line.includes("窗口 1.00M") && line.includes("累计 ≈1.0K") && line.includes("第 7 轮")));
+check("U7 判读行（读数可得）: 否定式结论 ——「未见收口理由：本系统按压力自动压缩，结构上不存在『预算耗尽』」；且不做「低于阈值」的比较",
+	wb4Verdict === "预算判读：未见收口理由：本系统按压力自动压缩，结构上不存在『预算耗尽』。" && !wb4Verdict.includes("阈值"));
+check("U7 禁用词: 「预算耗尽」全卡**恰一次**且只在那条判读行；「收口」同样只出现在判读行",
+	(wb4StatusText.match(/预算耗尽/gu) ?? []).length === 1
+		&& !wb4StatusText.split(wb4Verdict).join("").includes("预算耗尽")
+		&& wb4StatusText.split(wb4Verdict).join("").includes("收口") === false);
+check("U7 判读行（读数不可得）: 整行如实标不可读并给原因码，判读行改说「读数不可得，不作判读」",
+	await (async () => {
+		const env = wb4Env({ omitProjections: true });
+		const lines = await wb4StatusLines(env);
+		const section = wb4SectionOf(lines, "--- 资源/预算");
+		return section.some((line) => line.includes("不可读（原因：sessionProjections 缺席）")) && at(section, section.length - 1, "").startsWith("预算判读：读数不可得，不作判读");
+	})());
+
+check("§9 第 ⑧ 段原因码②（投影未注册，t-13 🔵4）: 服务在场但三个 key 都返回 undefined ⇒ 整行如实标「不可读（原因：投影未注册）」",
+	await (async () => {
+		const env = wb4Env({ readings: {} });
+		const section = wb4SectionOf(await wb4StatusLines(env), "--- 资源/预算");
+		return section.some((line) => line.includes("不可读（原因：投影未注册）")) && at(section, section.length - 1, "").startsWith("预算判读：读数不可得，不作判读");
+	})());
+check("§9 第 ⑧ 段原因码③（投影读取抛错，t-13 🔵4）: stateOf 抛错 ⇒ 整行如实标「不可读（原因：投影读取抛错：…）」，且**不抛出去**（卡片照常出）",
+	await (async () => {
+		const env = wb4Env({ projectionsThrows: true });
+		const lines = await wb4StatusLines(env);
+		const section = wb4SectionOf(lines, "--- 资源/预算");
+		return section.some((line) => line.includes("不可读（原因：投影读取抛错：")) && at(section, section.length - 1, "").startsWith("预算判读：读数不可得，不作判读");
+	})());
+
+// --- U8：轮换四边界（严格大于）+ turns 不可读的降级 --------------------------------
+const wb4Cand = (turns, tokens) => __testing.rotateCandidateOf({ available: true, sessionId: "s", turns, totalTokens: tokens });
+check("U8 轮换四边界（turns）: 99 / 100 **不算**候选、101 算（阈值 100 取严格大于）",
+	wb4Cand(99, 0) === null && wb4Cand(100, 0) === null && wb4Cand(101, 0) !== null);
+check("U8 轮换四边界（tokens）: 199.9M / 200M **不算**候选、200.1M 算（阈值 2 亿取严格大于）",
+	wb4Cand(0, 199_900_000) === null && wb4Cand(0, 200_000_000) === null && wb4Cand(0, 200_100_000) !== null);
+check("U8 turns 不可读 ⇒ 只按 tokens 标记，且标签写明「轮次未知」（如实标注，不编轮次）",
+	wb4Cand(undefined, 200_100_000).label === "轮换候选（轮次未知 / tokens≈200.10M）");
+check("U8 E2E: 卡片行尾确实挂上标记，并给出那句现成命令（只标记、不自动）",
+	await (async () => {
+		const env = wb4Env({ readings: wb2Readings({ sessionStats: { turns: 101, steps: 303 } }) });
+		const lines = await wb4StatusLines(env);
+		const section = wb4SectionOf(lines, "--- 资源/预算");
+		return section.some((line) => line.includes("⚠ 轮换候选（turns=101 / tokens≈1.0K）"))
+			&& section.some((line) => line.includes("team_link_rotate action=prepare successor:auto"));
+	})());
+
+// --- U13：零写（第 ⑧ 段在场也不破「全只读」合同） ---------------------------------
+const wb4NsBefore = JSON.stringify(wb4EnvBase.settings.namespaces.get("team-link").data);
+await wb4StatusLines(wb4EnvBase);
+check("U13 零写: 第 ⑧ 段在场时，调用前后 settings 命名空间**逐字节不变**（纯读：只读 sessionProjections 与 policy）",
+	JSON.stringify(wb4EnvBase.settings.namespaces.get("team-link").data) === wb4NsBefore);
+
+// --- U17：总开关（role / resources 各自关断，resources 三处全缺） ------------------
+const wb4NoRoleEnv = wb4Env({ sections: { role: false } });
+const wb4NoRoleText = (await wb4StatusLines(wb4NoRoleEnv)).join("\n");
+const wb4NoRoleSection = __testing.sectionsFor(wb4NoRoleEnv.ctx);
+const wb4NoRoleRecords = wb4NoRoleEnv.systemPrompt.live();
+check("U17 role=false: 工具返回面零重钉行；提示段里没有宪章/义务行（只剩资源行）——「不想被提醒」时角色文本三处都关",
+	!wb4NoRoleText.includes("角色重钉：") && wb4NoRoleRecords.length >= 1
+		&& wb4NoRoleRecords.every((record) => !record.text({}).includes("职责边界") && !record.text({}).includes("你是团队") && record.text({}).includes("[team-link 会话资源]"))
+		&& wb4NoRoleSection.registered.size >= 1);
+const wb4NoResEnv = wb4Env({ sections: { resources: false } });
+const wb4NoResStatus = await wb4StatusLines(wb4NoResEnv);
+const wb4NoResText = wb4NoResStatus.join("\n");
+check("U17 resources=false 三处 ①②: 第 ⑧ 段**整段不出现**（连段头都不出现），提示段里零资源行",
+	!wb4NoResText.includes("--- 资源/预算") && !wb4NoResText.includes("[team-link 会话资源]")
+		&& wb4NoResEnv.systemPrompt.live().every((record) => !record.text({}).includes("[team-link 会话资源]")));
+const wb4NoResDigestEnv = watchdogEnv({ targets: { "session-free": { events: oneShotSurface(WD_NOW - 120_000) } }, teams: [wb2Team("wb4-team")], sections: { resources: false }, watchdogs: [wbRow({ id: "wd-auto-nores", team: "wb4-team", targets: ["session-free"] })] });
+await wb4NoResDigestEnv.watchdog.patrol({ now: WD_NOW });
+const wb4NoResDigestText = textOfFirst(digestOf(wb4NoResDigestEnv));
+check("U17 resources=false 三处 ③: digest 脚注里也没有资源行（但摘要正文与角色重钉照常）",
+	wb4NoResDigestText.includes("[workbench]") && !wb4NoResDigestText.includes("[team-link 会话资源]") && wb4NoResDigestText.includes("角色重钉："));
+const wb4BothOffEnv = wb4Env({ sections: { role: false, resources: false } });
+check("U17 两处都关 ⇒ 零段注册: 没有段可挂（注册表为空），也不产生多余 warn",
+	__testing.sectionsFor(wb4BothOffEnv.ctx).registered.size === 0 && wb4BothOffEnv.systemPrompt.sections.length === 0 && wb4BothOffEnv.log.lines.warn.filter((line) => line.includes("角色/资源段未注册")).length === 0);
+check("U17 键集与 README 同批: PolicyConfig 声明面 = 九项（新增 sections）；README 的键集描述同批写成九项（U17 的红线面）",
+	sameJson(Object.keys(wb4EnvBase.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"])
+		&& /九个键|9 个键|九项/.test(readmeSource) && readmeSource.includes("sections"));
+
+// --- U17 续：清掉的 auto 注册同进程不自愈 ------------------------------------------
+const wb4ClearEnv = teamSessionEnv({ askScript: ["创建"] });
+await wb4ClearEnv.run("n=1 team=wb4-clear roles=worker-a task=建队");
+const wb4ClearAuto = () => (wb4ClearEnv.settings.namespaces.get("team-link").data.watchdogs ?? []).filter((entry) => entry.origin === "auto");
+const wb4ClearFirst = wb4ClearAuto()[0]?.id;
+// ★ t-13 🔵3（task-16 C）: **前置守卫** —— auto 行不存在时 clear 会退化成 no-op，而下面的「不自愈」
+// 断言照样绿（假绿）。先把「确实有一条 auto 注册」钉住。
+check("U17 clear 前置（t-13 🔵3）: 建队确实写了一条 auto 注册（否则 clear 退化成 no-op、下面的不自愈断言会假绿）",
+	typeof wb4ClearFirst === "string" && wb4ClearFirst.startsWith("wd-") && wb4ClearAuto().length === 1);
+const wb4ClearOut = String(await wb4ClearEnv.tool("team_link_watch").execute({ action: "clear", id: wb4ClearFirst }, execFor(wb4ClearEnv.senderAgent)));
+check("U17 clear 前置（对照）: clear 真的删掉了那一条（读数点名 id，不是 no-op）",
+	wb4ClearOut.includes("已清理看门狗注册 " + wb4ClearFirst) && wb4ClearAuto().length === 0);
+await wb4StatusLines(wb4ClearEnv);
+await __testing.watchdogFor(wb4ClearEnv.ctx).patrol({ now: Date.now() });
+check("U17 清掉的 auto 注册**同进程不自愈**: clear 之后状态卡与一轮巡逻都不把它挂回来（没有任何懒自愈支路 —— 只有下一次 /team_session 建队才会重挂，那是显式写路径）",
+	wb4ClearAuto().length === 0 && __testing.watchdogFor(wb4ClearEnv.ctx).timers.size === 0);
 rmSync(escDir, { recursive: true, force: true });
 rmSync(tmpDir, { recursive: true, force: true });
 rmSync(TEAM_TMP, { recursive: true, force: true });

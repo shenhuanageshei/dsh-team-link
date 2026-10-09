@@ -645,6 +645,7 @@ flowchart TD
 | ④ 会话面 | 同工作区其他会话的 id / 代理状态 / 创建时间 / provisional 配对标记 | 注册表读，**不读日志** |
 | ⑤ 活性 | 与 `team_link_list_sessions` **同一顺序读前 12 行**（`PREVIEW_SESSIONS`）：verdict / 代理 / goal / 静默 / 时间戳；超出窗口的行**如实标未读** | 一次有界并行 surface 读（≤12） |
 | ⑥ 台账尾 | 每个团队的 `tasks.md` 末尾 `tasksTail` 条（默认 **5**、上限 **20**，超出**拒绝**）与 baseHash | 每团队一次文件读 |
+| ⑧ **资源/预算**（批 3 追加） | 每个会话一行：压力 / 窗口 / 累计 / 轮次（只读 `sessionProjections`，读数不可得则整行标「不可读」+ 原因码）；达标会话行尾挂 **⚠ 轮换候选（turns / tokens）** 并给出那句现成命令 `team_link_rotate action=prepare successor:auto`（**只标记、不自动**）；末行是**判读行**（「预算耗尽」只在这里、且只以否定式出现）。段体 ≤12 行；`policy.sections.resources=false` ⇒ 整段不出现 | 投影读，零写 |
 | ⑦ **形态**（B 批追加） | 每个团队一行形态 + Lead；成员名册**投影**（读时现算；不可读时**如实标注**并点名原因）；**完整能力矩阵**（事实源 = 父档 §2.3）+ 那句结论；**形态诊断行**（除自己外没有其他可达会话时只提示、绝不自动切档） | 宿主投影读（一次 `ctx.get("agentTeams")` 调用，零日志）＋本卡已读到的会话面 |
 
 | 参数 | 语义 | 边界 |
@@ -1076,6 +1077,8 @@ settings **从一开始就已在场**时同理：命名空间若还是空的，�
 
 **怎么确认它存在哪**：`team_link_roster action=get` 与 `team_link_status` 的首行给出三态之一 —— `存储：设置服务（team-link 命名空间）` / `存储：文件 <绝对路径>` / `⚠ 存储：仅进程内存（重启即失）—— 原因：…`（含 `文件损坏（不覆盖；请人工处理）` 这一项，见上一段的处置办法）；状态卡里团队清单那一段还会再说一遍**来源**（`来源：设置 team-link 的 teams 键` / `来源：文件 <绝对路径> 的 teams 键` / `来源：进程内存的 teams 键（重启即失）`），跟着实际落点走。
 
+命名空间的键集**九项**（FR-9 起，`PolicyConfig` 声明面同批更新）：
+
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
 | `receiveMode` | `ask` / `accept` / `reject` | 默认 `ask`：逐条确认 |
@@ -1084,6 +1087,7 @@ settings **从一开始就已在场**时同理：命名空间若还是空的，�
 | `rememberTargets` | `string[]` | 发送方免确认的目标会话 |
 | `pairs` | `{a, b, createdAt, provisional, expiresAt}[]` | 双向免确认配对通道。`provisional: true` = 由换届在无人值守路径上临时授予，`expiresAt` 到期未获批准即自动删除并回退为正常过门；正常配对 `provisional: false`、`expiresAt: 0` |
 | `watchdogs` | `{id, team, watcherSession, targets, silentMinutes, intervalMinutes, expiresAt, createdAt}[]` | 跨会话看门狗注册（到点自动清理；手改时缺字段的条目会被丢弃，不会让整个命名空间失效） |
+| `sections` | `{role: boolean, resources: boolean}` | **总开关**（FR-9，缺省都开）：`role=false` ⇒ 不注册角色/宪章段（工具返回面的角色重钉同关）；`resources=false` ⇒ 资源行**三处全缺**（提示段 / 状态卡第 ⑧ 段 / 工作台摘要脚注） |
 | `teams` | `{name, createdAt, workspace, policy:{writer}, roles:[{role, current, pending, rotationAt, provisional, rotationStatus, history}], rotationBackup, mode, leadSessionId}[]` | 团队 roster 与换届记账。`mode` 是**形态**（`sessions` 默认 / `agent-team`，闭集外的值读时降级为 `sessions` 并在读面留痕）；`leadSessionId` 是 agent-team 档的 **Lead 指针**（空串 = 未指定，读面标「Lead 未知」；**成员名册一行都不落 settings**）。`name` 必须 `[a-z0-9-]+`（它是黑板目录的路径段）；`workspace` 是团队首次创建时捕获的会话工作目录、也是黑板根；手改时非法团队名/无名角色会被丢弃 |
 
 ---
@@ -1193,6 +1197,8 @@ dev_install_package { dir: "<你的目录>/dsh-team-link", profile: "web" }
 | `session-query` | 列表 / 导出 | 必需（在 `inject` 数组里） |
 | `agents` | 投递 / 活性 | 必需（在 `inject` 数组里） |
 | `goals` | 活性行的 goal 状态 | 降级：显示 `goal=?` |
+| `sessionProjections` | 资源读数（`stateOf(session, key)`）：提示段的资源行、状态卡第 ⑧ 段与判读行、工作台摘要脚注 | **晚挂**取用（`ctx.get`）；缺席 ⇒ 三处如实标「不可读（sessionProjections 缺席）」，判读行改说「读数不可得，不作判读」 |
+| `agent.ctx.systemPrompt`（agent 作用域） | 角色/宪章段与资源行的注册面（`section({name, order, text})`，`order` 取 `getSectionOrder("TEAM_POLICY")`） | **特征探测 + 降级**：缺 `section` 或 `getSectionOrder` ⇒ **零注册 + 恰一行 warn**，功能回退到「工具返回重钉」（不抛错、不影响任何会话的提示装配） |
 | `settings` | 策略落点（与插件自己的文件二选一，见第六节） | **晚挂**取用；挂上之前状态写在 `<DSH_HOME 或 ~/.dsh>/team-link/policy.json`，**两个落点都没有**才降级为进程内记忆 + 一行 warn |
 | `webServer` | 导出下载路由 | **晚挂**取用，降级为「无路由，工具照常」+ 一行 warn |
 | `connection` | 导出下载路由的**平台信任栅栏**（Host/Origin + 浏览器鉴权；`requestRejection`） | **晚挂**取用，且与 `webServer` **成对齐备**才注册路由：缺任一 ⇒ **不注册路由**（绝不注册一条无门路由）+ 一行 warn（点名缺的是哪一个）；导出工具照常 |
