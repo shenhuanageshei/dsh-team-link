@@ -29,7 +29,7 @@
 | --- | --- | --- | --- |
 | 1 ✅ 已交付 | `lib/index.js`：watchdog schema `:872-890` · `createWatchdog :2291-2430` · `patrolOne :2382-2415` · watch 工具 `:11305-11351` · `/team_session` 完成路径 | U9–U12、U14、U15 | `node host-half.test.mjs`（红/绿两次）+ `node client-half.test.mjs` |
 | 2 ✅ 已交付 | 新增注册器与渲染器；`attach` 清扫；fixture 加 `ctx.systemPrompt` 桩 | U1–U6、U15 | 同上 |
-| 3 ✅ 已交付 | `team_link_status` 追加第 ⑧ 段（描述同次改"七段→八段"）；四处返回面；**FR-9 总开关**；**D-B6 登记**；README/CHANGELOG | U7、U8、U13、U16、**U17** | 同上 + 真机（重启后第 ⑧ 段有非零读数） |
+| 3 ✅ 已交付 | `team_link_status` 追加第 ⑧ 段（描述同次改"七段→八段"）；四处返回面；**FR-9 总开关**；**D-B6 登记**；README/CHANGELOG | U7、U8、U13、U16、**U17**、**U18**、**U19** | 同上 + 真机（重启后第 ⑧ 段有非零读数） |
 
 > **本仓 check 纪律**：一律 `node host-half.test.mjs` / `node client-half.test.mjs`（**禁** `node --test`，沙箱下 spawn EPERM）；修复必须给"修复前必红 / 修复后全绿"两次读数。
 > **有据偏离登记（2026-10-09 收口，回应设计评审 🔵#6）**：本仓不用 `node --test` 与标准档的"测试纪律：单元测试 node --test"不同，理由＝本机沙箱禁子进程（spawn EPERM，实测），且本仓与被借鉴的标准档不同仓 ⇒ 记为**有据偏离**，供后续审计免误判。
