@@ -2311,3 +2311,24 @@ assertion total: 1214 (failed: 7)
     - **仍未取得的那一格（不冒充）**：这一切只能证明「修复后的代码被真实执行且复活出来的会话能跑」；**反事实**（若不带 `agentOptions` 这一批会话会不会死）无法在真机上直接观测 —— 那一层由宿主测试套件的 `DEFECT-5 ①/③` 与修复前真机那四条错误原文共同支撑。
   - **⑤ 本轮未复验的评审待办**：🔵#4 驳回时登记的「真机核对一枚『缺省 ≠ 上次用的模型』的 worker」仍**待验**。**已取但不足以区分的读数**：`0930-threatintel/worker-1` 复活前后的 `request/header.config` 都是 `deepseek-official/deepseek-flash`（effort=high；`05:32:37.078Z` vs `05:39:57.489Z`）—— 两者同值 ⇒ 这个样本**区分不了**「取当时的缺省」与「取会话上次用的模型」，故仍按待验登记，不冒充已验。
 
+---
+
+## 2026-10-09 dsh-team-link 批 1（FR-7 attach 重挂 + FR-3 工作台 digest）交付读数
+
+**改动面**：`lib/index.js` + `host-half.test.mjs`（提交 `69b9c06`，+833/−46，pathspec，两档）。设计依据：`docs/2026-10-09-team-autonomy-design.md` §5–§9（v1.3）。
+
+**套件读数（串行；父侧与独立验证者各自复跑）**
+- 基线（HEAD/pristine 副本）：host `assertion total: 1324 (failed: 0)`；client `310 (failed: 0)`。
+- 交付件：host `ALL PASS / assertion total: 1376 (failed: 0)` exit 0；client `ALL PASS / 310 (failed: 0)` exit 0（**+52 断言，零删除**）。
+- 红相（新测试 × pristine lib）：**10 FAIL 后于 `:9481 __testing.renderWatchdogDigest is not a function` TypeError 中止**（实现者曾自报「20 FAIL」，**不可复算**，以验证者的可复算读数为准）。
+
+**判据**：U9（无事零投递）· U10 两半（digest 忙时照投 ∧ 告警 tick A1 抑制原样）· U11（auto 不占手工额度）· U12（attach 重挂，含晚挂/折叠/refused/detached 四窗口，**6 条断言守链尾**）· U14（source 恰三成员、零新事件类型）· U15（`inject` 恒 4 项、`writerGate`/`retireGate`/`rotateGate`/`relayUserMessage` 对 HEAD **逐字节相同**）。变异反证 M1–M7 与三轮定向变异（B/C/E③/F/D）全部取到预期红。
+
+**两轮修复（有界）**：t-3 修并发安全 + 断言补强；t-5 撤回一处**未申报**的 `notifyAttached()` 并把 E① 断言改成真有判别力（旧断言在「失败分支记住签名」变异下**照旧绿**，新断言**恰好 3 红**）。
+
+**★ 新纪律（本轮实测逼出，两条）**
+1. **同树并发跑 check 会假红**：修前受控实验 A=`1353 (0)` / B=`1353 (failed 13)`；验证者另测 `ENOTEMPTY … .test-tmp-team` at `host-half.test.mjs:1954`（EXIT 1、零断言）。修法＝每进程唯一临时根（`mkdtempSync(path.join(os.tmpdir(),"dsh-team-link-test-"))`），修后 2 路/3 路并发**全部 1376 (failed: 0)**。
+2. **核「零残留」断言必须加 `-CaseSensitive`**：PowerShell `Select-String` 默认忽略大小写，会把既有英文散文里的 `mutation` 报成假阳性（不加＝2 条，加后＝0）。
+
+**未验证（如实）**：真机行为（重启后定时器是否真的重挂）本轮**未验**——无 DSH 重启；全部读数为套件级。
+
