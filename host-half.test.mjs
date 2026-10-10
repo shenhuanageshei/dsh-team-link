@@ -70,7 +70,7 @@ function makeSenderAgent(status, cwd = CWD) {
 	const agent = {
 		id: "session-self",
 		status,
-		session: { header: { id: "session-self", cwd } },
+		session: hostShapedSession({ header: { id: "session-self", cwd } }),
 		inject(message) { calls.injected.push(message); },
 		steer(message) { calls.steered.push(message); },
 		followup(message) { calls.followedup.push(message); },
@@ -83,7 +83,7 @@ function makeTargetAgent(status = "idle") {
 	const agent = {
 		id: "session-target",
 		status,
-		session: { header: { id: "session-target", cwd: CWD } },
+		session: hostShapedSession({ header: { id: "session-target", cwd: CWD } }),
 		inject(message) { calls.injected.push(message); },
 		steer(message) { calls.steered.push(message); }, followup(message) { calls.followedup.push(message); },
 	};
@@ -211,11 +211,23 @@ function makeSessionProjections({ readings = {}, omit = false, throws = false } 
 		stateOf(session, key) {
 			calls.push({ sessionId: session?.header?.id, key });
 			if (throws) throw new Error("stub sessionProjections.stateOf exploded");
+			// ★ 镜像宿主（AGENTS.md §四点名的坑：桩只镜像自家调用面 ⇒ 把宿主断层永久挡在套件外）。
+			// 宿主真身：stateOf → materializeCells(session) → session.snapshotEvents(...)。传进来的会话
+			// 对象不具该函数 ⇒ 与真机**逐字同一句**抛错（这正是 2026-10-10 真机那次缺陷）。
+			if (typeof session?.snapshotEvents !== "function") throw new Error("session.snapshotEvents is not a function");
 			return readings[key];
 		},
 	};
 	return { service, calls, readings };
 }
+
+/**
+ * 宿主**真实形状**的会话对象（AGENTS.md §四：桩必须镜像宿主，不能只镜像自家调用面）。
+ * 真身 `sessionProjections.stateOf(session, key)` 内部会走 `session.snapshotEvents(...)` —— 不具该方法的
+ * 会话对象（例如插件自己捏的 `{ header: { id } }` 替身）在真宿主必抛
+ * `session.snapshotEvents is not a function`（2026-10-10 真机实测）。夹具统一走本函数造型。
+ */
+const hostShapedSession = (session) => ({ snapshotEvents() { return []; }, ...session });
 
 /** Scripted userQuestions service: ask() pops the next scripted answer. */
 function makeUserQuestions(script) {
@@ -1020,7 +1032,7 @@ function setup({
 	const routes = [];
 	const { agent: senderAgent, calls: senderCalls } = makeSenderAgent(selfStatus, selfCwd ?? CWD);
 	const { agent: targetAgent, calls: targetCalls } = makeTargetAgent(targetStatus);
-	const runnerAgent = { id: "session-runner", status: "running", session: { header: { id: "session-runner", cwd: CWD } } };
+	const runnerAgent = { id: "session-runner", status: "running", session: hostShapedSession({ header: { id: "session-runner", cwd: CWD } }) };
 	// Extra agents are full message sinks (same shape as the target stub) so a
 	// fan-out can be asserted target by target; `extraCalls` records what each
 	// one received. `cwd` and `origin` default to the historic stub shape; a
@@ -1054,6 +1066,10 @@ function setup({
 	const resumeRecords = [];
 	const resumeCalls = [];
 	const resumedAgents = [];
+	// ★ AGENTS.md §四：夹具的会话对象必须**是宿主真实形状**（stateOf 会走 session.snapshotEvents()）。
+	// 这是造型动作，不是给插件开后门：插件自己捏的替身对象不经过这里（stub 仍会逐字抛错）。
+	const hostShapeAll = (agent) => { if (agent?.session && typeof agent.session.snapshotEvents !== "function") agent.session = hostShapedSession(agent.session); return agent; };
+	[senderAgent, targetAgent, runnerAgent, ...extraAgentObjects, ...createdAgents].forEach(hostShapeAll);
 	const agentFactory = makeAgents(createdAgents, hidden, { failAt: failCreateAt, onCreated: createdHook, actionLog, createDelayMs, inFlight: createInFlight, resumeRecords, resumeCalls, resumeDelayMs, resumedAgents, systemPrompt: omitSystemPrompt ? undefined : systemPrompt.service });
 	const agents = {
 		get(id) {
@@ -10214,6 +10230,20 @@ check("§9 第 ⑧ 段原因码③（投影读取抛错，t-13 🔵4）: stateOf
 		const lines = await wb4StatusLines(env);
 		const section = wb4SectionOf(lines, "--- 资源/预算");
 		return section.some((line) => line.includes("不可读（原因：投影读取抛错：")) && at(section, section.length - 1, "").startsWith("预算判读：读数不可得，不作判读");
+	})());
+
+check("§9 第 ⑧ 段原因码④（非活动会话，task-18 C②）: 会话面里有这条 id 但没有活动代理（拿不到真会话）⇒ 如实标「不可读（原因：非活动会话）」，**不构造替身**也不编读数",
+	await (async () => {
+		const env = wb4Env({ sessions: [{ header: { id: "session-ghost", createdAt: 1000, cwd: TEAM_WS }, live: false, persisted: true }] });
+		const lines = await wb4StatusLines(env);
+		const section = wb4SectionOf(lines, "--- 资源/预算");
+		return section.some((line) => line.includes("session-ghost：不可读（原因：非活动会话）"));
+	})());
+check("§9 第 ⑧ 段原因码④ 对照: 同一张卡上**活会话**（调用方自己）仍给真实读数 —— 两种会话在同一段里分得开",
+	await (async () => {
+		const env = wb4Env({ sessions: [{ header: { id: "session-ghost", createdAt: 1000, cwd: TEAM_WS }, live: false, persisted: true }] });
+		const section = wb4SectionOf(await wb4StatusLines(env), "--- 资源/预算");
+		return section.some((line) => line.includes("session-self") && line.includes("压力 25.0%")) && section.some((line) => line.includes("非活动会话"));
 	})());
 
 // --- U8：轮换四边界（严格大于）+ turns 不可读的降级 --------------------------------
