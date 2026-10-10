@@ -10705,6 +10705,178 @@ check("U23 支Ⅲ-b（聚合卡：所示团队的工作区不止一个，task-28
 		&& u23MixedCard.includes(U23_CALLER_PEER) && !u23MixedCard.includes(U23_ELSEWHERE_PEER)
 		&& !u23MixedCard.includes("该队工作区"));
 
+// ===========================================================================
+// 批 7 · FR-15（⑧段行数上限下判读行恒在场）· FR-16（数据到位后补一次 attach 通知）
+// 判据：U25（真机形状：明细 = 上限-2 + 轮换标记）· U26（数据后到恰好通知一次 + 重挂/补挂真发生）。
+// 归属：docs/2026-10-09-team-autonomy-design.md §5 FR-15/FR-16 · §8 U25/U26 · §13 v1.9。
+// 两处都是「夹具与真机形状不同」那一族的真机缺陷（2026-10-10 重启复验）。
+// ===========================================================================
+
+// --- U25: 上限下判读行恒在场（真机形状：10 个会话行 + 轮换标记） ---------------------
+const B7_PEERS = ["b7-1", "b7-2", "b7-3", "b7-4", "b7-5", "b7-6", "b7-7", "b7-8", "b7-9"];
+// 真机读数：卡上有 10 个会话行（调用方 + 9 个同伴）+ 轮换标记 = 12 行 ⇒ 判读行被 slice 裁掉、「判读」命中 0。
+// turns=101 ⇒ 每行都是轮换候选 ⇒ 标记行必在场（这正是真机那一次的构成）。
+const b7Env = wb4Env({
+	sessions: B7_PEERS.map((id, index) => ({ header: { id, createdAt: 1000 + index, cwd: TEAM_WS }, live: true, persisted: true })),
+	extraAgents: B7_PEERS.map((id) => ({ id, status: "idle", cwd: TEAM_WS })),
+	readings: wb2Readings({ sessionStats: { turns: 101, steps: 21 } }),
+});
+// 卡面末尾那个换行会被 split 出一个空串 —— 它不是段体（⑧ 段里没有空行）。
+const b7Section = wb4SectionOf(await wb4StatusLines(b7Env), "--- 资源/预算").filter((line) => line !== "");
+const b7DetailRows = b7Section.filter((line) => line.startsWith("- "));
+check("U25 真机形状（明细 = 上限-2 = 10 行 + 轮换标记）: 判读行**逐字在场且是末行**、轮换标记在场、被裁的明细**如实标注**（「已省略 2 行」，10 个会话只渲染 8 行）、总行数恰 = 上限 —— 改回「先拼后裁」时末行（判读行）会被裁掉（真机读数：10 行 + 标记 = 12 行、判读命中 0）",
+	b7Section.length === __testing.BUDGET_SECTION_MAX_LINES
+		&& at(b7Section, b7Section.length - 1, "") === WB4_VERDICT_B + WB4_VERDICT_SCOPE
+		&& b7Section.some((line) => line.startsWith("→ 轮换（只标记、不自动"))
+		&& b7Section.includes("（行数上限 " + __testing.BUDGET_SECTION_MAX_LINES + "；已省略 2 行明细）")
+		&& b7DetailRows.length === 8 && b7DetailRows.length + 2 === B7_PEERS.length + 1
+		&& b7Section[0].startsWith("--- 资源/预算（⑧"));
+check("U25 对照（负相，不冒充）: 上限内还有空位时不裁剪、**也不出现**那句标注（本夹具 1 个会话 ⇒ 3 行）—— 证明上面那条读的是「真的裁了才说」，不是一句恒有的套话",
+	wb4Section.length === 3 && !wb4Section.join("\n").includes("已省略") && !wb4Section.join("\n").includes("行数上限"));
+
+// --- U26: 数据到位后补一次 attach 通知（FR-16） -----------------------------------
+// 夹具形状 = 设计档原文的「scope 已 attach 但数据为空」：设置服务在场、命名空间**空**，
+// 数据（名册 + 一条持久化注册）在 attach 之后才落进命名空间。
+const U26_TEAM = "u26-late-data";
+const U26_INCUMBENT = "u26-coordinator";
+const u26Team = b5Team(U26_TEAM, B5_WS, [wb2Role("coordinator", U26_INCUMBENT), wb2Role("worker-a", "u26-worker")]);
+const u26SavedRow = { id: "wd-u26-persisted", team: "", watcherSession: U26_INCUMBENT, targets: ["session-self"], silentMinutes: 10, intervalMinutes: 5, expiresAt: Date.now() + 12 * 3600_000, createdAt: Date.now(), origin: "manual" };
+const u26Env = setup({ sessions: [], useSettings: true, settingsSeed: { "team-link": {} }, extraAgents: [{ id: U26_INCUMBENT, status: "idle" }] });
+await waitForChain(u26Env, 1); // 后置链落定；此刻视图仍然是空的（真机那一刻的形状）
+const u26Ns = u26Env.settings.namespaces.get("team-link");
+const u26Policy = __testing.policyFor(u26Env.ctx);
+const u26Notices = [];
+// 计数处理器：登记即被通知一次（scope 已 attach、数据为空）⇒ 记下当时看到的名册长度（= 0）。
+u26Policy.onAttach(() => { u26Notices.push(u26Policy.get().teams.length); });
+u26Ns.data.teams = [structuredClone(u26Team)];
+u26Ns.data.watchdogs = [structuredClone(u26SavedRow)];
+const u26Get = async () => { await u26Env.tool("team_link_roster").execute({ action: "get" }, execFor(u26Env.senderAgent)); };
+await u26Get();
+await tick();
+await u26Get(); // 再来一次：**恰好一次** ⇒ 这里不许再多出一条
+await tick();
+check("U26 数据后到 · 补一次通知: handler 在「scope 已 attach 但数据为空」时注册 ⇒ 数据到位后**恰好被通知一次**（读数：通知序列 teams.length = " + u26Notices.join(",") + "，两次 get() 之后仍只有那一次带数据），且那一次通知真的驱动了两件事：FR-7 重挂（持久化注册拿到定时器）+ FR-10 补挂（该队多出一条 origin=auto）—— 红相＝去掉补一次 ⇒ 序列只剩 0",
+	u26Notices.join(",") === "0,1"
+		&& __testing.watchdogFor(u26Env.ctx).timers.has(u26SavedRow.id)
+		&& b5Auto(u26Env).length === 1 && at(b5Auto(u26Env), 0, {}).team === U26_TEAM && at(b5Auto(u26Env), 0, {}).watcherSession === U26_INCUMBENT
+		&& __testing.sectionsFor(u26Env.ctx).registered.has(U26_INCUMBENT));
+// 真机那一次的形状（文件后端：scope 根本没有）—— 读数取 policy.json 本身（真机证据正是它的 mtime 与 watchdogs 条数）。
+const U26B_TEAM = "u26b-file";
+const u26bRow = { id: "wd-u26b-persisted", team: "", watcherSession: "session-self", targets: ["session-target"], silentMinutes: 10, intervalMinutes: 5, expiresAt: Date.now() + 12 * 3600_000, createdAt: Date.now(), origin: "manual" };
+const u26bEnv = setup({ sessions: [], policySeed: policyDoc({ teams: [b5Team(U26B_TEAM, B5_WS, [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "u26b-worker")])], watchdogs: [u26bRow] }) });
+await tick();
+// 落盘是异步的（原子写：写临时文件 → rename），所以**有界地等**那一条出现，不赌一个 tick。
+const u26bReadRows = async () => {
+	try {
+		return JSON.parse(await readFile(path.join(u26bEnv.policyHome, "team-link", "policy.json"), "utf8")).policy.watchdogs ?? [];
+	} catch {
+		return [];
+	}
+};
+// 有界等待：按**墙钟**给足（原子写带 fsync，负载下偶尔慢），不是赌 N 个 tick；正常路径一次就过。
+const u26bDeadline = Date.now() + 3000;
+let u26bRows = await u26bReadRows();
+while (u26bRows.length < 2 && Date.now() < u26bDeadline) {
+	await new Promise((resolve) => { setTimeout(resolve, 5); });
+	u26bRows = await u26bReadRows();
+}
+check("U26 真机形状（文件后端：scope === null）: attach 处理器在**没有设置服务**的部署里也真的被叫到了 —— 落盘的 policy.json 里除了原有那条 manual 多出**恰一条** origin=auto（补挂真发生），watcher=该队现任、targets=队员；红相＝去掉补一次 ⇒ 文件里仍只有那一条 manual（真机实测：mtime 停在启动前、watchdogs 只有 1 条 manual）· 落盘读数 " + JSON.stringify(u26bRows.map((row) => row.origin + ":" + row.team)),
+	u26bRows.length === 2 && u26bRows.filter((row) => row.origin === "auto").length === 1
+		&& at(u26bRows.filter((row) => row.origin === "auto"), 0, {}).team === U26B_TEAM
+		&& at(u26bRows.filter((row) => row.origin === "auto"), 0, {}).targets.join(",") === "u26b-worker"
+		&& __testing.watchdogFor(u26bEnv.ctx).timers.has(u26bRow.id));
+
+// --- U27: attach 后置链读面（FR-17）---------------------------------------------
+// 四个队各走一档：A 需要补挂（created）· B 已有 auto 行（present）· C 现任空缺（skip，首因）·
+// D 除观察者外没有队员（skip，第二条）。另有一条 manual 注册 ⇒ rearm 计数非零、可读。
+const U27_A = "u27-created";
+const U27_B = "u27-present";
+const U27_C = "u27-vacant";
+const U27_D = "u27-lonely";
+const u27AutoForB = { id: "wd-u27-present", team: U27_B, watcherSession: "session-self", targets: ["u27-b-worker"], silentMinutes: 10, intervalMinutes: 10, expiresAt: Date.now() + 12 * 3600_000, createdAt: Date.now(), origin: __testing.WATCHDOG_ORIGIN_AUTO };
+const u27ManualRow = { id: "wd-u27-manual", team: null, watcherSession: "session-self", targets: ["u27-peer"], silentMinutes: 10, intervalMinutes: 5, expiresAt: Date.now() + 12 * 3600_000, createdAt: Date.now(), origin: __testing.WATCHDOG_ORIGIN_MANUAL };
+const u27Env = watchdogEnv({
+	targets: { "u27-peer": { events: oneShotSurface(WD_NOW) } },
+	teams: [
+		b5Team(U27_A, B5_WS, [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "u27-a-worker")]),
+		b5Team(U27_B, B5_WS, [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "u27-b-worker")]),
+		b5Team(U27_C, B5_WS, [wb2Role("coordinator", null), wb2Role("worker-a", "u27-c-worker")]),
+		b5Team(U27_D, B5_WS, [wb2Role("coordinator", "session-self")]),
+	],
+	watchdogs: [u27AutoForB, u27ManualRow],
+});
+await waitForChain(u27Env, 1);
+await tick();
+const u27NsBefore = JSON.stringify(u27Env.settings.namespaces.get("team-link").data);
+const u27Lines = await wb4StatusLines(u27Env);
+const u27Line = u27Lines.find((line) => line.startsWith("attach 后置链（最近一次 ")) ?? "";
+const u27NsAfter = JSON.stringify(u27Env.settings.namespaces.get("team-link").data);
+check("U27 三档齐全（状态卡 ③ 段里的一行）: rearm 计数 · 段同步变化数 · 按队补挂四态 + 首因 —— 三档都在同一行上，且该行落在看门狗段内（读数：" + u27Line + "）",
+	u27Line.startsWith("attach 后置链（最近一次 ")
+		// 3 = 两条种子注册（auto + manual）+ 补挂刚写进来的那条（A 队）—— 这一档同时把 FR-7 与 FR-10 串起来。
+		&& u27Line.includes("rearm 挂上 3 个定时器")
+		&& /段同步（计划变化 \d+ 项；在场 \d+ 个段）/u.test(u27Line)
+		&& u27Line.includes("在场 " + __testing.sectionsFor(u27Env.ctx).registered.size + " 个段")
+		&& u27Line.includes("按队补挂：created 0 · present 2 · skip 2（首因 现任协调者空缺（没有观察者可以挂）） · failed 0")
+		&& u27Lines.indexOf(u27Line) > u27Lines.findIndex((line) => line.startsWith("--- 看门狗（policy.watchdogs；")));
+check("U27 纯读: 该行只读**进程内存** —— 出卡前后 settings 命名空间逐字节不变，且连出两次卡给出**同一行**（读数不是每次都变的噪声）；前置：该行真的在场（否则「两次都一样」会空真）",
+	u27Line !== "" && u27NsBefore === u27NsAfter && (await wb4StatusLines(u27Env)).find((line) => line.startsWith("attach 后置链（最近一次 ")) === u27Line);
+check("U27 补挂整轮抛错 ⇒ 报 failed（不静默）· 还在飞 ⇒ 如实说尚未落定: 真函数的三个异常/中间档各有一句 —— 整轮抛错档含 failed 与原因（且不冒充四态计数）、在飞档说「尚未落定」（不是沉默、也不是 0）、尚无记录档说「尚无记录」",
+	(() => {
+		const base = { at: WD_NOW, rearm: { armed: 1, expired: 0, sweepTimer: false }, sections: { registered: 2, added: 1, disposed: 0 } };
+		const threw = __testing.chainReportLine({ ...base, ensure: { ...__testing.summarizeAutoWatchdogs([]), threw: true, error: "stub exploded" } });
+		const pending = __testing.chainReportLine({ ...base, ensure: { pending: true } });
+		const none = __testing.chainReportLine(null);
+		return threw.includes("failed") && threw.includes("stub exploded") && !threw.includes("created ")
+			&& pending.includes("尚未落定") && !pending.includes("created ")
+			&& none.includes("尚无记录");
+	})());
+check("U27 failed 计数与首因（逐项核对）: 四态压缩器把 state=failed 计进 failed 并**保留第一条**原因（skip 与 failed 各自的首因分开记，后续 failed 不顶掉首因）；渲染出来的那一行里 failed 的计数与首因都在",
+	(() => {
+		const summary = __testing.summarizeAutoWatchdogs([
+			{ team: "t1", state: "created", id: "wd-1" },
+			{ team: "t2", state: "skip", reason: "除观察者外没有可盯的成员" },
+			{ team: "t3", state: "failed", reason: "写入失败（stub refused）" },
+			{ team: "t4", state: "failed", reason: "第二条 failed 的原因不该顶掉首因" },
+		]);
+		const line = __testing.chainReportLine({ at: WD_NOW, rearm: { armed: 0, expired: 0, sweepTimer: false }, sections: { registered: 0, added: 0, disposed: 0 }, ensure: summary });
+		return summary.created === 1 && summary.present === 0 && summary.skip === 1 && summary.failed === 2
+			&& summary.firstSkipReason === "除观察者外没有可盯的成员"
+			&& summary.firstFailedReason === "写入失败（stub refused）"
+			&& line.includes("failed 2") && line.includes("（首因 写入失败（stub refused））");
+	})());
+
+// --- U31（task-31 微修）: 写入失败必须报 failed，不再伪装成 skip ---------------------
+// 真机那类形状：落点写不进去（store 拒写）⇒ 补挂的**失败**必须在后置链那一行看得见。
+const U31_TEAM = "u31-writefail";
+const u31Env = setup({
+	sessions: [],
+	useSettings: true,
+	settingsUpdateThrows: true, // store 拒写（夹具里那类「写入失败」）
+	settingsSeed: { "team-link": { teams: [b5Team(U31_TEAM, B5_WS, [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "u31-worker")])] } },
+});
+await waitForChain(u31Env, 1);
+await tick();
+const u31Line = (await wb4StatusLines(u31Env)).find((line) => line.startsWith("attach 后置链（最近一次 ")) ?? "";
+check("U31 写入失败 ⇒ failed（不再混进 skip）: store 拒写时那一队计进 **failed 1**、首因是「写入失败…本次没有落盘」，而 skip 恒为 0（skip 只留给「没有观察者」「除观察者外没有可盯成员」两种非失败语义）—— 红相＝把这一档判回 skip ⇒ 本条红（旧行为：failed 恒 0、写入失败伪装成 skip）· 读数：" + u31Line,
+	u31Line.includes("按队补挂：created 0 · present 0 · skip 0 · failed 1（首因 写入失败（")
+		&& u31Line.includes("——本次没有落盘）") && !u31Line.includes("failed 0"));
+// 判据直接读**真函数**：三段（plan / write / schedule）必须能分辨 —— FR-17 的 skip/failed
+// 分类建在这个署名上，不再靠文案猜。
+const u31Plan = await __testing.armTeamWatchdog(wbIsoUnitCtx, wbIsoUnitPolicy(async () => {}), wbIsoUnitWatchdog(() => {}), { ...wbIsoUnitRequest, targets: ["session-self"] });
+const u31Write = await __testing.armTeamWatchdog(wbIsoUnitCtx, wbIsoUnitPolicy(async () => { throw new Error("update refused"); }), wbIsoUnitWatchdog(() => {}), wbIsoUnitRequest);
+const u31Schedule = await __testing.armTeamWatchdog(wbIsoUnitCtx, wbIsoUnitPolicy(async () => {}), wbIsoUnitWatchdog(() => { throw new Error("schedule refused"); }), wbIsoUnitRequest);
+// 命令面（批 5 的 arm-team）同口径核对：写入失败这条路上它会走 skip 那句吗？——不该。
+const u31ArmOut = String(await u31Env.tool("team_link_watch").execute({ action: "arm-team" }, execFor(u31Env.senderAgent)));
+check("U31 arm-team 命令面同口径: store 拒写 ⇒ 命令回「补挂失败 —— 写入失败…」，不是非失败语义那句「未补挂」；U20 的 fail-open 判据不受影响（它走的是「现任空缺」那一支的 skip 路径：零注册 + 链照常 + 无 warn，逐字未动）· 读数：" + u31ArmOut.replace(/\n/gu, " ⏎ "),
+	u31ArmOut.includes("补挂失败 —— 写入失败（") && u31ArmOut.includes("本次没有落盘") && !u31ArmOut.includes("未补挂"));
+
+check("U31 三段各自署名: plan（没有可盯成员）/ write（写入失败）/ schedule（已写入但定时器未挂上）三档的 stage 互不相同，且两段式文案逐字未改（「写入失败…本次没有落盘」/「已写入但定时器未挂上」）—— 分类只认署名，不靠文案匹配",
+	u31Plan.stage === "plan" && u31Write.stage === "write" && u31Schedule.stage === "schedule"
+		&& new Set([u31Plan.stage, u31Write.stage, u31Schedule.stage]).size === 3
+		&& u31Write.entry === undefined && String(u31Write.error).includes("写入失败") && !String(u31Write.error).includes("定时器未挂上")
+		&& u31Schedule.entry !== undefined && String(u31Schedule.error).includes("已写入但定时器未挂上"));
+
 rmSync(escDir, { recursive: true, force: true });
 rmSync(tmpDir, { recursive: true, force: true });
 rmSync(TEAM_TMP, { recursive: true, force: true });
