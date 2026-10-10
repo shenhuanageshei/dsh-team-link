@@ -2340,9 +2340,10 @@ assertion total: 1214 (failed: 7)
 | --- | --- | --- | --- | --- |
 | 1 | **CJK 估算低估**：本地 token 估算器对中文重上下文系统性低估 ≈**1.47–1.89×**（n=5 样本） | 同一条压缩事件里 `shadowedTokenCount = 205,127`，而同操作的 API 实测 `cacheReadTokens = 387,200`（≈1.89×）；批 2 交付时把该读数记入本条 | 压缩阈值按估算口径算 ⇒ 真实触发点远超声明窗口（deepseek 1M 档：估算 541K ⇒ 真实 ≈1.02M） | 估算器按 CJK 字符宽度校准，或允许按真实 usage 回灌校正系数 |
 | 2 | **大包 idle-timeout 未识别为疑似溢出**：失败码全是 `pi-ai stream idle timeout after 300000ms` / `TRANSPORT`，溢出分支只认 `CONTEXT_WINDOW_EXCEEDED` | worker-2 会话：`CONTEXT_WINDOW_EXCEEDED` **0 次**；`llm/retry` 5 次（同一窗口内） | 大包撞墙时**溢出救援一次都没触发**，5 次重试后该回合失败 | 把「大包 + 长 idle + 重试」的组合识别为**疑似溢出**并走救援分支（或至少给出该提示） |
-| 3 | **真实 usage 未回灌压力环**：压力环只吃本地估算，不吃 API 实测 usage | 同 #1 的同一事件（估算 205K vs 实测 387K），压力环当时读的是估算值 | 协调者/worker 看到的「压力」与真实占用系统性偏离（低估） | 把 `assistant/message` 的实测 usage 回灌到 `contextPressure`（宿主 `tokenUsage` 已经有这份数据） |
+| 3 | **压缩判定只看本地估算，不看实测 usage**（2026-10-10 **订正措辞**） | 宿主源码实读：`dsh-token-meter/lib/types/usage-projection.js` 的 `pressureFrom = inputTokens + cacheReadTokens + cacheWriteTokens` ⇒ **`contextPressure.pressureTokens` 吃的是 API 实测 usage**（原措辞「压力环只吃估算」**不成立**，此处订正）；真正只看估算的是**压缩判定**：`dsh-compaction-basic/lib/index.js` 里 `const measurement = meter.measure(agent.session)` 与 `thresholdTokens` 比较，错误文案原文也写 `estimated tokens` | 人看到的「压力」是实测值，而**触发压缩的是估算值** ⇒ 两者系统性偏离（中文重上下文下估算低估 ≈1.76×） | 宿主侧二选一：把压缩判定也改为按实测 usage 触发，或让 `contextPressure` 同时暴露「估算口径的触发值」；本插件侧**不猜**，资源行如实标「压缩阈值 未知（宿主投影不含该读数）」 |
 
 **边界声明（如实）**：三条都**没有**在本仓实施任何 workaround —— 本插件不猜宿主内部口径，只把读数如实呈现（资源行/判读行的口径见 README 第六节与批 3 交付报告）。
+
 ## 2026-10-09 批 2（FR-1 宪章段 + FR-2 资源段）交付读数
 
 - 提交 `3885824`（2 档 +742/−24）；基线 1376 → **1410**（+34，零删除）。
@@ -2367,4 +2368,27 @@ assertion total: 1214 (failed: 7)
 - **评审累计遗留的三条纯文档项已闭合**：① E2 定义＝「只读 goal 那一半」（台账一半延后，§5.1 已写明，属**已披露的简化**）；② §7.2 `pulseCache` 行删除 + §6 伪代码的压缩阈值改成「未知（宿主投影不含该读数）」；③ U14 的 as-of 行号 `:1440` → `:1536/1539`、U10 的悬置条件（D-A1 已准）删除。
 - **登记一条未做的 🔵（不阻断，留后续批次）**：`U17 clear 前置` 守卫的**下游**仍会在「夹具已错」的变异世界里崩（`clear({ id: undefined })` 抛 `INVALID_ARGS` ⇒ 红相跑不到末尾）——属 Y7 同类问题（红相不许撒谎），本次不改，登记在案。
 - 设计档 §13 新增 **v1.4** 行；计划档 §7 新增 doc-sync 第二轮行；两轮合计修改面＝需求档未动 / 设计档 / 实施计划 / 本档。
+
+## 2026-10-10 重启后**真机验证**（首次拿到运行期读数）+ 批 4 热修
+
+**环境**：用户于 10:05:37 重启 DSH（boot pid=14012）；`platformVersion = 0.2.0-rc.2`（源自 `dsh-app-boot/package.json`；桌面壳 `@deepseek-ai/dsh-desktop` 同为 0.2.0-rc.2），**九道平台契约锁全绿**。
+
+**新代码是否真在跑（逐字节证据）**：`node_modules\dsh-team-link` 是指向本仓的目录链接；部署版 `lib/index.js` SHA256 `0F842CCB…190` **等于仓库 HEAD（`2c7f9d8` 版本）** ⇒ 跑的是批 3 代码。
+
+**B5（`thresholdRatio: 0.45`）的源码级确认**：宿主 `dsh-compaction-basic` 里 `thresholdTokens = Math.floor(Math.min(contextWindow * policy.thresholdRatio, pressureBudgetTokens))`，触发比较的是 `meter.measure(agent.session).totalTokens`（**本地估算口径**）⇒ 本仓 B5 的换算链（估算器低估中位 1.76× × 0.45 ⇒ 真实 ≈792K）**成立**。
+**仍未取到的读数（如实）**：阈值**不外暴露**（`contextPressure` 的 schema 无阈值字段：`{contextWindow?, pressureTokens?, surfaceTokens, sampledSurfaceTokens?, claim?}`），且重启后**尚无任何会话触发压缩**（末次压缩 10-09 19:23）⇒ 「0.45 已生效」缺一枚运行期读数。旁证口径：下一次压缩的**首次触发点**应 ≈**450K 估算**（旧配置为 541,248）。
+
+**★ 真机缺陷（本轮抓到，已修）**：`team_link_status` 第 ⑧ 段在真机上**每个会话行**都渲染「不可读（原因：投影读取抛错：`session.snapshotEvents is not a function`）」。
+- 根因：`readSessionUsage` 构造**替身** `{ header: { id: sessionId } }` 传给宿主投影；宿主 `stateOf → materializeCells → session.snapshotEvents()`（asar 实读 `dsh-session-projection/lib/index.js` 与 `dsh-session/lib/index.js`）⇒ 必炸。
+- 修法（提交 `516bf47`）：改走 `ctx.agents.get(sessionId)?.session` **真身**，拿不到则如实标「非活动会话」；**并把测试桩改成镜像宿主**（`stateOf` 对不具 `snapshotEvents` 的会话对象逐字抛同一个错）——这是本仓 `AGENTS.md` §四点名的坑（桩只镜像自家调用面 ⇒ 把宿主断层永久挡在套件外）。
+- 红相：**实现前自然红 7 条**（先改桩后改码；红集全落在第 ⑧ 段家族），非事后变异红。读数：1438 → **1440**（+2 断言），host `ALL PASS / 1440 (failed: 0)`、client `310 (failed: 0)`。
+
+**仍未验 / 无观测面（如实）**
+1. **FR-7 重挂**：重启后 `policy.watchdogs = []`（旧注册已按 TTL 清扫）⇒ **没有可重挂的对象**，该判据在真机上未取得读数。取证办法：先注册一条 → 下次重启后观察巡逻。
+2. **FR-2 段注册**：会话日志的 `request/header` 只记 `config/adapterDefaults/tools`、**不记系统提示正文** ⇒ 段是否注入**无法从日志观测**（本插件当前也没有暴露段注册状态的读面）。
+3. **重启性质**：上次结束＝**非正常**（末次心跳 10-10T01:55:33Z → 本次启动 02:05:37Z）；本轮无在飞作业，无损失。
+
+**🔵 登记（不阻断）**：`hostShapeAll`（夹具集中造型）当前**零断言覆盖**（改成 no-op ⇒ 全绿 1440/0）——复核者探针查明：真正被断言的会话在构造点就已造型，而 `hostShapeAll` 只兜 `extraAgentObjects`/`createdAgents`，这两类现有夹具里不进第 ⑧ 段读窗。处置：批 4 微修中构造「非调用方活会话进读窗」的夹具使其承重（若实测不可行则降级为「面向未来夹具的造型」并如实标注）。
+
+**口径纪律（本轮学到的）**：任何「XX 未变」的声称都必须**点名基线读数**（本轮曾用「设计档 size 未变」描述相对更早读数已变、但相对本轮未变的事实 ⇒ 正确说法是「已随 v1.4/v1.5 收口并提交，本轮未动」）。
 
