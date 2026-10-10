@@ -139,7 +139,9 @@ function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegiste
 				if (legacyRegisterThrows && String(namespace) === "session-link-pro") throw new Error("legacy namespace refused by stub");
 				guard();
 				const isLegacy = String(namespace) === "session-link-pro";
-				const state = { base: structuredClone(options.base ?? {}), data: structuredClone(seed[String(namespace)] ?? {}) };
+				// ★ 批 5（U20 的「缺失才写」判据）：每次 update 落一条**补丁记录** —— 「第二次 attach 一个字
+				// 都没写」这件事只能靠写次数读出来（内容相同的重写会换掉 data.watchdogs 的数组对象）。
+				const state = { base: structuredClone(options.base ?? {}), data: structuredClone(seed[String(namespace)] ?? {}), updates: [] };
 				namespaces.set(String(namespace), state);
 				return {
 					get() {
@@ -156,6 +158,7 @@ function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegiste
 					// —— 于是「快路径折叠在 `apply` 返回之后才落定」那个窗口在套件里根本不出现。
 					// `settingsUpdateDelayMs` 把那半拍补回来（默认 0 = 桩的历史行为，其余夹具一字不动）。
 					if (settingsUpdateDelayMs > 0) await new Promise((resolve) => { setTimeout(resolve, settingsUpdateDelayMs); });
+					state.updates.push(structuredClone(patch));
 					Object.assign(state.data, structuredClone(patch));
 					},
 				};
@@ -776,6 +779,50 @@ function makeAgents(extraAgents, hidden, { failAt = -1, onCreated = undefined, a
 	};
 }
 
+/** 子句取值校验：宿主 `copyStrings`（:791）逐句搬来 —— 必须是非空串数组。 */
+function copyQueryStrings(name, values) {
+	if (!Array.isArray(values) || values.some((value) => typeof value !== "string")) throw new Error(`session ` + name + " filter values must be an array of strings");
+	return [...values];
+}
+/** 子句取值校验：宿主 `copyNullableStrings`（:798）逐句搬来 —— string|null 数组。 */
+function copyQueryNullableStrings(name, values) {
+	if (!Array.isArray(values) || values.some((value) => value !== null && typeof value !== "string")) throw new Error("session " + name + " filter values must be an array of strings or null");
+	return [...values];
+}
+/**
+ * ★ 宿主真签名镜像（lead 裁定 2026-10-10 · AGENTS.md §四「桩不得只镜像自家调用面」）：
+ * `dsh-session-query/lib/index.js:674` 的 `materializeSessionResultFilters` 逐句搬到这里 ——
+ * 非数组即抛、未知子句 kind 即抛（含 kind 缺失）、取值按各子句自己的校验。桩宽松 = 断层溜到真机：
+ * 上一次这类事故是「套件全绿、真机首次调用的方法名已经换代」，本次是「把工作区当 signal 传」。
+ */
+function materializeQueryFilters(filters) {
+	if (!Array.isArray(filters)) throw new Error("session filters must be an array");
+	return filters.map((filter) => {
+		switch (filter?.kind) {
+			case "id": return { kind: "id", values: copyQueryStrings("id", filter.values) };
+			case "cwd": return { kind: "cwd", values: copyQueryNullableStrings("cwd", filter.values) };
+			case "created-at": return { kind: "created-at", from: filter.from, to: filter.to };
+			case "parent": return { kind: "parent", values: copyQueryNullableStrings("parent", filter.values) };
+			case "availability": return { kind: "availability", values: copyQueryStrings("availability", filter.values) };
+			default: throw new Error("session unknown filter kind " + (typeof filter?.kind === "string" ? '"' + filter.kind + '"' : "(missing)"));
+		}
+	});
+}
+/** 谓词：宿主 `sessionPredicate`（:751）的 `id`/`cwd` 两支逐句搬来（cwd 读
+ * `record.header.cwd ?? null`），另三支按同一份记录形状实现（availability 读 live/persisted）。 */
+function filterQueryRecords(records, clauses) {
+	return records.filter((record) => clauses.every((clause) => {
+		if (clause.kind === "id") return clause.values.includes(record.header?.id);
+		if (clause.kind === "cwd") return clause.values.includes(record.header?.cwd ?? null);
+		if (clause.kind === "parent") return clause.values.includes(record.header?.parentSession ?? null);
+		if (clause.kind === "created-at") {
+			const at = record.header?.createdAt;
+			return (clause.from === undefined || at >= clause.from) && (clause.to === undefined || at <= clause.to);
+		}
+		return clause.values.some((value) => (value === "live" ? record.live === true : record.persisted === true));
+	}));
+}
+
 /**
  * @param surfaceReadHook - optional probe run at the START of every surface
  * read. The list tool's read window (§3.1: bounded to PREVIEW_SESSIONS, and
@@ -792,26 +839,36 @@ function makeQuery(sessions, eventsBySession = {}, surfaceReadHook) {
 		/** Mutable persisted-session rows: `listSessions` reads this list, so a case
 		 * can add the row a runtime-created session gets at its first checkpoint. */
 		records: sessions,
-		async listSessions(_signal) { return query.records; },
+		/** ★ 宿主真签名镜像（lead 裁定 2026-10-10 · AGENTS.md §四「桩不得只镜像自家调用面」）：
+		 * 真身 `dsh-session-query/lib/index.js:95`（及 :1070）的签名是 `listSessions(signal)`，
+		 * 函数体第一句就是 `signal?.throwIfAborted()`。桩**逐字同形**：传字符串/错形状在这里自然抛
+		 * TypeError，于是「把工作区当 signal 传、被 catch 吃掉后静默退化成降级支」这类断层在套件里
+		 * 当场红，而不是溜到真机（上一次这类断层是「1438 条全绿、真机首次调用的方法名已换代」）。 */
+		async listSessions(signal) {
+			signal?.throwIfAborted();
+			return query.records;
+		},
 		async readTitleSnapshots(ids, _signal) {
 			return ids.map((id) => ({ status: "fulfilled", value: { session: { id }, title: id === "session-target" ? "目标会话" : id === "session-runner" ? "跑着呢" : undefined } }));
 		},
 		/**
 		 * §10.2.8.9 ②'s `gone` probe — the SAME predicate the real service implements
-		 * (`dsh-session-query/lib/index.js:1089` → `SessionResultFilter[]`), over the
+		 * (`dsh-session-query/lib/index.js:1094/:1154` → `SessionResultFilter[]`), over the
 		 * SAME record list `listSessions` reads. A fixture therefore expresses 「这个
 		 * 会话还在盘上」 and 「它已不存在」 with ONE list, and the release door cannot be
 		 * green on a stub that answers differently from the listing.
+		 *
+		 * ★ 宿主真签名镜像（lead 裁定 2026-10-10）：签名 `filterSessions(filters, signal)`、非数组即抛、
+		 * 未知子句 kind 即抛、`cwd`/`parent` 取值必须 string|null（见下面的
+		 * {@link materializeQueryFilters} / {@link filterQueryRecords}）—— 桩宽松就等于把断层挡在套件外。
 		 */
-		async filterSessions(filters, _signal) {
-			const clauses = Array.isArray(filters) ? filters : [];
+		async filterSessions(filters, signal) {
+			signal?.throwIfAborted();
+			const clauses = materializeQueryFilters(filters);
+			const byId = new Map((query.records ?? []).map((record) => [record.header?.id, record]));
 			const ids = typeof query.corpusSessionIds === "function" ? query.corpusSessionIds() : (query.records ?? []).map((record) => record.header?.id);
-			const corpus = ids.map((id) => ({ header: { id } }));
-			return corpus.filter((record) => clauses.every((clause) => {
-				if (clause === null || typeof clause !== "object" || clause.kind !== "id") return true;
-				const values = Array.isArray(clause.values) ? clause.values : [];
-				return values.includes(record.header?.id);
-			}));
+			const corpus = ids.map((id) => byId.get(id) ?? { header: { id } });
+			return filterQueryRecords(corpus, clauses);
 		},
 		async readSession(id) {
 			// 批次 1 (§4.1 / U1): the ids this read was asked for, in call order. The
@@ -5144,6 +5201,16 @@ const reapEnv = rotateEnv({
 });
 reapEnv.setHiddenAgent(REAP_DEAD, true);
 const reapTool = reapEnv.tool("team_link_recover");
+// ★ FR-10（批 5）: attach 后置链现在会按队补挂 auto 工作台注册 ⇒ 命名空间在**恢复动作之前**就已经
+// 多了 `watchdogs` 这一项。U29 的红线管的是**恢复路径**，所以判据是**快照对比**：恢复前后顶层键集
+// 与 `watchdogs` 内容逐字不变（恢复一个字都不许加/删），而 attach 那一笔不参与判定。
+// 绝对键集仍由紧随其后的那条「base = 九项」钉住 —— 两条各管一件事，互不替对方背书。
+// 快照必须取在**后置链落定之后**：FR-10 的补挂是 fire-and-forget 的一次微任务，若在它落笔前取
+// 快照，「恢复期间」这个窗口就会把 attach 的那一笔也算进去（那是假红，不是恢复路径写的）。
+await waitForChain(reapEnv, 1);
+await tick();
+const reapKeysBefore = JSON.stringify(Object.keys(reapEnv.ns.data).sort());
+const reapWatchdogsBefore = JSON.stringify(reapEnv.ns.data.watchdogs ?? null);
 const reapOut = await reapTool.execute({ action: "reappoint", team: "night-shift", role: "coordinator" }, execFor(reapEnv.agentFor("session-worker-a")));
 
 check("U27 候选由插件算（批次 2 改写：候选集 = 活成员 ∪ 常驻合成候选）: 选项 = 本队**活成员**（排除死现任那个角色自己）+ 恒定在末尾的「自建继任者（新建会话）」，调用方没有任何参数能指定继任者 id；且是**单选**——`multiSelect` 曾经为 true 而调用方只取 `picked[0]`，人类勾的第二位会被静默丢弃（差异审计 B3：盒子不许承诺代码不会做的选择）", (() => {
@@ -5366,7 +5433,14 @@ check("Y1 对照（批次 2 改写）: 同一个非 coordinator 角色走 `reviv
 // to sit here is exactly the kind of unclean red the Y7 sweep exists to prevent.
 // §11.9.5①: the whole surface stays two verbs, and the second one does not grow a
 // "write any roster field" cousin.
-check("U29 红线: 恢复路径不新增日志事件类型——宿主动作仍只有既有的几种（settings 写 + 确认框 + 广播投递 + resume，本轮没有第四种），writerGate 原样，policy 的顶层键一个不多", reapEnv.actionLog.every((entry) => entry === "create" || entry === "followup" || entry === "resume") && __testing.writerGate.length === 2 && sameJson(Object.keys(reapEnv.ns.data).sort(), ["blockedSenders", "pairs", "receiveMode", "rememberTargets", "teams", "trustedSenders"]));
+check("U29 红线: 恢复路径不新增日志事件类型——宿主动作仍只有既有的几种（settings 写 + 确认框 + 广播投递 + resume，本轮没有第四种），writerGate 原样，恢复期间 policy 的顶层键集与 watchdogs 内容**逐字不变**", reapEnv.actionLog.every((entry) => entry === "create" || entry === "followup" || entry === "resume") && __testing.writerGate.length === 2
+		// ★ FR-10（批 5）: attach 后置链会按队补挂 auto 工作台注册 ⇒ 命名空间在恢复**之前**就已经多了
+		// `watchdogs` 这一项。它**不是恢复路径写的**，所以判据取**快照对比**（reapKeysBefore /
+		// reapWatchdogsBefore，都在恢复动作之前取）：恢复期间键集一字未动、watchdogs 内容一字未改。
+		// 旧写法把「绝对键集」写在恢复路径的判据里 ⇒ FR-10 一挂上就会红（假红），把 attach 的承诺
+		// 与恢复路径的红线搅在一起；绝对键集现在只由下一条（base = 九项）钉。
+		&& JSON.stringify(Object.keys(reapEnv.ns.data).sort()) === reapKeysBefore
+		&& JSON.stringify(reapEnv.ns.data.watchdogs ?? null) === reapWatchdogsBefore);
 check("U29 schema: 恢复没有新增任何顶层 policy key（recoveries 是 role 行内字段）——八项一个不多", sameJson(Object.keys(reapEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && reapEnv.role().recoveries !== undefined && reapEnv.ns.data.recoveries === undefined);
 
 // --- 缺口1 的第三半：claim 的超时读数**不得**与 fail-closed 同形 -----------------------
@@ -10325,6 +10399,257 @@ await wb4StatusLines(wb4ClearEnv);
 await __testing.watchdogFor(wb4ClearEnv.ctx).patrol({ now: Date.now() });
 check("U17 清掉的 auto 注册**同进程不自愈**: clear 之后状态卡与一轮巡逻都不把它挂回来（没有任何懒自愈支路 —— 只有下一次 /team_session 建队才会重挂，那是显式写路径）",
 	wb4ClearAuto().length === 0 && __testing.watchdogFor(wb4ClearEnv.ctx).timers.size === 0);
+// ===========================================================================
+// 批 5 · FR-10 attach 按队补挂 / FR-11 patrol 段同步 / FR-12 arm-team / FR-13 跨工作区读窗
+// 判据：U20（attach 补挂 + 幂等）· U21（现任晚启动，一个巡检间隔内拿到段）·
+// U22（arm-team：现任可用且幂等 / 非现任与队不在名册拒绝）· U23（跨工作区读窗两条支）。
+// 归属：docs/2026-10-09-team-autonomy-design.md §5（FR-10…FR-13）· §8（U20–U23）·
+// §9 的两条边界行（补挂失败 fail-open / 跨工作区读窗 fail-visible）。
+// ★ 本节四条判据各有一条**定向变异**能把它单独打红（红相读数见交付报告），不是靠别处的耦合顺手变红。
+// ===========================================================================
+
+const B5_WS = path.join(TEAM_TMP, "b5-ws");
+/** 名册行（规范形状；与 teamRow / wb2Team 同一套字段）。 */
+const b5Team = (name, workspace, roles, writer = "coordinator") => ({ name, createdAt: 1_700_000_000_000, workspace, policy: { writer }, mode: "sessions", leadSessionId: "", roles });
+/** 命名空间里的注册行（**落盘形状**，不是归一化后的读面）。 */
+const b5Watchdogs = (env) => env.settings.namespaces.get("team-link").data.watchdogs ?? [];
+const b5Auto = (env) => b5Watchdogs(env).filter((entry) => entry.origin === __testing.WATCHDOG_ORIGIN_AUTO);
+/** 段体提取：段头可能带前置标注行（【读窗=…】），所以按**含**匹配而不是 startsWith。 */
+const b5SectionOf = (card, head) => {
+	const list = String(card).split("\n");
+	const start = list.findIndex((line) => line.includes(head));
+	if (start === -1) return [];
+	const out = [];
+	for (let index = start; index < list.length; index += 1) {
+		if (index > start && list[index].includes("--- ")) break;
+		out.push(list[index]);
+	}
+	return out;
+};
+
+// --- U20: attach 按队补挂（FR-10）----------------------------------------------
+const U20_TEAM = "u20-legacy";
+const u20Env = watchdogEnv({
+	teams: [b5Team(U20_TEAM, B5_WS, [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "u20-worker-a"), wb2Role("worker-b", "u20-worker-b")])],
+});
+await waitForChain(u20Env, 1);
+await tick();
+const u20Rows = b5Auto(u20Env);
+const u20RowId = at(u20Rows, 0, {}).id;
+/** 落过的 `watchdogs` 补丁数（U20 的「缺失才写」读数：创建那次恰一次，第二次提醒零次）。 */
+const u20WatchdogWrites = () => u20Env.settings.namespaces.get("team-link").updates.filter((patch) => Object.prototype.hasOwnProperty.call(patch, "watchdogs")).length;
+check("U20 attach 补挂: 名册里一个**无 auto 注册**的队 ⇒ attach 之后恰有一条 origin=auto —— watcher=该队现任协调者、team=队名、targets=除观察者外的全队成员（名册序）、巡检=auto 档 10min、TTL 在场，并且**拿到定时器**（不只是落一行账）",
+	u20Rows.length === 1 && at(u20Rows, 0, {}).watcherSession === "session-self" && at(u20Rows, 0, {}).team === U20_TEAM
+		&& Array.isArray(at(u20Rows, 0, {}).targets) && at(u20Rows, 0, {}).targets.join(",") === "u20-worker-a,u20-worker-b"
+		&& at(u20Rows, 0, {}).intervalMinutes === 10 && at(u20Rows, 0, {}).silentMinutes === 10 && at(u20Rows, 0, {}).expiresAt > Date.now()
+		&& typeof u20RowId === "string" && u20RowId.startsWith("wd-")
+		&& u20Env.watchdog.timers.has(u20RowId));
+// 幂等那一半：fast-path 上 attach 后置链会**提醒两次**（onAttach 登记时的即时一次 + 链尾一次），
+// 两次 ensure 之后仍恰一条 —— 定向变异（删掉 ensureTeamAutoWatchdogs 里「已有行就跳过」那段）
+// 实测落下 2 条 ⇒ 本条红，所以「恰一条」不是空锁。
+check("U20 幂等: **再 attach 一次不新增** —— 后置链两次提醒（登记时 + 链尾）之后仍恰一条、id 未变、**并且第二次提醒一个字都没写**（缺失才写：`watchdogs` 补丁恰一次 = 创建那次）；链尾那一行 info 在场，证明第二次提醒真的发生过（否则本条会退化成「只挂了一次」的空锁）",
+	b5Auto(u20Env).length === 1 && at(b5Auto(u20Env), 0, {}).id === u20RowId && u20WatchdogWrites() === 1
+		&& u20Env.log.lines.info.filter((line) => line.includes("post-attach policy chain finished")).length === 1);
+// 对照（负相，不冒充）：**缺席观察者**那一支 —— 名册里有队但没有现任协调者 ⇒ 一行都不写、
+// 且不拖 attach 链（设计档 §9 的 fail-open 边界行）。
+const U20_VACANT = "u20-vacant";
+const u20VacantEnv = watchdogEnv({ teams: [b5Team(U20_VACANT, B5_WS, [wb2Role("coordinator", null), wb2Role("worker-a", "u20-worker-a")])] });
+await waitForChain(u20VacantEnv, 1);
+await tick();
+check("U20 对照（fail-open）: 现任空缺的队 ⇒ 零注册、attach 链照常跑完（链尾 info 仍打出），不抛错、不拖链",
+	b5Watchdogs(u20VacantEnv).length === 0
+		&& u20VacantEnv.log.lines.info.filter((line) => line.includes("post-attach policy chain finished")).length === 1
+		&& u20VacantEnv.log.lines.warn.filter((line) => line.includes("attach 按队补挂工作台注册失败")).length === 0);
+
+// --- U21: patrol 每轮段同步 · 覆盖「现任协调者晚启动」（FR-11）---------------------
+const U21_TEAM = "u21-late";
+const U21_INCUMBENT = "u21-coordinator";
+// 队里唯一的非现任成员**没有活代理**（只有名册行）—— 于是 attach 那一刻段注册器真的是空的；
+// 晚启动的正是现任协调者本人（U21 要覆盖的那一档）。
+const u21Env = watchdogEnv({
+	teams: [b5Team(U21_TEAM, B5_WS, [wb2Role("coordinator", U21_INCUMBENT), wb2Role("worker-a", "u21-worker-absent")])],
+});
+await waitForChain(u21Env, 1);
+await tick();
+const u21Sections = __testing.sectionsFor(u21Env.ctx);
+check("U21 前置①: 现任协调者的代理**还没出现**（attach 之后才启动）—— auto 注册照写（FR-10：现任不 live 也照写，它是补挂的对象而不是条件），而段注册器此刻为空（全仓没有代理出现钩子，这正是 FR-11 要补的缺口）",
+	b5Auto(u21Env).length === 1 && at(b5Auto(u21Env), 0, {}).watcherSession === U21_INCUMBENT
+		&& u21Sections.registered.size === 0 && u21Env.systemPrompt.live().length === 0);
+const u21Created = await u21Env.agents.create({ sessionId: U21_INCUMBENT, meta: { cwd: B5_WS } });
+check("U21 前置②: 代理确实出现了（活代理 + systemPrompt 面都在），但段仍然为空 —— 没有钩子，只有下一轮巡逻能补上",
+	u21Created?.agent?.id === U21_INCUMBENT && u21Env.agentFor(U21_INCUMBENT) !== undefined
+		&& typeof u21Env.agentFor(U21_INCUMBENT)?.ctx?.systemPrompt?.section === "function" && u21Sections.registered.size === 0);
+await u21Env.watchdog.patrol({ now: Date.now() });
+const u21Text = (() => { const record = at(u21Env.systemPrompt.live(), 0); return record === undefined ? "" : record.text({}); })();
+check("U21 一个巡检间隔内拿到段（红相＝摘掉 patrol 里那句 sections.sync ⇒ 本条红）: 一轮巡逻之后晚启动的现任补上了 —— 注册表里 kind=coordinator、team 正确、段文本是协调者版宪章（点名团队与现任会话）；同时**没有**多挂一格（那条缺席的 worker 名册行不会被凭空注册）",
+	u21Sections.registered.get(U21_INCUMBENT)?.kind === "coordinator" && u21Sections.registered.get(U21_INCUMBENT)?.team === U21_TEAM
+		&& u21Text.startsWith("你是团队 " + U21_TEAM + " 的协调者（现任会话 " + U21_INCUMBENT + "）")
+		&& u21Sections.registered.size === 1 && u21Env.systemPrompt.live().length === 1);
+
+// --- U22: team_link_watch action=arm-team（FR-12）-------------------------------
+const U22_TEAM = "u22-arm";
+const U22_VACANT = "u22-vacant";
+const U22_OUTSIDE = "u22-outside";
+const u22Env = watchdogEnv({
+	targets: { [U22_OUTSIDE]: { events: oneShotSurface(WD_NOW) } },
+	teams: [
+		b5Team(U22_TEAM, B5_WS, [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "u22-worker-a"), wb2Role("worker-b", "u22-worker-b")]),
+		b5Team(U22_VACANT, B5_WS, [wb2Role("coordinator", null), wb2Role("worker-a", "u22-other-worker")]),
+	],
+});
+await waitForChain(u22Env, 1);
+await tick();
+const u22Tool = u22Env.tool("team_link_watch");
+check("U22 描述面（模型可见）: 新动词进 action 枚举，描述正文同时写清「幂等补挂自己队」「非现任 / 队不在名册 ⇒ 拒绝并点名原因」「不占这 3 条手工额度」三件事 —— 描述面与实现面同一批更新（本仓「描述与代码不一致」的教训）",
+	u22Tool.parameters.properties.action.enum.join(",") === "register,list,clear,arm-team"
+		&& u22Tool.parameters.properties.team !== undefined
+		&& u22Tool.description.includes("arm-team") && u22Tool.description.includes("幂等")
+		&& u22Tool.description.includes("非现任") && u22Tool.description.includes("不占这 3 条手工额度"));
+// 起点 = 「建队早于本功能的老团队 / 被 clear 过」的零注册态：用**既有 clear 命令**腾空（不直接改数据）。
+const u22Cleared = String(await u22Tool.execute({ action: "clear" }, execFor(u22Env.senderAgent)));
+check("U22 前置: clear 之后该队零注册（起点干净 —— 否则「新增一条」会被 attach 补挂的旧行顶替而假绿）",
+	u22Cleared.includes("已清理") && b5Watchdogs(u22Env).length === 0);
+const u22OutsideExec = execFor(u22Env.agentFor(U22_OUTSIDE));
+const u22RefuseImplicit = String(await u22Tool.execute({ action: "arm-team" }, u22OutsideExec));
+const u22RefuseExplicit = String(await u22Tool.execute({ action: "arm-team", team: U22_TEAM }, u22OutsideExec));
+const u22RefuseUnknown = String(await u22Tool.execute({ action: "arm-team", team: "u22-nope" }, execFor(u22Env.senderAgent)));
+const u22RefuseVacant = String(await u22Tool.execute({ action: "arm-team", team: U22_VACANT }, execFor(u22Env.senderAgent)));
+check("U22 拒绝①（非现任 · 省略 team）: 点名原因（当前会话不是任何队的现任协调者 + 名册里各队的现任是谁），零写入",
+	u22RefuseImplicit.includes("不是名册里任何团队的现任协调者") && u22RefuseImplicit.includes(U22_OUTSIDE)
+		&& u22RefuseImplicit.includes("session-self") && b5Watchdogs(u22Env).length === 0);
+check("U22 拒绝②（非现任 · 点名 team；红相＝放行非现任 ⇒ 本条红）: 点名该队现任会话与当前调用会话，零写入",
+	u22RefuseExplicit.includes("补挂失败") && u22RefuseExplicit.includes("只有团队 " + U22_TEAM + " 的现任协调者会话 session-self")
+		&& u22RefuseExplicit.includes(U22_OUTSIDE) && b5Watchdogs(u22Env).length === 0);
+check("U22 拒绝③（队不在名册）: 点名「不在名册中」并列出已知团队，零写入",
+	u22RefuseUnknown.includes("不在名册中") && u22RefuseUnknown.includes(U22_TEAM) && u22RefuseUnknown.includes(U22_VACANT)
+		&& b5Watchdogs(u22Env).length === 0);
+check("U22 拒绝④（coordinator 空缺）: 点名空缺 + writer gate 语义 + 指路设置 UI，零写入",
+	u22RefuseVacant.includes("coordinator 角色当前空缺") && u22RefuseVacant.includes("writer gate 语义沿用")
+		&& u22RefuseVacant.includes("设置 UI") && b5Watchdogs(u22Env).length === 0);
+// 边界（设计档 FR-12 原文「非现任 ⇒ 拒绝」是无条件的，比 writerGate 紧一档）：writer=any 的队也只
+// 受理它的现任协调者 —— 拒绝理由必须按档说，不能对 writer=any 的队念一句 coordinator 档的话。
+const U22_ANY = "u22-any";
+const u22AnyEnv = watchdogEnv({
+	targets: { [U22_OUTSIDE]: { events: oneShotSurface(WD_NOW) } },
+	teams: [b5Team(U22_ANY, B5_WS, [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "u22-any-worker")], "any")],
+});
+await waitForChain(u22AnyEnv, 1);
+await tick();
+const u22AnyRowsBefore = b5Watchdogs(u22AnyEnv).length;
+const u22AnyRefuse = String(await u22AnyEnv.tool("team_link_watch").execute({ action: "arm-team", team: U22_ANY }, execFor(u22AnyEnv.agentFor(U22_OUTSIDE))));
+check("U22 边界（writer=any 的队）: 仍然只受理现任（比 writerGate 紧一档，且理由按档说 —— 不念那句 coordinator 档的话），零写入",
+	u22AnyRefuse.includes("补挂失败") && u22AnyRefuse.includes("只有团队 " + U22_ANY + " 的现任协调者会话 session-self")
+		&& u22AnyRefuse.includes("紧一档") && !u22AnyRefuse.includes("policy.writer=coordinator 时非现任拒写")
+		&& b5Watchdogs(u22AnyEnv).length === u22AnyRowsBefore);
+
+const u22First = String(await u22Tool.execute({ action: "arm-team" }, execFor(u22Env.senderAgent)));
+const u22RowsFirst = b5Auto(u22Env);
+check("U22 现任可用: 一条命令补挂 —— 恰一条 origin=auto（watcher=调用方=该队现任、targets=除它之外的队员），返回值点名注册 id 与目标（复用 FR-10 的 ensure，不另写一份；红相＝摘掉 arm-team 分支 ⇒ 本条红）",
+	u22First.includes("已补挂工作台注册 wd-") && u22RowsFirst.length === 1
+		&& at(u22RowsFirst, 0, {}).watcherSession === "session-self" && at(u22RowsFirst, 0, {}).team === U22_TEAM
+		&& at(u22RowsFirst, 0, {}).targets.join(",") === "u22-worker-a,u22-worker-b"
+		&& u22First.includes("u22-worker-a, u22-worker-b") && u22First.includes("幂等"));
+const u22Second = String(await u22Tool.execute({ action: "arm-team" }, execFor(u22Env.senderAgent)));
+check("U22 幂等: 第二次调用**不新增**（条数仍 1、id 未变）；判据钉的是「条数 + id」，返回值里那句「幂等：本次未新增」只作旁证（文案不能自证）",
+	u22Second.includes("已有工作台注册") && u22Second.includes("幂等：本次未新增")
+		&& b5Auto(u22Env).length === 1 && at(b5Auto(u22Env), 0, {}).id === at(u22RowsFirst, 0, {}).id);
+
+// --- U23: 跨工作区读窗（FR-13）--------------------------------------------------
+const U23_TEAM = "u23-cross";
+const U23_TEAM_WS = path.join(TEAM_TMP, "u23-team-ws");
+const U23_CALLER_WS = path.join(TEAM_TMP, "u23-caller-ws");
+const U23_TEAM_PEER = "u23-team-peer";
+const U23_CALLER_PEER = "u23-caller-peer";
+/** 两个工作区各一条**活的**会话：调用方在 U23_CALLER_WS、团队在 U23_TEAM_WS —— 「列错人」
+ * 在夹具里因此是**可见**的（不是靠另一个人根本不存在来冒充）。 */
+const b5CrossEnv = (extra = {}) => setup({
+	sessions: [
+		{ header: { id: U23_TEAM_PEER, createdAt: 1000, cwd: U23_TEAM_WS }, live: true, persisted: true },
+		{ header: { id: U23_CALLER_PEER, createdAt: 2000, cwd: U23_CALLER_WS }, live: true, persisted: true },
+	],
+	useSettings: true,
+	selfCwd: U23_CALLER_WS,
+	extraAgents: [{ id: U23_TEAM_PEER, status: "idle" }, { id: U23_CALLER_PEER, status: "idle" }],
+	settingsSeed: { "team-link": { teams: [b5Team(U23_TEAM, U23_TEAM_WS, [wb2Role("coordinator", "session-self")])] } },
+	...extra,
+});
+const b5StatusCard = async (env, team = U23_TEAM) => String(await env.tool("team_link_status").execute(team === null ? {} : { team }, execFor(env.senderAgent)));
+const u23Env = b5CrossEnv();
+await waitForChain(u23Env, 1);
+await tick();
+const u23Card = await b5StatusCard(u23Env);
+const u23Note = "【读窗=团队工作区 " + U23_TEAM_WS + "】";
+check("U23 支Ⅰ（宿主支持 cwd 子句：真签名 filterSessions(clauses, signal)，本仓 sessionQuery 夹具逐字镜像）: 段④/⑤/⑧ 只列**该队工作区**的会话 —— 团队工作区那条在场、调用方工作区那条**一个字都不出现**；段头如实标注读窗属于哪个工作区且**不带**降级后缀（红相＝把调用方窗口当成团队窗口 ⇒ 本条红）",
+	u23Card.includes(u23Note + "--- 会话面（该队工作区其他会话")
+		&& u23Card.includes(u23Note + "--- 活性")
+		&& u23Card.includes(u23Note + "（第 ⑧ 段同一读窗）")
+		&& u23Card.includes(U23_TEAM_PEER) && !u23Card.includes(U23_CALLER_PEER)
+		&& !u23Card.includes("宿主不支持按工作区取窗")
+		&& b5SectionOf(u23Card, "--- 会话面（该队工作区其他会话").some((line) => line.includes(U23_TEAM_PEER)));
+// 对照（夹具不空转）：同一条会话走**列表工具**（调用方工作区口径）时看得见 —— 证明卡上看不见它
+// 不是因为「它不存在 / 不可读」，而是因为读窗按团队工作区取。
+const u23CallerList = String(await u23Env.tool("team_link_list_sessions").execute({}, execFor(u23Env.senderAgent)));
+check("U23 对照（负相，不冒充）: 调用方工作区那条会话在**列表工具**里看得见、团队工作区那条看不见 —— 两张卡的口径差正是「按团队 workspace 取窗」这一件事本身",
+	u23CallerList.includes(U23_CALLER_PEER) && !u23CallerList.includes(U23_TEAM_PEER));
+// 支Ⅱ：宿主**没有** filterSessions 这个面（§9「宿主不支持按工作区取窗」的降级行）。
+const u23NoFaceEnv = b5CrossEnv();
+await waitForChain(u23NoFaceEnv, 1);
+await tick();
+delete u23NoFaceEnv.query.filterSessions;
+const u23NoFaceCard = await b5StatusCard(u23NoFaceEnv);
+// 支Ⅱ 的第二条到达路径：面在、但**不认 cwd 子句**（回了别的工作区的行）。
+const u23IgnoreEnv = b5CrossEnv();
+await waitForChain(u23IgnoreEnv, 1);
+await tick();
+u23IgnoreEnv.query.filterSessions = async () => u23IgnoreEnv.query.records;
+const u23IgnoreCard = await b5StatusCard(u23IgnoreEnv);
+const u23Degraded = "【读窗=团队工作区 " + U23_TEAM_WS + "；宿主不支持按工作区取窗 ⇒ 已就地过滤】";
+check("U23 支Ⅱ（宿主无该面 / 面在不认子句，两条降级路径各一个夹具）: 仍然**不得列错人**（调用方工作区那条一个都不出现），且段头**如实标注**窗口口径与降级原因（fail-visible 不 fail-silent；红相＝去掉标注 ⇒ 本条红）",
+	u23NoFaceCard.includes(u23Degraded + "--- 会话面（该队工作区其他会话") && u23NoFaceCard.includes(U23_TEAM_PEER) && !u23NoFaceCard.includes(U23_CALLER_PEER)
+		&& u23NoFaceCard.includes(u23Degraded + "（第 ⑧ 段同一读窗）")
+		&& u23IgnoreCard.includes(u23Degraded + "--- 会话面（该队工作区其他会话") && u23IgnoreCard.includes(U23_TEAM_PEER) && !u23IgnoreCard.includes(U23_CALLER_PEER));
+
+// 支Ⅲ（task-28，lead 裁定 ③）: 「取不到团队 workspace」的**两条到达路径**也必须如实标注 ——
+// 回退到调用方工作区是允许的，**静默**回退不是（这是 FR-13 使命的同一类风险，只是换了一条触发路径）。
+const U23_NOWS = "u23-nows";
+const U23_ELSEWHERE_WS = path.join(TEAM_TMP, "u23-elsewhere-ws");
+const U23_ELSEWHERE_PEER = "u23-elsewhere-peer";
+const b5CrossSessions = [
+	{ header: { id: U23_CALLER_PEER, createdAt: 1000, cwd: U23_CALLER_WS }, live: true, persisted: true },
+	{ header: { id: U23_ELSEWHERE_PEER, createdAt: 2000, cwd: U23_ELSEWHERE_WS }, live: true, persisted: true },
+];
+const b5CrossAgents = [{ id: U23_CALLER_PEER, status: "idle" }, { id: U23_ELSEWHERE_PEER, status: "idle" }];
+// Ⅲ-a：该队**没有** workspace 记录（老团队 / 手写名册行的形状）⇒ 窗口只能是调用方工作区。
+const u23NoWsEnv = setup({
+	sessions: b5CrossSessions, useSettings: true, selfCwd: U23_CALLER_WS, extraAgents: b5CrossAgents,
+	settingsSeed: { "team-link": { teams: [b5Team(U23_NOWS, "", [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "u23-nows-worker")])] } },
+});
+await waitForChain(u23NoWsEnv, 1);
+await tick();
+const u23NoWsCard = await b5StatusCard(u23NoWsEnv, U23_NOWS);
+check("U23 支Ⅲ-a（团队无 workspace 记录，task-28）: 回退这一支**也如实标注**（说清是回退 + 原因「该队无 workspace 记录」），段④/⑤/⑧ 三处都带这句，段头**不再**声称「该队工作区」（它跟着标注一起说成该队工作区就是把标注用成谎话）；窗口仍是调用方工作区那条，别的工作区一个都不出现 —— 红相＝去掉这句标注 ⇒ 本条红",
+	u23NoWsCard.includes("【读窗=调用方工作区 " + U23_CALLER_WS + "（回退：该队无 workspace 记录）】--- 会话面（同工作区其他会话")
+		&& u23NoWsCard.includes("（回退：该队无 workspace 记录）】--- 活性")
+		&& u23NoWsCard.includes("（回退：该队无 workspace 记录）】（第 ⑧ 段同一读窗）")
+		&& u23NoWsCard.includes(U23_CALLER_PEER) && !u23NoWsCard.includes(U23_ELSEWHERE_PEER)
+		&& !u23NoWsCard.includes("该队工作区"));
+// Ⅲ-b：聚合卡且所示团队的工作区**不止一个**（同一个 fetch 的另一条触发路径，同批补上，不留静默支）。
+const u23MixedEnv = setup({
+	sessions: b5CrossSessions, useSettings: true, selfCwd: U23_CALLER_WS, extraAgents: b5CrossAgents,
+	settingsSeed: { "team-link": { teams: [
+		b5Team("u23-mix-a", U23_TEAM_WS, [wb2Role("coordinator", "session-self")]),
+		b5Team("u23-mix-b", U23_ELSEWHERE_WS, [wb2Role("coordinator", "session-self")]),
+	] } },
+});
+await waitForChain(u23MixedEnv, 1);
+await tick();
+const u23MixedCard = await b5StatusCard(u23MixedEnv, null);
+check("U23 支Ⅲ-b（聚合卡：所示团队的工作区不止一个，task-28 同批）: 同一类回退也如实标注（原因换成「工作区不止一个」），段头说「同工作区」（窗口确实是调用方工作区），别的工作区一个都不出现（红相＝去掉这句标注 ⇒ 本条同样红）",
+	u23MixedCard.includes("【读窗=调用方工作区 " + U23_CALLER_WS + "（回退：所示 2 个团队的工作区不止一个）】--- 会话面（同工作区其他会话")
+		&& u23MixedCard.includes("（回退：所示 2 个团队的工作区不止一个）】（第 ⑧ 段同一读窗）")
+		&& u23MixedCard.includes(U23_CALLER_PEER) && !u23MixedCard.includes(U23_ELSEWHERE_PEER)
+		&& !u23MixedCard.includes("该队工作区"));
+
 rmSync(escDir, { recursive: true, force: true });
 rmSync(tmpDir, { recursive: true, force: true });
 rmSync(TEAM_TMP, { recursive: true, force: true });

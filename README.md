@@ -300,7 +300,7 @@ sequenceDiagram
 | `team_link_list_sessions` | 同工作区其他会话 + 活性信号行（verdict 五态 / goal / 静默时长 / 读数时效戳）；默认读前 12 行的活性，**要读更多用 `readIds`（点名）或 `offset`（分页）**——单次调用 ≤ 12 次 surface 读，末尾给「未读 Y 行 + 怎么读」 |
 | `team_link_export` | 任意会话全量导出 md + JSON |
 | `team_link_send` | 跨会话投递（单目标或 `targets` 广播 ≤8）；`meta` 信封；返回带 busy 预判；**发送方自己那一行渲染成卡片**（§10.1 A/D） |
-| `team_link_watch` | 给自己注册跨会话看门狗（register / list / clear） |
+| `team_link_watch` | 给自己注册跨会话看门狗（register / list / clear；`arm-team` = 现任协调者一条命令**幂等补挂自己队**的工作台注册，非现任 / 队不在名册会被拒绝并点名原因） |
 | `team_link_status` | 只读**团队状态卡**：一次一屏（角色在位/空缺 · 换届 pending（token 掩码）· 看门狗 · 会话面 · 活性（有界 12 行）· 台账尾 · **形态（⑦，B 批追加）**）＋ 反面预警注记；**零写入**、零额外读 |
 | `team_link_roster` | 团队身份注册表（get / upsert-team / set-role / retire / **set-mode**）：`get` 附**形态段**（形态 + Lead + 成员名册投影 + 完整能力矩阵 + 诊断行），`set-mode` 切**团队形态**（见[团队形态](#团队形态多会话档--agent-team-档)） |
 | `team_link_team_read` | 一次读齐 roster + decisions 末 20 条 + discipline 全文 + tasks 末 20 条与派生视图 + **收件视图**（谁对 `t-<n>` 说过什么）与**派生回执**（我发出去之后对方动了没有：✅ / ⚠ / 未读）+ 三个 baseHash；目标面**只在 `readIds` 点名时才读** |
