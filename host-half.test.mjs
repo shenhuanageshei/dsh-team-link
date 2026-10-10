@@ -10278,12 +10278,67 @@ check("第 ⑧ 段: 段头 + 会话行 + 判读行，整段 ≤12 行（评审�
 	wb4Section.length === 3 && wb4Section.length <= __testing.BUDGET_SECTION_MAX_LINES && wb4Section[0].startsWith("--- 资源/预算（⑧") && wb4Verdict.startsWith("预算判读："));
 check("第 ⑧ 段逐项与投影一致: 压力 25.0%（窗口 1.00M） · 累计 ≈1.0K · 第 7 轮",
 	wb4Section.some((line) => line.includes("session-self") && line.includes("压力 25.0%") && line.includes("窗口 1.00M") && line.includes("累计 ≈1.0K") && line.includes("第 7 轮")));
-check("U7 判读行（读数可得）: 否定式结论 ——「未见收口理由：本系统按压力自动压缩，结构上不存在『预算耗尽』」；且不做「低于阈值」的比较",
-	wb4Verdict === "预算判读：未见收口理由：本系统按压力自动压缩，结构上不存在『预算耗尽』。" && !wb4Verdict.includes("阈值"));
-check("U7 禁用词: 「预算耗尽」全卡**恰一次**且只在那条判读行；「收口」同样只出现在判读行",
-	(wb4StatusText.match(/预算耗尽/gu) ?? []).length === 1
-		&& !wb4StatusText.split(wb4Verdict).join("").includes("预算耗尽")
-		&& wb4StatusText.split(wb4Verdict).join("").includes("收口") === false);
+// --- U7 白名单（批 6 起**三句**）＋ U24（FR-14 的范围界定句） -------------------------
+// 三句**逐字**白名单：① 读数不可得支（前缀 —— 原因码是变量）② 读数可得支 ③ FR-14 的范围界定句。
+// ③ 逐字抄自设计档 §5 FR-14 原句（55 码点、四个 em dash）：抄错、改写、删掉都要能被 U24 咬住。
+const WB4_VERDICT_A_PREFIX = "预算判读：读数不可得，不作判读";
+const WB4_VERDICT_B = "预算判读：未见收口理由：本系统按压力自动压缩，结构上不存在『预算耗尽』。";
+const WB4_VERDICT_SCOPE = "（本节只判上下文/预算；宿主工具闸门——如写入自动评审 429——属另一类，见工具报错原文，不在本节口径内。）";
+const WB4_VERDICT_WHITELIST = [WB4_VERDICT_A_PREFIX, WB4_VERDICT_B, WB4_VERDICT_SCOPE];
+const WB4_FORBIDDEN = ["预算耗尽", "收口", "阈值"];
+/** 禁词的**程序化**分布读数：每一处出现在全卡的哪个位置、是否落在给定白名单句内（不肉眼）。 */
+const forbiddenScan = (card, word, whitelist) => {
+	const spans = [];
+	for (const sentence of whitelist) {
+		let mark = card.indexOf(sentence);
+		while (mark !== -1) {
+			spans.push([mark, mark + sentence.length]);
+			mark = card.indexOf(sentence, mark + sentence.length);
+		}
+	}
+	const hits = [];
+	let mark = card.indexOf(word);
+	while (mark !== -1) {
+		hits.push(mark);
+		mark = card.indexOf(word, mark + word.length);
+	}
+	return { hits, outside: hits.filter((index) => !spans.some(([start, end]) => index >= start && index < end)) };
+};
+/** 指纹 = 每个禁词的「全卡出现次数 / 落在白名单外的次数」（读数写进断言名，失败即可读）。 */
+const forbiddenFingerprint = (card, whitelist) => WB4_FORBIDDEN.map((word) => {
+	const scan = forbiddenScan(card, word, whitelist);
+	return word + ":" + scan.hits.length + "/" + scan.outside.length;
+}).join(" ");
+check("U7 判读行（读数可得）: 否定式结论 ——「未见收口理由：本系统按压力自动压缩，结构上不存在『预算耗尽』。」**后接 FR-14 的范围界定句**（判读行 = ② + ③ 两句逐字拼接）；且不做「低于阈值」的比较",
+	wb4Verdict === WB4_VERDICT_B + WB4_VERDICT_SCOPE && !wb4Verdict.includes("阈值"));
+check("U7 禁用词（程序化计数，不肉眼）: 「预算耗尽」与「收口」全卡各**恰一次**、且每一处都落在三句白名单内（都在那条判读行里）；「阈值」在判读行内零命中 —— 指纹 " + forbiddenFingerprint(wb4StatusText, WB4_VERDICT_WHITELIST),
+	(() => {
+		const budget = forbiddenScan(wb4StatusText, "预算耗尽", WB4_VERDICT_WHITELIST);
+		const closed = forbiddenScan(wb4StatusText, "收口", WB4_VERDICT_WHITELIST);
+		return budget.hits.length === 1 && budget.outside.length === 0
+			&& closed.hits.length === 1 && closed.outside.length === 0
+			&& forbiddenScan(wb4StatusText, "阈值", WB4_VERDICT_WHITELIST).outside.length === 0
+			&& !wb4Verdict.includes("阈值")
+			&& wb4Verdict.split("预算耗尽").length - 1 === 1 && wb4Verdict.split("收口").length - 1 === 1;
+	})());
+check("U7 白名单扩到三句（批 6 / FR-14）: 新增第三句之后三个禁词的**程序化指纹**在「原两句白名单」与「新三句白名单」下逐字相同 —— 新增句一个禁词都没引入，也没有把任何一处禁词挪到白名单外 —— 旧 " + forbiddenFingerprint(wb4StatusText, [WB4_VERDICT_A_PREFIX, WB4_VERDICT_B]) + " · 新 " + forbiddenFingerprint(wb4StatusText, WB4_VERDICT_WHITELIST),
+	WB4_FORBIDDEN.every((word) => !WB4_VERDICT_SCOPE.includes(word))
+		&& forbiddenFingerprint(wb4StatusText, [WB4_VERDICT_A_PREFIX, WB4_VERDICT_B]) === forbiddenFingerprint(wb4StatusText, WB4_VERDICT_WHITELIST));
+check("U24 ①逐字范围句: 判读行**含** FR-14 的逐字原句（含四个 em dash）、紧接在既有白名单句之后，且三处范围标记都在（「只判上下文/预算」·「属另一类」·「不在本节口径内」）—— 既有两句一字未改（逐字等号在前半句上）",
+	wb4Verdict.endsWith(WB4_VERDICT_SCOPE) && wb4Verdict === WB4_VERDICT_B + WB4_VERDICT_SCOPE
+		&& WB4_VERDICT_SCOPE.includes("只判上下文/预算") && WB4_VERDICT_SCOPE.includes("属另一类") && WB4_VERDICT_SCOPE.includes("不在本节口径内"));
+check("U24 ①b 两支都带（范围界定是**判读行**的属性，与读数是否可得无关）: 读数不可得支同样接这一句 —— 既有那句「读数不可得，不作判读（原因…）」逐字不变，只在末尾多这一句",
+	await (async () => {
+		const section = wb4SectionOf(await wb4StatusLines(wb4Env({ omitProjections: true })), "--- 资源/预算");
+		const verdict = at(section, section.length - 1, "");
+		return verdict.startsWith(WB4_VERDICT_A_PREFIX) && verdict.endsWith(WB4_VERDICT_SCOPE);
+	})());
+check("U24 ②不引入禁词（程序化计数）: 范围句单看对三个禁词的指纹恒为 0；并入之后**全卡指纹**与原两句白名单下逐字相同 —— 新句指纹 " + forbiddenFingerprint(WB4_VERDICT_SCOPE, WB4_VERDICT_WHITELIST),
+	WB4_FORBIDDEN.every((word) => !WB4_VERDICT_SCOPE.includes(word))
+		&& forbiddenScan(WB4_VERDICT_SCOPE, "预算耗尽", WB4_VERDICT_WHITELIST).hits.length === 0
+		&& forbiddenScan(WB4_VERDICT_SCOPE, "收口", WB4_VERDICT_WHITELIST).hits.length === 0
+		&& forbiddenScan(WB4_VERDICT_SCOPE, "阈值", WB4_VERDICT_WHITELIST).hits.length === 0
+		&& forbiddenFingerprint(wb4StatusText, [WB4_VERDICT_A_PREFIX, WB4_VERDICT_B]) === forbiddenFingerprint(wb4StatusText, WB4_VERDICT_WHITELIST));
 check("U7 判读行（读数不可得）: 整行如实标不可读并给原因码，判读行改说「读数不可得，不作判读」",
 	await (async () => {
 		const env = wb4Env({ omitProjections: true });
