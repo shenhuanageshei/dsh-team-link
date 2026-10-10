@@ -67,6 +67,8 @@
 （`SANDBOX_POLICY 110` / `APPROVAL_POLICY 115` / `SUBAGENT_DELEGATION 120`）与 130 未被占用。
 判据与读数见 [`docs/verification-log.md`](docs/verification-log.md) 的「2026-10-10 批 C」与其分歧修复轮两节。
 
+**宿主换代还必复核 `agent/pre-step` 事件面（2026-10-11 批 D 补立，与上面三条并列）**：批 D 起，段/上下文注册的可达性依赖 `ctx.on("agent/pre-step", …)`（本插件用它做「名册想要、但还没挂上」的自愈）。⇒ 换代复核时**静态检索宿主 app.asar 里的 `agent/pre-step`**，确认事件名与载荷形状（`{ agent, turn, step, signal }`）仍在；若宿主改名或改形状，自愈会**静默失效**（退回「重启后不自动补挂」的旧行为，不是更差），判据见 docs/verification-log.md 的批 D 各节。
+
 ## 五、网络与推送
 
 - GitHub 直连常报 Recv failure: Connection was reset；本机代理可用时按命令临时指定（**不改全局配置**）：

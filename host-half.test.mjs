@@ -10114,22 +10114,37 @@ const wb2RenderWarnCount = (env) => env.log.lines.warn.filter((line) => line.inc
 const wb2StepEnv = wb2Env({ projections: wb2Readings() });
 const wb2StepRecord = at(wb2StepEnv.systemPrompt.live(), 0, { text: () => "" });
 const wb2StepFirst = wb2StepRecord.text({});
-const wb2StepResourceBefore = __testing.renderResourceLine(wb2StepEnv.ctx, wb2StepEnv.senderAgent);
-/** 一次「步进」：三个投影读数各前进一格 —— 改前正是这三个洞让段文本逐回合变。 */
-const wb2StepForward = (env) => {
-	env.projections.readings.contextPressure = { contextWindow: 1_000_000, pressureTokens: 320_000, surfaceTokens: 260_000 };
+/** ★ 批 D（§5.2 第 3 行）**改写**：原来这里用**无门控**的 `renderResourceLine` 直调两次、断言
+ *  「读数前进 ⇒ 行跟着变」。回合门落地后「连续两次渲染必不同」不再成立 ⇒ 拆成两段：
+ *  **同回合内只改读数**（行必须逐字节不变）＋**推进 turns**（行必须跟随）。两个夹具读的是
+ *  模型可见的那条通道（context 记录），不是直调函数。
+ *  ★ 口径（分歧修复轮 · 审计 D2 · **范围化**，与 lib/index.js 的两处注释同一句）：`probe` **自身**
+ *  零额外读（它复用渲染体已经读过的那一次 `sessionStats`）⇒ **未命中**（无缓存条目）时投影读恰
+ *  **3** 次（那三个 key）；**命中**（同回合）时由门控读 **1** 次 `sessionStats`（`currentTurnOf`，
+ *  渲染体整段不跑）；**条目在场但回合已前进**时 ＝ 1 ＋ 3 ＝ **4** 次。⇒「不额外多读投影」只对
+ *  **未命中支的渲染体**成立，不是全称句。下面「批 C · U4 只读那三个 key」那条**冷路径计数判据**
+ *  （首次渲染 ⇒ 未命中 ⇒ `made.length === 6`）**不在收窄之列，逐字原样不动**。 */
+const wb2StepPressure = (env, pressureTokens) => {
+	env.projections.readings.contextPressure = { contextWindow: 1_000_000, pressureTokens, surfaceTokens: 260_000 };
 	env.projections.readings.tokenUsage = { totals: { uncachedInputTokens: 100, outputTokens: 200, cacheReadTokens: 300, cacheWriteTokens: 400 }, last: { turn: 8, step: 1 } };
+};
+/** 一次「步进」的另一半：**推进回合号**（改前正是这三个洞让段文本逐回合变）。 */
+const wb2StepForward = (env) => {
 	env.projections.readings.sessionStats = { turns: 8, steps: 24 };
 };
-wb2StepForward(wb2StepEnv);
+const wb2StepLineBefore = wb2ContextTextAt(wb2StepEnv, 0);   // 首次渲染 ⇒ 门控未命中 ⇒ 现算（第 7 轮 / 250.0K）
+wb2StepPressure(wb2StepEnv, 320_000);                        // 同回合内只改读数
+const wb2StepLineSameTurn = wb2ContextTextAt(wb2StepEnv, 0); // ⇒ 必须逐字节不变（回合门）
+wb2StepForward(wb2StepEnv);                                  // 推进 turns（7 → 8）
+const wb2StepLineNextTurn = wb2ContextTextAt(wb2StepEnv, 0); // ⇒ 必须跟着变（原意图）
 const wb2StepSecond = wb2StepRecord.text({});
-const wb2StepResourceAfter = __testing.renderResourceLine(wb2StepEnv.ctx, wb2StepEnv.senderAgent);
 check("批 C · U1 段文本跨步恒定（锚）: 同一会话连续两次装配，section 记录的 text() 返回值**逐字节相等**（===，非 trim、非包含）—— 投影读数前进一格也不动它",
 	wb2StepFirst.length > 0 && wb2StepFirst === wb2StepSecond);
-check("批 C · U1 对照（★ 负相：夹具真的推得动，上一条不是恒真）: 同一时刻**资源行**随读数前进而变（第 7 轮 → 第 8 轮 / 压力 250.0K → 320.0K）；把资源行塞回段渲染体 ⇒ 上面那条立刻红",
-	wb2StepResourceBefore !== wb2StepResourceAfter
-		&& wb2StepResourceBefore.includes("第 7 轮") && wb2StepResourceAfter.includes("第 8 轮")
-		&& wb2StepResourceBefore.includes("压力 250.0K（25.0%）") && wb2StepResourceAfter.includes("压力 320.0K（32.0%）"));
+check("批 C · U1 对照（★ 负相：夹具真的推得动，上一条不是恒真 · 批 D 按 §5.2 第 3 行改写为「同回合必相同 / 跨回合必不同」）: **同一个 turns 内**只改桩读数 ⇒ 资源行**逐字节不变**（回合门生效）；**推进 turns 之后** ⇒ 资源行跟着读数变（第 7 轮 → 第 8 轮 / 压力 250.0K → 320.0K）—— 原意图「读数驱动渲染」由跨回合那一半保留；把资源行塞回段渲染体 ⇒ 上面那条锚立刻红",
+	wb2StepLineBefore.length > 0 && wb2StepLineBefore === wb2StepLineSameTurn
+		&& wb2StepLineNextTurn !== wb2StepLineBefore
+		&& wb2StepLineBefore.includes("第 7 轮") && wb2StepLineBefore.includes("压力 250.0K（25.0%）")
+		&& wb2StepLineNextTurn.includes("第 8 轮") && wb2StepLineNextTurn.includes("压力 320.0K（32.0%）"));
 
 // --- 批 C · U2：段文本零命中 --------------------------------------------------------
 const wb2SectionTexts = wb2EnvBase.systemPrompt.live().map((record) => record.text({}));
@@ -10197,6 +10212,28 @@ check("批 C · U4 三种不可读各说各的: 服务缺席 / 投影未注册 /
 check("批 C · U4 渲染体不吃宿主抛错: 投影 stateOf 抛错 ⇒ 行内如实说「不可读（投影读取抛错…）」，两面照旧都是字符串（装配不会失败）",
 	(() => { const env = wb2Env({ projectionsThrows: true }); const line = wb2ContextTextAt(env, 0); const section = wb2TextAt(env.systemPrompt.live(), 0);
 		return typeof line === "string" && line.includes("投影读取抛错") && typeof section === "string" && section.includes("职责边界") && !section.includes("投影读取抛错"); })());
+
+// --- 批 C · U4 改写（批 D §5.2 第 1 行）：读数驱动渲染 ⇒ 同回合不变 / 跨回合跟随 -------
+// 原名 `批 C · U4 资源行四项 ← 三个 key`（其红相构造＝「改桩读数 ⇒ 行不跟着变」）⇒ 新名见下。
+// 保留的意图：四项展示值**由那三个 key 驱动**；改写点：驱动关系只在**跨回合**可见（§4.3 的代价）。
+// ★ 分歧修复轮（审计 D3）：名字改成「`批 C · ` 前缀 ＋ **原断言名** ＋ 改写注记」—— §5.2 的落地要求是
+//   「其名字**或注释**里保留 `批 C · ` 前缀**与原断言名**」，原名字段只在注释里就是那一半没落地。
+//   上文那条注释（原名与保留的意图）**原样保留**，不删。
+check("批 C · U4 资源行四项 ← 三个 key（批 D §5.2 第 1 行改写 · 回合门）: **同一个 turns 内**只改桩读数 ⇒ 四项展示值**一个都不动**（门控生效）；**推进 turns**（7 → 8）之后 ⇒ 四项**逐项跟随**（窗口 1.00M→500.0K / 压力 250.0K→400.0K（80.0%）/ 累计 ≈1.0K→≈34 / 第 7 轮→第 8 轮）—— 原意图「读数驱动渲染」由跨回合那一半保留",
+	(() => {
+		const env = wb2Env({ projections: wb2Readings() });
+		const first = wb2ContextTextAt(env, 0);
+		// 同回合：只改读数，**不动 turns**
+		env.projections.readings.contextPressure = { contextWindow: 500_000, pressureTokens: 400_000, surfaceTokens: 300_000 };
+		env.projections.readings.tokenUsage = { totals: { uncachedInputTokens: 7, outputTokens: 8, cacheReadTokens: 9, cacheWriteTokens: 10 }, last: { turn: 7, step: 4 } };
+		const sameTurn = wb2ContextTextAt(env, 0);
+		// 跨回合：turns 前进 ⇒ 重新现算
+		env.projections.readings.sessionStats = { turns: 8, steps: 24 };
+		const nextTurn = wb2ContextTextAt(env, 0);
+		return first === sameTurn
+			&& first.includes("窗口 1.00M") && first.includes("压力 250.0K（25.0%）") && first.includes("累计 ≈1.0K") && first.includes("第 7 轮")
+			&& nextTurn !== first && nextTurn.includes("窗口 500.0K") && nextTurn.includes("压力 400.0K（80.0%）") && nextTurn.includes("累计 ≈34") && nextTurn.includes("第 8 轮");
+	})());
 
 // --- 评审 #3：行数预算（批 C 复核：预算没变，只是资源行换了落点） ---------------------
 check("评审 #3 行数预算: 段只剩角色文本（宪章 ≤8 行、当前 7 行）、资源行**恰 1 行**且落在 context 通道（无换行）",
@@ -10371,7 +10408,7 @@ check("U4 代理消失: 名册还留着它，但代理没了 ⇒ 段被 dispose�
 	wb2GoneEnv.systemPrompt.sections.some((record) => record.disposed === 1) && !wb2Gone.registered.has("session-worker-a") && wb2Gone.registered.size === 1);
 
 // --- 批 C · U9：coordinator 与 worker **两类会话同覆盖**（用户 2026-10-10 明确要求） --
-check("批 C · U9 两类会话同覆盖: coordinator 与 worker **都**拿到 context 注册（同名同 order：team-link:resources / 130）、**两者**的段文本跨步逐字节恒定、**两者**的资源行随读数前进而变；worker 的段仍含义务行且**不含**资源行（只给协调者挂 context ⇒ 本条红）",
+check("批 C · U9 两类会话同覆盖（★ 批 D 按 §5.2 第 2 行改写「资源行随读数变」那一句）：coordinator 与 worker **都**拿到 context 注册（同名同 order：team-link:resources / 130）、**两者**的段文本跨步逐字节恒定、**两者**的资源行**同回合内不变 / 跨回合跟随**（先只改读数不推进 turns ⇒ 两条都必须逐字节不变；再推进 turns ⇒ 两条都跟随）；worker 的段仍含义务行且**不含**资源行（只给协调者挂 context ⇒ 本条红）",
 	(() => {
 		const env = wb2Env({ projections: wb2Readings() });
 		const liveContexts = env.systemPrompt.liveContexts();
@@ -10382,15 +10419,54 @@ check("批 C · U9 两类会话同覆盖: coordinator 与 worker **都**拿到 c
 		const workerSection = liveSections[1].text({});
 		const coordLine = liveContexts[0].text({});
 		const workerLine = liveContexts[1].text({});
-		// 一次步进：读数全前进（改前正是这一步让**段文本**跟着变 ⇒ 前缀缓存断在这里）。
+		// ① 同回合：只改读数（**不动 turns**）⇒ 两条资源行都必须逐字节不变（回合门生效）。
 		env.projections.readings.contextPressure = { contextWindow: 1_000_000, pressureTokens: 900_000, surfaceTokens: 800_000 };
+		const sameTurn = liveContexts[0].text({}) === coordLine && liveContexts[1].text({}) === workerLine;
+		// ② 跨回合：推进 turns ⇒ 两条资源行这才跟随（原意图「资源行随读数前进而变」由这一半保留）。
 		env.projections.readings.sessionStats = { turns: 99, steps: 300 };
-		return liveSections[0].text({}) === coordSection && liveSections[1].text({}) === workerSection
-			&& liveContexts[0].text({}) !== coordLine && liveContexts[1].text({}) !== workerLine
+		const nextTurn = liveContexts[0].text({}) !== coordLine && liveContexts[1].text({}) !== workerLine;
+		return sameTurn && nextTurn
+			&& liveSections[0].text({}) === coordSection && liveSections[1].text({}) === workerSection
 			&& coordSection.startsWith("你是团队 wb2-team 的协调者") && coordSection.includes("职责边界") && !coordSection.includes("[team-link 会话资源]")
 			&& workerSection.startsWith("你是团队 wb2-team 的角色 worker-a") && workerSection.includes("不要静默等待") && !workerSection.includes("职责边界")
 			&& !workerSection.includes("[team-link 会话资源]")
 			&& coordLine.startsWith("[team-link 会话资源]") && workerLine.startsWith("[team-link 会话资源]");
+	})());
+
+// --- 批 C · U9 续（批 D 分歧修复轮 · 审计 D4）：门控**按 sessionId 分键**的隔离性 ---------
+// 为什么单列一条：改写后的 U9 只在**一个** `wb2Env` 里取 `liveContexts()`，虽然那两条上下文属于
+// 两个不同会话，但「同回合内 B 现算不污染 A」这层**分键**性质没有被任何判据咬住 —— 把 `turnGate`
+// 换成单键共享（例如固定键）也能让改写后的 U9 全绿。本条把两个独立会话各自的条目单独读一遍。
+const wb9IsoEnv = wb2Env({ projections: wb2Readings() });
+const wb9IsoSections = __testing.sectionsFor(wb9IsoEnv.ctx);
+const wb9IsoContexts = wb9IsoEnv.systemPrompt.liveContexts();
+const wb9IsoA = at(wb9IsoContexts, 0, { text: () => "" });   // 协调者（session-self）
+const wb9IsoB = at(wb9IsoContexts, 1, { text: () => "" });   // worker（session-worker-a）
+const wb9IsoA1 = wb9IsoA.text({});                           // A 首渲染 ⇒ 未命中 ⇒ 现算（压力 250.0K / 第 7 轮）
+wb9IsoEnv.projections.readings.contextPressure = { contextWindow: 1_000_000, pressureTokens: 900_000, surfaceTokens: 800_000 };   // 同回合内只改读数
+const wb9IsoB1 = wb9IsoB.text({});                           // B 首渲染 ⇒ B 无条目 ⇒ 未命中 ⇒ 现算（压力 900.0K）
+const wb9IsoA2 = wb9IsoA.text({});                           // 回到 A：仍同一回合 ⇒ 必须命中 **A 自己**的条目
+check("批 C · U9 续（批 D 分歧修复轮 · 审计 D4 · 门控按 sessionId 分键的隔离性，红相＝turnGate 换成单键共享（固定键）⇒ B 的条目覆盖 A ⇒ 本条红）: 两个**独立会话**各持自己的条目 —— 同一回合内 B 现算（读数已改）**不污染** A：A 再渲染**逐字节等于它自己那条**（压力 250.0K / 第 7 轮，不是 B 的 900.0K）；两条条目各自 `turn=7`、`text` 各自对应；推进 turns（7 → 8）⇒ **两条各自重算**（各自条目都前进到 8、文本都跟着新读数变成 400.0K / 第 8 轮）—— 不是一条替另一条背书",
+	(() => {
+		const aEntry = wb9IsoSections.turnGate.get("session-self");
+		const bEntry = wb9IsoSections.turnGate.get("session-worker-a");
+		// 前置守卫：夹具必须**能把两条行区分开**（否则「隔离性」无从观察，本条会假绿）。
+		if (wb9IsoA1 === wb9IsoB1) return false;
+		if (!wb9IsoA1.includes("压力 250.0K（25.0%）") || !wb9IsoB1.includes("压力 900.0K（90.0%）")) return false;
+		if (wb9IsoA2 !== wb9IsoA1 || !wb9IsoA2.includes("压力 250.0K")) return false;
+		if (aEntry?.turn !== 7 || aEntry?.text !== wb9IsoA1) return false;
+		if (bEntry?.turn !== 7 || bEntry?.text !== wb9IsoB1) return false;
+		// ② 跨回合：两条**各自**重算（同一份全局读数 ⇒ 两条文本自然相同，判的是「各自都前进」）。
+		wb9IsoEnv.projections.readings.contextPressure = { contextWindow: 1_000_000, pressureTokens: 400_000, surfaceTokens: 300_000 };
+		wb9IsoEnv.projections.readings.sessionStats = { turns: 8, steps: 26 };
+		const a8 = wb9IsoA.text({});
+		const b8 = wb9IsoB.text({});
+		return a8.includes("压力 400.0K（40.0%）") && a8.includes("第 8 轮")
+			&& b8.includes("压力 400.0K（40.0%）") && b8.includes("第 8 轮")
+			&& wb9IsoSections.turnGate.get("session-self")?.turn === 8
+			&& wb9IsoSections.turnGate.get("session-worker-a")?.turn === 8
+			&& wb9IsoSections.turnGate.get("session-self")?.text === a8
+			&& wb9IsoSections.turnGate.get("session-worker-a")?.text === b8;
 	})());
 
 // --- 评审裁定 #9：rearm 跳过过期条目 ----------------------------------------------
@@ -10718,13 +10794,30 @@ const wb4ClearFirst = wb4ClearAuto()[0]?.id;
 // 断言照样绿（假绿）。先把「确实有一条 auto 注册」钉住。
 check("U17 clear 前置（t-13 🔵3）: 建队确实写了一条 auto 注册（否则 clear 退化成 no-op、下面的不自愈断言会假绿）",
 	typeof wb4ClearFirst === "string" && wb4ClearFirst.startsWith("wd-") && wb4ClearAuto().length === 1);
+// ★ 批 D（FR-2）**改写**（纪律＝改写而不是删除，逐条留证）：auto 注册**再也清不掉** ⇒
+//   旧判据「清掉的 auto 注册**同进程不自愈**」的**对象已不存在**（清都清不掉，无所谓自愈）。
+//   原意图「没有任何懒自愈支路」原样保留，只把对象换成**手工**那一档（它仍可被 clear 清掉），
+//   并把 auto 那一档改成一条**更强**的性质：根本拿不走。设计档见 §5.2 的改写纪律与 §6.5。
 const wb4ClearOut = String(await wb4ClearEnv.tool("team_link_watch").execute({ action: "clear", id: wb4ClearFirst }, execFor(wb4ClearEnv.senderAgent)));
-check("U17 clear 前置（对照）: clear 真的删掉了那一条（读数点名 id，不是 no-op）",
-	wb4ClearOut.includes("已清理看门狗注册 " + wb4ClearFirst) && wb4ClearAuto().length === 0);
+check("U17 clear 前置（批 D 改写 · 原名「clear 真的删掉了那一条」）: auto 注册**拿不走** —— clear id=<auto 的 id> 被拒（回执点名「全队工作台」＋「未清除」＋那个 id），注册表里那条 auto **仍在且 id 未变**（真期望＝它只由 TTL 到期或团队解散消失）",
+	wb4ClearOut.includes("清除失败") && wb4ClearOut.includes("全队工作台") && wb4ClearOut.includes("未清除")
+		&& wb4ClearOut.includes(wb4ClearFirst)
+		&& wb4ClearAuto().length === 1 && at(wb4ClearAuto(), 0, {}).id === wb4ClearFirst
+		&& __testing.watchdogFor(wb4ClearEnv.ctx).timers.has(wb4ClearFirst));
+// 对象换成**手工**那一档：清掉之后，状态卡与一轮巡逻都不把它挂回来（原意图「没有懒自愈支路」）。
+const wb4ManualTarget = at(wb4ClearEnv.creates, 0, {}).sessionId;
+const wb4ManualReg = String(await wb4ClearEnv.tool("team_link_watch").execute({ action: "register", targets: [wb4ManualTarget] }, execFor(wb4ClearEnv.senderAgent)));
+const wb4ManualId = (wb4ManualReg.match(/(wd-[0-9a-f-]{36})/u) ?? [])[1];
+const wb4ManualClear = String(await wb4ClearEnv.tool("team_link_watch").execute({ action: "clear", id: wb4ManualId }, execFor(wb4ClearEnv.senderAgent)));
 await wb4StatusLines(wb4ClearEnv);
 await __testing.watchdogFor(wb4ClearEnv.ctx).patrol({ now: Date.now() });
-check("U17 清掉的 auto 注册**同进程不自愈**: clear 之后状态卡与一轮巡逻都不把它挂回来（没有任何懒自愈支路 —— 只有下一次 /team_session 建队才会重挂，那是显式写路径）",
-	wb4ClearAuto().length === 0 && __testing.watchdogFor(wb4ClearEnv.ctx).timers.size === 0);
+check("U17 同进程不自愈（批 D 改写 · 原名「清掉的 auto 注册同进程不自愈」，对象由 auto 换成**手工**）: 手工那条 clear 成功（回执点名 id）⇒ 随后状态卡 + 一轮巡逻都**不把它挂回来**（没有任何懒自愈支路）；同时 auto 那条全程仍在、它的定时器仍在（两条读数一起读，证明「不回来」不是清场清出来的）",
+	typeof wb4ManualTarget === "string" && wb4ManualId !== undefined
+		&& wb4ManualClear.includes("已清理看门狗注册 " + wb4ManualId)
+		&& !wb4ClearEnv.settings.namespaces.get("team-link").data.watchdogs.some((entry) => entry.id === wb4ManualId)
+		&& wb4ClearAuto().length === 1 && at(wb4ClearAuto(), 0, {}).id === wb4ClearFirst
+		&& __testing.watchdogFor(wb4ClearEnv.ctx).timers.has(wb4ClearFirst)
+		&& !__testing.watchdogFor(wb4ClearEnv.ctx).timers.has(wb4ManualId));
 // ===========================================================================
 // 批 5 · FR-10 attach 按队补挂 / FR-11 patrol 段同步 / FR-12 arm-team / FR-13 跨工作区读窗
 // 判据：U20（attach 补挂 + 幂等）· U21（现任晚启动，一个巡检间隔内拿到段）·
@@ -10831,10 +10924,25 @@ check("U22 描述面（模型可见）: 新动词进 action 枚举，描述正�
 		&& u22Tool.parameters.properties.team !== undefined
 		&& u22Tool.description.includes("arm-team") && u22Tool.description.includes("幂等")
 		&& u22Tool.description.includes("非现任") && u22Tool.description.includes("不占这 3 条手工额度"));
-// 起点 = 「建队早于本功能的老团队 / 被 clear 过」的零注册态：用**既有 clear 命令**腾空（不直接改数据）。
-const u22Cleared = String(await u22Tool.execute({ action: "clear" }, execFor(u22Env.senderAgent)));
-check("U22 前置: clear 之后该队零注册（起点干净 —— 否则「新增一条」会被 attach 补挂的旧行顶替而假绿）",
-	u22Cleared.includes("已清理") && b5Watchdogs(u22Env).length === 0);
+// 起点（批 D FR-2 改写）：auto 注册**拿不走** ⇒ 「用既有 clear 命令腾空」不再是一条可用的开工姿势
+// （clear 现在只清手工）。零注册态改用另一条**同样不碰数据**的成立方式：在 attach **之后**建队 ——
+// ensure 只在 attach 与 arm-team 两处跑，新队因此没人跑过它，正是「建队早于 auto 功能的老团队」那个
+// 零注册态。判据仍是「该队此刻零注册」，守的还是原来那件事：否则「新增一条」会被别处补挂的旧行顶替。
+const U22_ARM = "u22-arm-fresh";
+const U22_ARM_WORKER = "u22-worker-c";
+const u22Roster = u22Env.tool("team_link_roster");
+await u22Roster.execute({ action: "upsert-team", team: U22_ARM }, execFor(u22Env.senderAgent));
+await u22Roster.execute({ action: "set-role", team: U22_ARM, role: "worker-a", session: U22_ARM_WORKER }, execFor(u22Env.senderAgent));
+const u22ArmRows = () => b5Watchdogs(u22Env).filter((entry) => entry.team === U22_ARM);
+/** 批 D：拒绝路径的「零写入」读数从绝对值 0 改成**逐字节基线**（attach 现在会给 U22_TEAM 补挂一条
+ *  auto ⇒ 表里本来就不是空的；改成前后逐字节相同比原来那条「长度 === 0」更强，不是放宽）。 */
+const u22Baseline = JSON.stringify(b5Watchdogs(u22Env));
+const u22Unchanged = () => JSON.stringify(b5Watchdogs(u22Env)) === u22Baseline;
+/** attach 补挂给 U22_TEAM 那条 auto 的 id（幂等那一半要钉「id 未变」）。 */
+const u22TeamAutoId = (JSON.parse(u22Baseline).find((entry) => entry.origin === "auto" && entry.team === U22_TEAM) ?? {}).id;
+check("U22 前置（批 D 改写：原名「clear 之后该队零注册」）: 新队 U22_ARM 的注册数**恰为 0**（起点干净 —— 否则「新增一条」会被别处补挂的旧行顶替而假绿）；同时 U22_TEAM 那条 attach 补挂的 auto 仍在（旧写法靠 clear 腾空，FR-2 之后 auto 拿不走）",
+	u22ArmRows().length === 0 && b5Auto(u22Env).length === 1 && at(b5Auto(u22Env), 0, {}).team === U22_TEAM
+		&& at(b5Auto(u22Env), 0, {}).watcherSession === "session-self");
 const u22OutsideExec = execFor(u22Env.agentFor(U22_OUTSIDE));
 const u22RefuseImplicit = String(await u22Tool.execute({ action: "arm-team" }, u22OutsideExec));
 const u22RefuseExplicit = String(await u22Tool.execute({ action: "arm-team", team: U22_TEAM }, u22OutsideExec));
@@ -10842,16 +10950,16 @@ const u22RefuseUnknown = String(await u22Tool.execute({ action: "arm-team", team
 const u22RefuseVacant = String(await u22Tool.execute({ action: "arm-team", team: U22_VACANT }, execFor(u22Env.senderAgent)));
 check("U22 拒绝①（非现任 · 省略 team）: 点名原因（当前会话不是任何队的现任协调者 + 名册里各队的现任是谁），零写入",
 	u22RefuseImplicit.includes("不是名册里任何团队的现任协调者") && u22RefuseImplicit.includes(U22_OUTSIDE)
-		&& u22RefuseImplicit.includes("session-self") && b5Watchdogs(u22Env).length === 0);
+		&& u22RefuseImplicit.includes("session-self") && u22Unchanged());
 check("U22 拒绝②（非现任 · 点名 team；红相＝放行非现任 ⇒ 本条红）: 点名该队现任会话与当前调用会话，零写入",
 	u22RefuseExplicit.includes("补挂失败") && u22RefuseExplicit.includes("只有团队 " + U22_TEAM + " 的现任协调者会话 session-self")
-		&& u22RefuseExplicit.includes(U22_OUTSIDE) && b5Watchdogs(u22Env).length === 0);
+		&& u22RefuseExplicit.includes(U22_OUTSIDE) && u22Unchanged());
 check("U22 拒绝③（队不在名册）: 点名「不在名册中」并列出已知团队，零写入",
 	u22RefuseUnknown.includes("不在名册中") && u22RefuseUnknown.includes(U22_TEAM) && u22RefuseUnknown.includes(U22_VACANT)
-		&& b5Watchdogs(u22Env).length === 0);
+		&& u22Unchanged());
 check("U22 拒绝④（coordinator 空缺）: 点名空缺 + writer gate 语义 + 指路设置 UI，零写入",
 	u22RefuseVacant.includes("coordinator 角色当前空缺") && u22RefuseVacant.includes("writer gate 语义沿用")
-		&& u22RefuseVacant.includes("设置 UI") && b5Watchdogs(u22Env).length === 0);
+		&& u22RefuseVacant.includes("设置 UI") && u22Unchanged());
 // 边界（设计档 FR-12 原文「非现任 ⇒ 拒绝」是无条件的，比 writerGate 紧一档）：writer=any 的队也只
 // 受理它的现任协调者 —— 拒绝理由必须按档说，不能对 writer=any 的队念一句 coordinator 档的话。
 const U22_ANY = "u22-any";
@@ -10868,17 +10976,19 @@ check("U22 边界（writer=any 的队）: 仍然只受理现任（比 writerGate
 		&& u22AnyRefuse.includes("紧一档") && !u22AnyRefuse.includes("policy.writer=coordinator 时非现任拒写")
 		&& b5Watchdogs(u22AnyEnv).length === u22AnyRowsBefore);
 
-const u22First = String(await u22Tool.execute({ action: "arm-team" }, execFor(u22Env.senderAgent)));
-const u22RowsFirst = b5Auto(u22Env);
-check("U22 现任可用: 一条命令补挂 —— 恰一条 origin=auto（watcher=调用方=该队现任、targets=除它之外的队员），返回值点名注册 id 与目标（复用 FR-10 的 ensure，不另写一份；红相＝摘掉 arm-team 分支 ⇒ 本条红）",
-	u22First.includes("已补挂工作台注册 wd-") && u22RowsFirst.length === 1
-		&& at(u22RowsFirst, 0, {}).watcherSession === "session-self" && at(u22RowsFirst, 0, {}).team === U22_TEAM
-		&& at(u22RowsFirst, 0, {}).targets.join(",") === "u22-worker-a,u22-worker-b"
-		&& u22First.includes("u22-worker-a, u22-worker-b") && u22First.includes("幂等"));
+const u22First = String(await u22Tool.execute({ action: "arm-team", team: U22_ARM }, execFor(u22Env.senderAgent)));
+const u22ArmId = at(u22ArmRows(), 0, {}).id;
+check("U22 现任可用（批 D 改写：改用 attach 之后新建的队 —— 该队此前零注册，所以「新增一条」不是拿别处补挂的旧行冒充）: 一条命令补挂 —— 该队**恰一条** origin=auto（watcher=调用方=该队现任、targets=除它之外的队员），返回值点名注册 id 与目标（复用 FR-10 的 ensure，不另写一份；红相＝摘掉 arm-team 分支 ⇒ 本条红）",
+	u22First.includes("已补挂工作台注册 wd-") && u22ArmRows().length === 1
+		&& at(u22ArmRows(), 0, {}).watcherSession === "session-self" && at(u22ArmRows(), 0, {}).team === U22_ARM
+		&& at(u22ArmRows(), 0, {}).targets.join(",") === U22_ARM_WORKER
+		&& u22First.includes(U22_ARM_WORKER) && u22First.includes("幂等")
+		&& typeof u22ArmId === "string" && u22ArmId.startsWith("wd-"));
 const u22Second = String(await u22Tool.execute({ action: "arm-team" }, execFor(u22Env.senderAgent)));
-check("U22 幂等: 第二次调用**不新增**（条数仍 1、id 未变）；判据钉的是「条数 + id」，返回值里那句「幂等：本次未新增」只作旁证（文案不能自证）",
+check("U22 幂等: 第二次调用（**省略 team** ⇒ 覆盖调用方任现任的所有队：U22_TEAM 与 U22_ARM 各一条）**不新增** —— 两队条数仍各 1、id 都未变；判据钉的是「条数 + id」，返回值里那句「幂等：本次未新增」只作旁证（文案不能自证）",
 	u22Second.includes("已有工作台注册") && u22Second.includes("幂等：本次未新增")
-		&& b5Auto(u22Env).length === 1 && at(b5Auto(u22Env), 0, {}).id === at(u22RowsFirst, 0, {}).id);
+		&& u22ArmRows().length === 1 && at(u22ArmRows(), 0, {}).id === u22ArmId
+		&& at(b5Auto(u22Env).filter((entry) => entry.team === U22_TEAM), 0, {}).id === u22TeamAutoId);
 
 // --- U23: 跨工作区读窗（FR-13）--------------------------------------------------
 const U23_TEAM = "u23-cross";
@@ -11147,6 +11257,276 @@ check("U31 三段各自署名: plan（没有可盯成员）/ write（写入失�
 		&& new Set([u31Plan.stage, u31Write.stage, u31Schedule.stage]).size === 3
 		&& u31Write.entry === undefined && String(u31Write.error).includes("写入失败") && !String(u31Write.error).includes("定时器未挂上")
 		&& u31Schedule.entry !== undefined && String(u31Schedule.error).includes("已写入但定时器未挂上"));
+
+// ===========================================================================
+// 批 D · 注册生命周期与自动提示（FR-1…FR-3）
+// 归属：docs/2026-10-10-registration-lifecycle-design.md §0.3（用户拍板 A）· §4.3（回合门）·
+// §5（FR-1…FR-3）· §6（§6.1–§6.6 机制伪代码）· §7.2（进程内状态：wantedIds / 自愈门 / 门控缓存）·
+// §8（U1/U1b/U2–U8 由本套件覆盖；U9 是真机项，见交付报告）· §9（边界）。
+// 红相（每条都能被单独打红）：摘掉自愈监听器 ⇒ U1/U2 红；让自愈 rethrow ⇒ U1b 红；
+// 判据放宽成「只要 !registered.has」⇒ 非名册会话每步触发 ⇒ U2 计数红；自愈绕过 ctx.agents.get ⇒ U3 红；
+// clear 不过滤 origin ⇒ U4 红；不改脚注文案 ⇒ U5 红；静默跳过（不给回执）⇒ U6 红；
+// 去掉回合门 ⇒ U7 红；只清注册不清门控缓存 ⇒ U8 红。
+// ===========================================================================
+
+/** 批 D 的自愈夹具 = **重启后那一刻的现场**：名册里有现任，但现任此刻**没有活代理**
+ *  （attach 时活代理集为空 ⇒ 现任那条挂不上），同队的 worker-a 有活代理 ⇒ 它那条照常挂上。
+ *  与既有夹具同源（`wb2Env`），只是把「现任」换成一个还没有代理的会话 id。 */
+const WB5_TEAM = "wb5-heal";
+const WB5_COORD = "wb5-coordinator";
+const wb5Env = (options = {}) => wb2Env({
+	teams: [wb2Team(WB5_TEAM, [wb2Role("coordinator", WB5_COORD), wb2Role("worker-a", "session-worker-a")])],
+	extraAgents: [{ id: "session-worker-a", status: "idle", cwd: TEAM_WS }],
+	projections: wb2Readings(),
+	...options,
+});
+/** 一次真实形状的 `agent/pre-step` 载荷（宿主逐字形状 `{ agent, turn, step, signal }`）——
+ *  既有深链判据走的是**不带 agent** 的载荷（那时自愈判据恒 false、零副作用），这里必须带 agent。 */
+const wb5Step = (env, sessionId, step = 1, messages = []) => ctx_waterfall(env.ctx, {
+	agent: env.agentFor(sessionId) ?? { session: { header: { id: sessionId } } },
+	messages, turn: 1, step, signal: undefined,
+});
+
+// --- 批 D · U1：自愈可达（重启之后的现场） -------------------------------------------
+const wb5Base = wb5Env();
+await waitForChain(wb5Base, 1);
+await tick();
+const wb5Sections = __testing.sectionsFor(wb5Base.ctx);
+check("批 D · U1 前置（重启后现场 —— 这一段**不带自愈也成立**，正是 D-1 的根因读数）: attach 那一刻现任没有活代理 ⇒ 注册表里**没有**它（段与资源行都挂不上），同队有活代理的 worker-a 照常挂上；且 wantedIds **知道名册想要它**（needsSync 为真）",
+	wb5Sections.registered.has(WB5_COORD) === false && wb5Sections.registered.has("session-worker-a") === true
+		&& wb5Sections.needsSync(WB5_COORD) === true
+		&& wb5Base.systemPrompt.live().length === 1 && wb5Base.systemPrompt.liveContexts().length === 1);
+// 「它变活」＝宿主把该会话的代理建出来（与 U21 同一手法：agents.create 发布活代理 + systemPrompt 面）。
+const wb5Created = await wb5Base.agents.create({ sessionId: WB5_COORD, meta: { cwd: TEAM_WS } });
+check("批 D · U1 前置②: 代理确实出现了（活代理 + systemPrompt 两面都在），但**此刻**仍是零注册 —— 因为没有任何人调过 sync（「变活」本身不触发任何钩子，这就是自愈要补的那一格）",
+	wb5Created?.agent?.id === WB5_COORD && wb5Base.agentFor(WB5_COORD) !== undefined
+		&& typeof wb5Base.agentFor(WB5_COORD)?.ctx?.systemPrompt?.section === "function"
+		&& wb5Sections.registered.has(WB5_COORD) === false);
+await wb5Step(wb5Base, WB5_COORD, 1);
+check("批 D · U1 自愈可达（红相＝摘掉 apply() 里那条 agent/pre-step 监听器 ⇒ 恒不注册 ⇒ 本条红）: 该会话跑一步 ⇒ **段与上下文都挂上了**（注册表含它、活段 1→2、活上下文 1→2），全过程**没有跑任何名册写入命令**（「打开团队会话」这一步自己就把两头补齐）",
+	wb5Sections.registered.has(WB5_COORD) === true && wb5Sections.registered.get(WB5_COORD)?.kind === "coordinator"
+		&& wb5Sections.registered.get(WB5_COORD)?.team === WB5_TEAM
+		&& wb5Base.systemPrompt.live().length === 2 && wb5Base.systemPrompt.liveContexts().length === 2
+		&& wb5Sections.needsSync(WB5_COORD) === false);
+// ★ 核实项（设计档 §8 的 U1 前置）：宿主允许同一 `agent/pre-step` 上**多个监听器共存**。
+//   静态已核（cordis@4.0.1 src/events.ts:132 `_hooks: Record<name, Hook[]>`；:234-243 waterfall 逐个
+//   shift 串链）；这里再补一条**运行时**判据：既有深链监听器在新监听器在场时照旧工作。
+const wb5LinkPrompt = { id: "wb5-m1", role: "user", source: { kind: "user", rpcId: "r1" }, content: [{ type: "text", text: "请参考 http://127.0.0.1:3080/s/session-abc123 继续" }] };
+const wb5LinkBefore = wb5Base.prepared.length;
+const wb5LinkDecision = await wb5Step(wb5Base, WB5_COORD, 2, [wb5LinkPrompt]);
+check("批 D · U1 核实项（多监听器共存）: 新监听器在场时，既有深链监听器**逐字照旧**工作 —— 同一个 waterfall 上两条监听器都跑到了：深链照旧注入快照上下文（2 条消息：injected-1 + 原提示）并把链接归一成 @label，自愈那条不干扰它",
+	wb5Base.prepared.length === wb5LinkBefore + 1 && wb5LinkDecision.kind === "enter"
+		&& wb5LinkDecision.messages.length === 2 && wb5LinkDecision.messages[0].id === "injected-1"
+		&& wb5LinkDecision.messages[1].content[0].text === "请参考 @session-abc123 继续");
+
+// --- 批 D · U1b：错误路径 fail-open（恰一行 warn · next() 决定逐字不变 · 不刷屏） ------
+const wb5Fail = wb5Env();
+await waitForChain(wb5Fail, 1);
+await tick();
+const wb5FailSections = __testing.sectionsFor(wb5Fail.ctx);
+const wb5FailMessages = [{ id: "wb5-f1", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "普通消息，没有链接" }] }];
+const wb5BaselineDecision = await wb5Step(wb5Fail, "session-nobody", 1, wb5FailMessages);
+// 打桩：sync 抛错（「宿主面在、但同步炸了」那一档）。判据要求自愈吞掉异常、**不改变 next() 的决定**。
+let wb5SyncCalls = 0;
+const wb5RealSync = wb5FailSections.sync;
+wb5FailSections.sync = () => { wb5SyncCalls += 1; throw new Error("stub sync exploded"); };
+const wb5StepSwallowingThrow = async (step) => {
+	// Y7 纪律：让「自愈 rethrow」这个变异表现为一条**干净的 FAIL**，而不是整轮中止
+	// （裸抛会让后面的断言一条都不打印，红相读数就说谎了）。
+	try {
+		return await wb5Step(wb5Fail, WB5_COORD, step, wb5FailMessages);
+	} catch {
+		return null;
+	}
+};
+const wb5FailedFirst = await wb5StepSwallowingThrow(2);
+const wb5FailedSecond = await wb5StepSwallowingThrow(3);
+wb5FailSections.sync = wb5RealSync; // 还原打桩（不污染后面的夹具）
+check("批 D · U1b 错误路径 fail-open（红相＝让自愈 rethrow ⇒ 回合失败 ⇒ 本条红）: sync 桩抛错时回合**照常走完**（不抛），`next()` 的决定与「自愈没参与」那一次**逐字相同**，且**恰一行** warn（一次性门：连跑两步仍是一行 ⇒ 不刷屏）",
+	wb5FailedFirst !== null && wb5FailedSecond !== null
+		&& JSON.stringify(wb5FailedFirst) === JSON.stringify(wb5BaselineDecision)
+		&& JSON.stringify(wb5FailedSecond) === JSON.stringify(wb5BaselineDecision)
+		&& wb5SyncCalls === 2
+		&& wb5Fail.log.lines.warn.filter((line) => line.includes("段/上下文自愈检查失败")).length === 1
+		&& wb5FailSections.warnState().selfHealWarned === true);
+
+// --- 批 D · U2：O(1) 且零扫描（对 `sync` 打桩计数） ----------------------------------
+const wb5CountEnv = wb5Env();
+await waitForChain(wb5CountEnv, 1);
+await tick();
+const wb5CountSections = __testing.sectionsFor(wb5CountEnv.ctx);
+const wb5CountRealSync = wb5CountSections.sync;
+let wb5SyncCount = 0;
+wb5CountSections.sync = () => { wb5SyncCount += 1; return wb5CountRealSync(); };
+// ① 非名册会话（名册外的活代理）连跑 5 步
+for (let step = 1; step <= 5; step += 1) await wb5Step(wb5CountEnv, "session-target", step);
+const wb5CountStranger = wb5SyncCount;
+// ② 名册且**已注册**（worker-a）连跑 5 步
+for (let step = 1; step <= 5; step += 1) await wb5Step(wb5CountEnv, "session-worker-a", step);
+const wb5CountRegistered = wb5SyncCount;
+// ③ 名册且未注册、且注册**成功**（现任变活之后的第一步）⇒ 恰好一次；再跑一步不再涨
+const wb5CountCreated = await wb5CountEnv.agents.create({ sessionId: WB5_COORD, meta: { cwd: TEAM_WS } });
+await wb5Step(wb5CountEnv, WB5_COORD, 1);
+const wb5CountHealed = wb5SyncCount;
+await wb5Step(wb5CountEnv, WB5_COORD, 2);
+const wb5CountAfterHeal = wb5SyncCount;
+check("批 D · U2 自愈恒为 O(1) 零扫描（红相＝把判据放宽成「只要 !registered.has」⇒ 非名册会话每步都触发 sync ⇒ ① 的计数 >0 ⇒ 本条红）: ① 非名册会话 5 步 ⇒ sync 调用 **0** 次；② 名册且已注册 5 步 ⇒ **0** 次；③ 名册且未注册且注册成功那一步 ⇒ **恰好 1** 次、再跑一步不再涨（打桩读数 ①→②→③→再一步：" + [wb5CountStranger, wb5CountRegistered, wb5CountHealed, wb5CountAfterHeal].join(" → ") + "）",
+	wb5CountStranger === 0 && wb5CountRegistered === 0 && wb5CountHealed === 1 && wb5CountAfterHeal === 1
+		&& wb5CountCreated?.agent?.id === WB5_COORD && wb5CountSections.registered.has(WB5_COORD) === true);
+// ★ 限定（评审 🔵#7）：注册**持续失败**时允许每步一次幂等重试 —— **不得**加一次性闩锁
+//   （那会让一次瞬时失败之后该会话永远不再自愈）。判据：sync 打桩成恒抛错，连跑 3 步 ⇒ 恰 3 次调用。
+check("批 D · U2 限定（无失败闩锁）: 注册**持续失败**（宿主面在、但同步恒炸）时每一步都再试一次（3 步 ⇒ 恰 3 次调用）、注册表仍为空；刷屏由 warn 的一次性门挡住（U1b 已钉）—— 红相＝加一次性闩锁 ⇒ 计数退化成 1",
+	await (async () => {
+		const env = wb5Env();
+		await waitForChain(env, 1);
+		await tick();
+		const sections = __testing.sectionsFor(env.ctx);
+		let calls = 0;
+		sections.sync = () => { calls += 1; throw new Error("stub sync always fails"); };
+		for (let step = 1; step <= 3; step += 1) await wb5Step(env, WB5_COORD, step);
+		return calls === 3 && sections.registered.has(WB5_COORD) === false;
+	})());
+
+// --- 批 D · U3：边界不变（仍只对活代理、仍只对名册现任） -----------------------------
+const wb5EdgeEnv = wb5Env();
+await waitForChain(wb5EdgeEnv, 1);
+await tick();
+const wb5Edge = __testing.sectionsFor(wb5EdgeEnv.ctx);
+// ① 名册现任但**没有活代理**：判据为真、sync 也跑了，注册仍为 0（registerOne 的 `ctx.agents.get` 那一道）
+await wb5Step(wb5EdgeEnv, WB5_COORD, 1);
+const wb5EdgeNoAgent = wb5Edge.registered.has(WB5_COORD) === false;
+// ② 活代理但**不是名册现任**：判据在第一道就短路 ⇒ 零注册
+await wb5Step(wb5EdgeEnv, "session-target", 2);
+// ③ 畸形载荷（没有 agent / 空 id / 非字符串）⇒ 判据恒 false、不抛
+const wb5MalformedOk = await (async () => {
+	try {
+		await ctx_waterfall(wb5EdgeEnv.ctx, { messages: [], turn: 1, step: 3 });
+		return true;
+	} catch {
+		return false;
+	}
+})();
+check("批 D · U3 边界不变（红相＝让自愈绕过 `ctx.agents.get` 直接记账 ⇒ ① 红）: ① 名册现任没有活代理 ⇒ 自愈跑了也**不注册**它（仍只对活代理）；② 活代理但不是名册现任 ⇒ **零注册**（仍只对名册现任，且连 sync 都不触发）；③ 畸形输入（没有 agent / 空 id / 非字符串 id）⇒ 判据恒 false、不抛、回合照常",
+	wb5EdgeNoAgent && wb5Edge.registered.has("session-target") === false && wb5Edge.registered.size === 1
+		&& wb5Edge.needsSync(undefined) === false && wb5Edge.needsSync("") === false && wb5Edge.needsSync(123) === false
+		&& wb5Edge.needsSync("session-target") === false && wb5MalformedOk && wb5EdgeEnv.systemPrompt.live().length === 1);
+
+// --- 批 D · U4/U6：`clear` 只清手工（auto 是全队资产，拿不走；拒绝要看得见） ----------
+const WB6_TEAM = "wb6-clear";
+const WB6_PEER = "wb6-peer";
+const wb6Env = watchdogEnv({
+	targets: { [WB6_PEER]: { events: oneShotSurface(WD_NOW) } },
+	teams: [b5Team(WB6_TEAM, B5_WS, [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "wb6-worker")])],
+});
+await waitForChain(wb6Env, 1);
+await tick();
+const wb6Rows = () => wb6Env.settings.namespaces.get("team-link").data.watchdogs ?? [];
+const wb6Reg = String(await wb6Env.watch.execute({ action: "register", targets: [WB6_PEER] }, execFor(wb6Env.senderAgent)));
+const wb6AutoId = at(wb6Rows().filter((entry) => entry.origin === "auto"), 0, {}).id;
+const wb6ManualId = at(wb6Rows().filter((entry) => entry.origin !== "auto"), 0, {}).id;
+check("批 D · U4 前置: 注册表里此刻**两条都属于调用方**（1 条 attach 补挂的 auto 工作台 + 1 条手工注册）—— auto 那条 watcher=调用方、team=该队；两条都拿到定时器",
+	wb6Reg.includes("已注册看门狗 wd-") && wb6Rows().length === 2
+		&& typeof wb6AutoId === "string" && typeof wb6ManualId === "string"
+		&& at(wb6Rows().filter((entry) => entry.origin === "auto"), 0, {}).watcherSession === "session-self"
+		&& at(wb6Rows().filter((entry) => entry.origin === "auto"), 0, {}).team === WB6_TEAM
+		&& wb6Env.watchdog.timers.has(wb6AutoId) && wb6Env.watchdog.timers.has(wb6ManualId));
+const wb6AutoRowBefore = JSON.stringify(at(wb6Rows().filter((entry) => entry.origin === "auto"), 0));
+const wb6ClearAll = String(await wb6Env.watch.execute({ action: "clear" }, execFor(wb6Env.senderAgent)));
+check("批 D · U4 clear 拿不走 auto（★ 本批核心判据；红相＝`own` 不过滤 origin ⇒ auto 被一起清 ⇒ 本条红）: 无 id 的 clear 之后 —— **auto 那条仍在**（同一条 id、**逐字段未动**（逐字节比对 clear 之前的快照）、定时器仍挂着），被清掉的**只有手工那条**（policy 与定时器两处读数一致）；回执如实说清「另有 1 个自动注册未清除」",
+	wb6Rows().length === 1 && at(wb6Rows(), 0, {}).id === wb6AutoId
+		&& JSON.stringify(at(wb6Rows(), 0)) === wb6AutoRowBefore
+		&& !wb6Rows().some((entry) => entry.id === wb6ManualId)
+		&& wb6Env.watchdog.timers.has(wb6AutoId) && !wb6Env.watchdog.timers.has(wb6ManualId)
+		&& wb6ClearAll.includes("已清理自己的手工看门狗注册（1 个）")
+		&& wb6ClearAll.includes("另有 1 个自动注册属于全队工作台，未清除"));
+const wb6RowsSnapshot = JSON.stringify(wb6Rows());
+const wb6Refuse = String(await wb6Env.watch.execute({ action: "clear", id: wb6AutoId }, execFor(wb6Env.senderAgent)));
+check("批 D · U6 拒绝可见（红相＝静默跳过（什么都不清也不说）⇒ 本条红）: `clear id=<auto 的 id>` ⇒ 回执含「清除失败」「全队工作台」「未清除」并点名那个 id；注册表**逐条不变**（逐字节比对基线），定时器仍在",
+	wb6Refuse.includes("清除失败") && wb6Refuse.includes("全队工作台") && wb6Refuse.includes("未清除")
+		&& wb6Refuse.includes(wb6AutoId) && wb6Refuse.includes("手工注册的那些")
+		&& JSON.stringify(wb6Rows()) === wb6RowsSnapshot && wb6Env.watchdog.timers.has(wb6AutoId));
+
+// --- 批 D · U5：三处文案口径与 `clear` 的真实作用域逐字一致（① 脚注 ② auto 的 tick ③ 手工的 tick）
+// v1.1（分歧修复轮 D1）：审计 D1 用代码核实 **auto 观察者也会收到告警 tick**（`patrolOne` 里
+// `if (suppressed && !workbench) return;` 之后那一支对两档一视同仁）⇒ U5 由「两处文案」扩到**三条**，
+// 且三条各自可红：② 咬 auto 的 tick（两档共用正文 / 忽略 origin ⇒ 红）、③ 咬手工那句**逐字**保留。
+const wb6DigestText = __testing.renderWatchdogDigest(
+	{ id: "wd-u5", team: WB6_TEAM, watcherSession: "session-self", targets: [WB6_PEER] },
+	{ running: [], justFinished: [], idleAwait: [{ target: WB6_PEER, signal: { agent: "idle", verdict: "silent-idle", silenceMs: 700_000, lastAssistantAt: 1, lastInboundAt: null, goal: null } }], alarm: [] },
+	WD_NOW,
+);
+check("批 D · U5 ① 脚注口径一致（红相＝不改文案 ⇒ 与 U4 的行为矛盾 ⇒ 本条红）: 摘要脚注**不含**「清掉自己的全部注册」这类全称措辞，改成只针对**手工**注册（含「你自己手工注册」限定词），并明说本条摘要来自**全队工作台**的自动注册、**不会被 clear 清掉**；脚注仍恰一行（行数预算不变）",
+	!wb6DigestText.includes("清掉自己的全部注册") && !wb6DigestText.includes("全部注册")
+		&& wb6DigestText.includes("你自己手工注册") && wb6DigestText.includes("全队工作台")
+		&& wb6DigestText.includes("不会被 clear 清掉")
+		&& wb6DigestText.split("\n").length === 3);
+// ② auto 观察者的告警 tick：**端到端**取正文（一条 origin=auto 的注册 + 一个失联目标 ⇒ 走 `patrolOne`
+//    那条真实的投递支），再与**直调**同一档对照 —— 两句都必须过同一组否定/肯定条件。
+const wb6AutoTickEnv = watchdogEnv({
+	targets: { "session-silent": { events: oneShotSurface(1) } },
+	watchdogs: [wbRow({ id: "wd-u5-auto-tick", targets: ["session-silent"] })],
+});
+await wb6AutoTickEnv.watchdog.patrol({ now: WD_NOW });
+const wb6AutoTickText = textOfFirst(alarmsOf(wb6AutoTickEnv));
+const wb6AutoTickDirect = __testing.tickMessage("session-self", "session-silent", { verdict: "silent-idle", silenceMs: 60_000 }, WD_NOW, __testing.WATCHDOG_ORIGIN_AUTO).content[0].text;
+/** auto 档正文的两条后置条件（§6.7）：不含 clear 建议 ＋ 点名全队工作台。 */
+const wb6AutoBodyOk = (text) => typeof text === "string" && text.length > 0
+	&& !/可用[^。]*clear/u.test(text) && !text.includes("误报或不再需要盯人可用")
+	&& text.includes("全队工作台") && !text.includes("误报或不再需要盯人可用 team_link_watch clear");
+check("批 D · U5 ② auto 的 tick 不得建议 clear（★ 红相①＝两档共用同一句正文 ⇒ 本条红；红相②＝调用点不传 origin ⇒ 端到端那半红）: 一条 origin=auto 的注册在观察者空闲时**照旧发告警 tick**（前置守卫：确实投了一条，否则本条会假绿 —— 这正是交付方原称「tick 只投手工」被代码推翻的那一支），而它的正文**不含**「可用 … clear」这类建议（连批 1 那句原话也不得出现），并**点名**该注册来自**全队工作台**；直调同一档（origin=auto）得到同样合格的一句",
+	alarmsOf(wb6AutoTickEnv).length === 1 && wb6AutoBodyOk(wb6AutoTickText) && wb6AutoBodyOk(wb6AutoTickDirect));
+// ③ 手工档：那句建议**逐字原样保留**（对它是准确的；批 1 的逐字断言 `silent-idle tick body is exactly…`
+//    同批仍绿）。`origin` 缺省（未归一化的历史行）与显式 "manual" 必须走**同一**支。
+const wb6ManualTickText = __testing.tickMessage("session-self", "session-silent", { verdict: "silent-idle", silenceMs: 60_000 }, WD_NOW, "manual").content[0].text;
+const wb6LegacyTickText = __testing.tickMessage("session-self", "session-silent", { verdict: "silent-idle", silenceMs: 60_000 }, WD_NOW).content[0].text;
+check("批 D · U5 ③ 手工的 tick 原样保留那句建议（红相＝把两档合成一句 / 顺手删掉手工那句 ⇒ 本条红）: origin=manual 的正文**逐字**保留「请用 team_link_list_sessions 复核后处置；误报或不再需要盯人可用 team_link_watch clear。」那句，且**不提**全队工作台；`origin` 缺省的历史行逐字节同句（两档的判据是 `=== \"auto\"` 的二值选择，未归一化也安全）",
+	wb6ManualTickText.includes("请用 team_link_list_sessions 复核后处置；误报或不再需要盯人可用 team_link_watch clear。")
+		&& wb6LegacyTickText === wb6ManualTickText
+		&& !wb6ManualTickText.includes("全队工作台")
+		&& wb6ManualTickText !== wb6AutoTickDirect);
+
+// --- 批 D · U7：回合门（同一 turns 内逐字节相同；turns 前进 ⇒ 重新现算） -------------
+const wb7Env = wb2Env({ projections: wb2Readings() });
+const wb7Sections = __testing.sectionsFor(wb7Env.ctx);
+const wb7Context = at(wb7Env.systemPrompt.liveContexts(), 0, { text: () => "" });   // 协调者那条
+const wb7First = wb7Context.text({});
+const wb7GateFirst = wb7Sections.turnGate.get("session-self");
+wb7Env.projections.readings.contextPressure = { contextWindow: 1_000_000, pressureTokens: 620_000, surfaceTokens: 500_000 };   // 同回合内只改读数
+const wb7SameTurn = wb7Context.text({});
+wb7Env.projections.readings.sessionStats = { turns: 8, steps: 24 };                                                              // 推进回合号
+const wb7NextTurn = wb7Context.text({});
+check("批 D · U7 回合门（红相＝去掉门控 ⇒ 同一 turns 内两次渲染不同 ⇒ 本条红）: 同一 `turns` 值内连渲染两次 ⇒ **逐字节相同**（命中缓存里那一条，不是「重算后碰巧相等」—— 同回合内读数已被改过）；`turns` 前进（7→8）⇒ 重新现算、读数变化可见（压力 250.0K → 620.0K）；门控缓存那一条的回合号跟着前进（7 → 8）",
+	wb7First.length > 0 && wb7First === wb7SameTurn
+		&& wb7SameTurn.includes("压力 250.0K（25.0%）") && wb7SameTurn.includes("第 7 轮")
+		&& wb7GateFirst?.turn === 7 && wb7GateFirst?.text === wb7First
+		&& wb7NextTurn !== wb7First && wb7NextTurn.includes("压力 620.0K（62.0%）") && wb7NextTurn.includes("第 8 轮")
+		&& wb7Sections.turnGate.get("session-self")?.turn === 8);
+check("批 D · U7 边界（turns 读不出来 ⇒ **不门控**，也不留条目）: `sessionStats` 缺席时判不了「是不是同一回合」⇒ 每次现算（宁可多写一条快照，也不返回可能已过期的读数 —— 门控的收益绝不以「陈读数」为代价换），且缓存里不留条目",
+	(() => {
+		const env = wb2Env({ projections: wb2Readings({ sessionStats: undefined }) });
+		const sections = __testing.sectionsFor(env.ctx);
+		const record = at(env.systemPrompt.liveContexts(), 0, { text: () => "" });
+		const first = record.text({});
+		env.projections.readings.contextPressure = { contextWindow: 1_000_000, pressureTokens: 700_000, surfaceTokens: 600_000 };
+		const second = record.text({});
+		return first.includes("轮次未知") && second.includes("轮次未知") && second !== first
+			&& sections.turnGate.has("session-self") === false;
+	})());
+
+// --- 批 D · U8：门控缓存随注册生命周期释放（无泄漏） ---------------------------------
+const WB8_WORKER = "session-worker-a";
+const wb8Env = wb2Env({ projections: wb2Readings() });
+const wb8Sections = __testing.sectionsFor(wb8Env.ctx);
+const wb8Context = at(wb8Env.systemPrompt.liveContexts(), 1, { text: () => "" });   // worker-a 那条
+wb8Context.text({});
+const wb8GateBefore = wb8Sections.turnGate.has(WB8_WORKER);
+wb8Env.setHiddenAgent(WB8_WORKER, true);
+await wb8Env.tool("team_link_roster").execute({ action: "upsert-team", team: "wb2-team" }, execFor(wb8Env.senderAgent));
+check("批 D · U8 门控缓存释放（红相＝只清注册不清缓存 ⇒ 本条红）: 代理消失 ⇒ 该会话的**门控缓存被清**（缓存只随注册活着，不泄漏），且注册表同批清空 —— 三条读数一起读（缓存 / 注册表 / 那两个 disposer 的记录）",
+	wb8GateBefore === true && wb8Sections.turnGate.has(WB8_WORKER) === false
+		&& wb8Sections.registered.has(WB8_WORKER) === false && wb8Sections.registered.size === 1
+		&& at(wb8Env.systemPrompt.contexts, 1, {}).disposed === 1
+		&& at(wb8Env.systemPrompt.sections, 1, {}).disposed === 1);
 
 rmSync(escDir, { recursive: true, force: true });
 rmSync(tmpDir, { recursive: true, force: true });
