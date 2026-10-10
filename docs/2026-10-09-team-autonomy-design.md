@@ -89,13 +89,29 @@ flowchart LR
 | --- | --- | --- | --- |
 | **FR-1** | **协调者宪章段**（每回合重算） | `agent.ctx.systemPrompt.section({name:"team-link:role", order: sp.getSectionOrder("TEAM_POLICY"), text: fn})`（**以 §6 的探测写法为准**：order 一律取 `getSectionOrder(...)`，不用裸常量），只对 roster 现任 coordinator 注册 | US-A1/A2 |
 | **FR-2** | **会话资源段**（worker 自见；与 FR-1 **合并为一次注册**） | 同一函数型 text：coordinator 版＝宪章＋资源；worker 版＝资源＋汇报义务。**注册钩子两条路径（评审 #5 钉死）**：① `upsert-team` 的 **worker 角色创建分支**；② **`attach` 时扫 roster 成员重建**（覆盖重启后的既有 worker）。两条都只对**活代理**注册，缺席即跳过并如实标注 | US-A7/B2 |
+
+> ★ **落点变更（批 C，2026-10-10；就地标注，本行是 as-of 更新而不是新档）**：FR-2 的资源行**不再**留在系统提示里。
+> 起因：资源行每次装配现算（压力/累计/轮次每步都变）⇒ 系统提示前缀逐回合变化 ⇒ provider 前缀缓存从变化点起全断
+> （真机实测 glm-5.3 上 0.5%–8.7%，去掉该行 96%–99%；诊断见 `.investigations/prompt-cache-hit-rate-2026-10-10/结论.md`）。
+> 变更后的口径（**规格见 `docs/2026-10-10-prompt-cache-design.md` §5 FR-1…FR-4 与 §6 机制伪代码**）：
+> - **FR-1 的段**只产**会话期内逐字节恒定**的文本（`renderRoleText(plan)`：宪章 / 义务行）；**资源行从段里消失**（U1/U2）。
+> - **FR-2 的资源行**改挂宿主**动态运行时上下文**通道：`sp.context({ name: "team-link:resources", order: 130, text: fn })`
+>   （`renderResourceContext(ctx, agent, onError)`，内容逐字沿用 `renderResourceLine`）；落点是**尾部追加的 user 消息**，不在前缀里。
+> - **FR-9 开关语义逐字不变**：`resources=false` ⇒ 段里没有资源行、上下文通道也不注册；`role=false` ⇒ 段不注册、上下文照常。
+> - 注册由「合并为一次」改为**两面各自探测、各自恰一行 warn、互不牵连**（`disposers` 数组、两条通道同表管理）。
+> - 本档 §8 的批次判据（U1–U6）**仍由 `host-half.test.mjs` 覆盖**，但**内容已随落点变更改写**（不是「内容未变」）：批 2 的 U1–U6 在批 C 被重写/改名 —— 现由批 C 的
+>   U1（段文本跨步恒定，锚）、U2（段文本零命中）、U3（资源行走 `context()` 且 `order === 130`）、U4（四项展示值 ← 三个投影 key、单行）、U5（`resources=false` 两面都不挂；★ 本轮修掉夹具静默丢参后才真正承重）、
+>   U6（**五段降级**：⚠ 批 2 原写的「经 onError 留痕」子句一度被删，本轮按 §6.1 v1.1 补回）、U7（双 disposer）承担；逐条措辞与断言名见
+>   `docs/2026-10-10-prompt-cache-design.md` §8 与 `host-half.test.mjs` 的「批 C · …」断言名。**落点变更后的新判据**是批 C 的 U1–U11（同一处 §8）。
+> - 本档 §8 的 **U19「协调者整段恰 8 行」** 在批 C 后按**两面合计**计（段 7 行 + 资源行 1 行）——判据读法与断言名见
+>   `host-half.test.mjs` 的「评审 #3 行数预算（合成）」（`wb2CharterText.split("\n").length + wb2SelfLine.split("\n").length === 8`）。
 | **FR-3** | **工作台 digest**（推） | 看门狗升级：自动注册 + 事件化（E1 运行→空闲 / E2 空闲且无在飞任务 / E3 失联）+ 分组摘要 + 语义分离文案 | US-A3/A4/A5 |
 | **FR-4** | **工具返回面重钉** | `upsert-team` 创建分支 / `/team_session` 完成回报 / `team_link_status` 第 2 行（仅现任协调者）/ digest 脚注 | US-A2 |
 | **FR-5** | **状态卡第 ⑧ 段「资源/预算」+ 判读行** | `team_link_status` 追加一段（复用既有有界读窗，**纯读**） | US-B1/B3 |
 | **FR-6** | **轮换标记与指引** | 第 ⑧ 段行尾 `⚠ 轮换候选（turns=N / tokens≈M）` + 一句现成命令 | US-B4/B5 |
 | **FR-7** | **attach 重挂**（既有缺陷修复） | 插件 attach 时遍历 `policy.watchdogs` 逐个 `schedule()` | US-A6 |
 | **FR-8** | **文档同步** | 状态卡描述「七段→八段」同次编辑；README 服务表加 `sessionProjections`（晚挂/降级）；CHANGELOG；工具一览 | NF-4 |
-| **FR-9** | **总开关**（评审 #1 补） | 新增策略键 `policy.sections = { role: bool, resources: bool }`（缺省 true）：`role=false` ⇒ 不注册宪章段；`resources=false` ⇒ 资源行在段 / ⑧ 段 / digest 脚注**三处全缺**。digest 侧关断＝既有 `team_link_watch clear` ＋ 进程内抑制标记（防 auto 自愈复活） | US-A8 |
+| **FR-9** | **总开关**（评审 #1 补） | 新增策略键 `policy.sections = { role: bool, resources: bool }`（缺省 true）：`role=false` ⇒ 不注册宪章段；`resources=false` ⇒ 资源行在**动态运行时上下文（context 面）/ 状态卡第 ⑧ 段 / digest 脚注**三处全缺（★ 批 C 就地改准：**段面**已不含资源行，见本行下方的落点变更注记）。digest 侧关断＝既有 `team_link_watch clear` ＋ 进程内抑制标记（防 auto 自愈复活） | US-A8 |
 
 | **FR-10** | **attach 按队补挂 auto 工作台注册（批 5）** | attach 后置链里，对 roster 的**每个队** ensure 一条 `origin:"auto"` 注册（`watcher` ＝该队现任协调者，`targets` ＝全队成员去掉 watcher；幂等键 `(origin,watcher,team)`）。**缺失才写**（单写落点 `policy.update({watchdogs})`）；现任不 live 也照写（注册与"谁能收"无关）。除 watcher 外无成员 ⇒ 按 `planAutoWatchdog` 既有语义跳过并留一行读数。**失败 fail-open**：只留一行 warn，绝不拖 attach 链 | US-A3/A4 |
 | **FR-11** | **patrol 每轮轻量段同步（批 5）** | 每轮巡逻顺带一次 `sections.sync()`：纯读名册 + 活代理表，**仅当计划变化才写注册表**（进程内）；不写 policy、不进 `team_link_status` ⇒ 只读合同不破。使命＝覆盖"**现任协调者晚启动**"（最多等一个巡检间隔）。前置：该队必须有注册（由 FR-10 保证） | US-A1 |
@@ -148,7 +164,12 @@ sequenceDiagram
 
 ```js
 /** FR-1/FR-2：给一个活代理注册角色/资源段。前置：agent 为活代理对象。
- *  后置：返回 disposer（幂等）；无 systemPrompt 面 ⇒ 返回 no-op + 一行 warn（fail-visible）。 */
+ *  后置：返回 disposer（幂等）；无 systemPrompt 面 ⇒ 返回 no-op + 一行 warn（fail-visible）。
+ *
+ *  ⚠ **批 C 起本段是 as-of 历史**（2026-10-10，见 §5 FR-2 行的落点变更注记）：注册已改成**两面独立**
+ *  （section 面 + context 面，各返回一个 disposer），`text` 也不再是「角色+资源」的合并渲染体。
+ *  当前实现在 `lib/index.js` 的 `createSections().registerOne()`；规格＝`docs/2026-10-10-prompt-cache-design.md`
+ *  §6.3/§6.4（`text: () => renderRoleText(effective)` / `text: () => renderResourceContext(ctx, agent, warnRender)`）。 */
 function registerRoleSection(ctx, agent, charterText) {          // charterText: coordinator 版含宪章；worker 版为 null
   const sp = agent?.ctx?.systemPrompt;
   if (typeof sp?.section !== "function") return warnAndNoop("systemPrompt.section 缺席");
@@ -156,7 +177,13 @@ function registerRoleSection(ctx, agent, charterText) {          // charterText:
   return sp.section({ name: "team-link:role", order: sp.getSectionOrder("TEAM_POLICY"), text });
 }
 
-/** 函数型 text 的渲染体：必须同步、必须恒返回字符串（返回 undefined 会让整次装配抛错）。 */
+/** 函数型 text 的渲染体：必须同步、必须恒返回字符串（返回 undefined 会让整次装配抛错）。
+ *
+ *  ⚠ **批 C 起本函数已拆成两个**（原样保留为 as-of 历史）：
+ *   · `renderRoleText(plan)` —— **段面**：只产宪章 / 义务行（会话期内逐字节恒定，U1）；
+ *   · `renderResourceContext(ctx, agent, onError)` —— **上下文面**：资源行本体，落点是尾部追加的
+ *     user 消息（`sp.context(...)`），不再是系统提示。
+ *  合并版让段文本逐回合变化 ⇒ 前缀缓存全断；拆开是批 C 的核心。 */
 function renderRoleAndResources(ctx, agent, charterText) {
   const lines = [];
   if (charterText) lines.push(charterText);                       // FR-1
@@ -212,7 +239,7 @@ async function patrolOneWithDigest(entry, now) {
 
 | 结构 | 谁写 | 谁读 | 说明 |
 | --- | --- | --- | --- |
-| `sections: Map<sessionId, disposer>` | 注册器 | 注销器 / attach 清扫 | 段注册句柄 |
+| `sections: Map<sessionId, disposer>` | 注册器 | 注销器 / attach 清扫 | 段注册句柄。★ **批 C 起改为 `disposers: fn[]`**（至多 2 个：section 面 + context 面，一起释放；见 §5 FR-2 的落点变更注记与批 C 设计档 §7.2） |
 | `lastAgentState: Map<regId+target, "running"|"idle">` | patrol | patrol | 判"刚转空闲" |
 | ~~`pulseCache`~~（**2026-10-09 删除**） | —— | —— | 评审判定它与「函数型 text 直读 `stateOf`」是两套并存的同步可读机制；裁定＝**直读、零缓存**（实现见 lib/index.js:2909 区注释），本行留痕见 §13 v1.4 |
 | `digested: Map<regId+target, { at, signature }>` | patrol（投递成功才记；失败记 `signature: null`） | patrol / 判据 U9 | 投递去抖的**状态指纹**闸；失败那支记 null ⇒ 下个窗口重投（t-5 补判别力断言） |
@@ -227,7 +254,7 @@ async function patrolOneWithDigest(entry, now) {
 | 字段 | 类型 | 谁写 | 谁读 | 说明 |
 | --- | --- | --- | --- | --- |
 | `policy.sections.role` | boolean（缺省 true） | 用户（设置 UI / `policy.json` 超级写者） | 注册器 | false ⇒ 不注册宪章段 |
-| `policy.sections.resources` | boolean（缺省 true） | 同上 | 段渲染 / 第 ⑧ 段 / digest 脚注 | false ⇒ 资源行**三处全缺** |
+| `policy.sections.resources` | boolean（缺省 true） | 同上 | ~~段渲染~~ **动态运行时上下文渲染**（批 C 改落点，见 §5 FR-2 的变更注记） / 第 ⑧ 段 / digest 脚注 | false ⇒ 资源行**三处全缺** |
 
 > **红线代价（如实）**：README §十 的红线之一是「`PolicyConfig` 的键集」被断言钉住；新增这两个键**必须同批更新那条断言与 README 的键集描述**，并由 **U17** 覆盖 —— 这是本批**唯一**触碰红线的改动。
 > digest 的关断**不新增键**：沿用既有 `team_link_watch clear` ＋ 进程内抑制标记（clear 掉的 auto 注册在同进程内不再自愈；重启后复活 —— 与既有 `ticked`/`deadWatchers` 同款取舍）。
@@ -281,7 +308,7 @@ async function patrolOneWithDigest(entry, now) {
 | 并发 | 两个注册同时写 `policy.update`；patrol 与换届清扫同刻 | 沿用既有 read-modify-write 与去抖；注册失败 ⇒ 返回失败文案、**不静默** |
 | 重启 | policy 里的注册、进程内的 `sections`/`lastAgentState`/`digested` 全失（`pulseCache` 已于 v1.4 删除） | **FR-7 重挂定时器**（**重挂前按 `expiresAt` 过滤**：过期条目不挂巡逻定时器；全过期时留**一个**清扫定时器并在 `removeWatchdog` 尾部幂等 `rearm` 接棒——2026-10-09 批 2/3 落地）；段注册在代理出现时重建；投影由宿主重建 |
 | 读数缺席（turns） | `sessionStats` 未注册或 `turns` 不可读（批 2 夹具先行核实，见 §7.3） | 第 ⑧ 段落为「轮次未知」，FR-6 **只按 tokens 标记**（轮次判据挂起）；如实标注，**不编数** |
-| 开关关闭 | `sections.*=false` 或用户 `watch clear` | 零段注册 / 资源行三处全缺 / auto 注册不自愈；**不抛错、不静默改回** |
+| 开关关闭 | `sections.*=false` 或用户 `watch clear` | ★ 批 C 就地改准（原写「零段注册」是**实质错误**）：`role=false` ⇒ **section 面**零注册；`resources=false` ⇒ **段仍注册**（宪章 / 义务行照旧在场），只是**context 面**零注册 + 资源行在动态运行时上下文 / 状态卡第 ⑧ 段 / digest 脚注三处全缺；auto 注册不自愈；**不抛错、不静默改回** |
 | 升级 | 宿主换代（API 改名/面消失） | 全部新面**特征探测**；缺失 ⇒ 降级到"工具返回重钉"路径 + 一行 warn（沿 preset 换代两次翻车的教训） |
 | 失败方向 | 段注册失败 / digest 投递失败 / 投影读取抛错 | 段：warn + 不注册（会话照常跑）；digest：warn + 不重试（下个巡逻窗口再说）；投影：行内标「不可读」 |
 
@@ -293,7 +320,7 @@ async function patrolOneWithDigest(entry, now) {
 | 批 | 内容 | 判据 |
 | --- | --- | --- |
 | **批 1** | FR-3 最小改造（auto 注册 + E1/E2 事件 + digest 文案分离）+ **FR-7 重挂缺陷修复** | U9–U12、U14、U15 |
-| **批 2** | FR-1/FR-2 提示段（合并注册，含生命周期与降级）＋ **核实 `sessionStats.turns` 投影**（夹具先行；缺席则按 §9 降级行落地） | U1–U6、U15 |
+| **批 2** | FR-1/FR-2 角色/资源面（★ 批 C 就地改准：原写「**提示段（合并注册）**」自批 C 起不成立 —— **段面**只产会话期内恒定的角色文本，**资源行**改挂动态运行时上下文通道，且两面**各自探测 / 各自 dispose / 互不牵连**；见 §5 FR-1/FR-2 行的落点变更注记与 §6 的 as-of 注记）＋ **核实 `sessionStats.turns` 投影**（夹具先行；缺席则按 §9 降级行落地） | U1–U6、U15 |
 | **批 3** ✅ | FR-5/FR-6 第 ⑧ 段 + 判读行 + 轮换标记；FR-4 工具返回重钉；FR-8 文档同步；**FR-9 总开关**；**D-B6 三条宿主缺陷登记** | U7、U8、U13、U16、U17、**U18、U19** |
 | **批 5**（2026-10-10，用户裁定「按这 3+1 点做」） | **让既有团队也吃到**：FR-10 attach 按队补挂 auto 工作台注册 · FR-11 patrol 每轮轻量段同步（覆盖「现任晚启动」）· FR-12 team_link_watch action=arm-team · FR-13 卡的三段读窗按团队 workspace | U20、U21、U22、U23 |
 | **批 6**（2026-10-10，用户裁定「可以立项」） | FR-14 判读行范围界定（一句话，避免把宿主工具闸门与上下文预算混为一谈） | U24、U7（白名单扩到三句） |

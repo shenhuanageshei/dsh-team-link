@@ -57,6 +57,16 @@
 插件正在调的方法，就把「宿主已改名」这层断层永久挡在套件外面（本次即如此）。判据与读数见
 [`docs/verification-log.md`](docs/verification-log.md) 的「2026-09-29 DSH 0.2.0-rc.1 preset pin 换代」一节。
 
+**宿主换代还必复核动态运行时上下文两面（2026-10-10 批 C 补立，与上面那条 preset pin 并列）**：批 C 起，资源行不再挂在
+`systemPrompt.section()` 上，而是挂在宿主的**动态运行时上下文**通道 `systemPrompt.context()`（`name="team-link:resources"`、
+`order=130` 裸常量）⇒ 换代复核的**静态核对清单里必须点名这两个名字：`context` 与 `getContextOrder`**。
+**为什么泛化句抓不到它**：上面那条纪律只说「静态核对本仓实际调用的宿主服务方法名」，而**本仓并不调用 `getContextOrder`**
+（`order` 走的是契约允许的任意有限常量）—— 按「实际调用面」核对，这个名字永远不会进清单；而宿主一旦把它改名或移走，
+`context` 这一面就会静默降级（段不受牵连、资源行退到状态卡第 ⑧ 段与工作台摘要脚注那两处兜底出口）。
+⇒ 复核方式：对宿主 `app.asar` 文本检索 `getContextOrder` 与 `context(`，并确认 `CONTEXT_ORDERS` 的三键闭集
+（`SANDBOX_POLICY 110` / `APPROVAL_POLICY 115` / `SUBAGENT_DELEGATION 120`）与 130 未被占用。
+判据与读数见 [`docs/verification-log.md`](docs/verification-log.md) 的「2026-10-10 批 C」与其分歧修复轮两节。
+
 ## 五、网络与推送
 
 - GitHub 直连常报 Recv failure: Connection was reset；本机代理可用时按命令临时指定（**不改全局配置**）：

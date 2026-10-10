@@ -2426,3 +2426,150 @@ assertion total: 1214 (failed: 7)
 **补记（同日）**：同一次 sweep（读数 16:33:57）对**两个目标各投一条** tick（`9003981b…` 与 `e214caa8…`，两条都到）；两条都在我 clear 之前已在途 ⇒ clear 只影响**后续**巡检，不回撤已排队的投递。读数：`team_link_watch action=list` ⇒ **共 0 个**（探针已清，无后续 tick）。
 
 **交付评审（advisor type=code）如实登记**：批 5/6/7 的代码交付在本会话**未能取得 advisor 评审** —— 该工具**连续 3 次超时**（每次吃掉 5–10 分钟，无作业句柄、无落盘档；插件把 `lastReviewType` 翻成 `code` 后输出清空 ⇒ 启动了但没跑完），即便把 runner 切成后台（`round1.runner={"kind":"dsh"}`，session override）仍无效。**替代审计**：三轮独立复核 `task-25`（批 5）/`task-27`（批 6）/`task-30`（批 7 + t-31），每轮都含定向变异（合计 30+ 组红相）、探针与哈希冻结；**本会话的 advisor 不可用按已知限制登记**（与 eng_coder 同源：长树上同步跑不完），待换窗口/换会话再补。
+## 2026-10-10 批 C（提示缓存保真：资源行改挂动态运行时上下文通道）交付读数
+
+**一句话**：把每次装配现算的资源行从**系统提示段**搬到宿主的**动态运行时上下文**通道（`agent.ctx.systemPrompt.context()`），段里只留会话期内逐字节恒定的宪章 / 义务行。设计档＝`docs/2026-10-10-prompt-cache-design.md`（§5 FR-1…FR-4 / §6.1–§6.4 机制伪代码 / §7.2 进程内状态 / §8 U1–U11）；诊断＝`.investigations/prompt-cache-hit-rate-2026-10-10/结论.md`。
+
+**改动面（两个代码文件 + 三份文档；本档为第四份，只追加）**
+- `lib/index.js`：`renderRoleAndResources` 拆为 `renderRoleText(plan)`（段面，只产恒定文本）与 `renderResourceContext(ctx, agent, onError)`（上下文面，内容逐字沿用 `renderResourceLine`）；`registerOne` 改**两面各自探测**（缺 section/getSectionOrder ⇒ `warnSectionFace`，缺 context ⇒ `warnContextFace`，互不牵连）、注册表 `disposer` → **`disposers` 数组**、`text` 闭包**捕获注册时的 agent**（删掉 `assembly?.agent` 死路径）；`disposeOne` 释放全部 disposer；新增 `RESOURCE_CONTEXT_NAME="team-link:resources"` 与 `RESOURCE_CONTEXT_ORDER=130`（带宿主契约原文注释）；`lib/index.js` 原 :3091-3093 那条「order 一律取 getSectionOrder，不用裸常量」的注释改成**点名 section / context 两面**的区别（文档卫生第 5 条）。
+- `host-half.test.mjs`：`makeSystemPrompt` 桩扩成**镜像宿主面**（新增 `context(options)` 记录器 / `contexts` 数组 / `liveContexts()` / `getContextOrder()`，以及降级旋钮 `omitContext` / `contextThrows`）；批 2 的 U1–U6 判据按批 C 形状重写（U1 跨步恒定 / U2 段文本零命中 / U3 context 注册参数 / U4 四项←三 key + 单行 / U5 开关 / U6 四段降级 / U7 双 disposer / U9 两类会话同覆盖）。
+- `README.md`（服务表两行 + `sections` 键描述 + 一段「为什么走 context()」）、`CHANGELOG.md`（未发布条目）、`docs/2026-10-09-team-autonomy-design.md`（§5 FR-1/FR-2 就地标注落点变更 · §6 伪代码 as-of 注记 · §7.2 `disposers` 行）。
+
+**判据与红相构造（每条可单独打红）**
+
+| 判据 | 断言落地 | 红相构造（定向变异） |
+| --- | --- | --- |
+| U1 段文本跨步恒定（锚） | `批 C · U1 段文本跨步恒定（锚）`（逐字节 `===`） | 把 `renderResourceLine(...)` 塞回 `renderRoleText` ⇒ 投影读数前进一格后两次渲染不等 ⇒ 红 |
+| U1 对照 | `批 C · U1 对照（★ 负相：夹具真的推得动…）` | 夹具不推读数 ⇒ 红（证明上一条不是恒真） |
+| U2 段文本零命中 | `批 C · U2 段文本零命中`（`[team-link 会话资源]` + `压力`/`累计`/`第 <数字> 轮`；**不用**裸「轮」） | 同上（资源行回流段面） |
+| U3 context 注册参数 | `批 C · U3 注册参数逐字`（name / `order === 130` / `typeof text === "function"`）+ `批 C · U3 落点唯一` + `批 C · U3 桩镜像宿主面` | 不注册 context（或挂回 section）⇒ 红 |
+| U4 四项 ← 三 key · 只读三 key · 单行 | `批 C · U4 资源行四项 ← 三个 key` / `批 C · U4 渲染结果是单行` / `批 C · U4 只读那三个 key`（段面零投影读 + 上下文面恰 6 次）、`批 C · U4 缺字段 ⇒ 未知` / `turns 正反相` / `三种不可读` / `渲染体不吃宿主抛错` | 行不跟着读数变（照搬批 2 红相）；渲染体拼进换行 ⇒ 单行断言红 |
+| U5 开关 | `批 C · U5 resources=false`（段零资源行 **且** context 零注册）+ 对照（宪章仍在） | 开关只接到其中一面 ⇒ 红 |
+| U6 四段降级 | `批 C · U6 ①`（无 sp：零注册 + 恰一行 + 点名回退路径）/ `②`（有 section 无 context）/ `③`（有 context 无 section）/ `③b`（无 getSectionOrder / section 注册抛错）/ `④`（context 注册抛错，不抛到调用方）/ `对照`（面齐全时三档 warn 全零） | 两面共用一个 warn 门、或让 context 缺失牵连段 ⇒ 红 |
+| U7 双 disposer | `批 C · U7 双 disposer`（两个记录各自 `disposed === 1`、合计 `2`；注册表零残留） | 只释放一个 ⇒ 合计 1 ≠ 2 ⇒ 红 |
+| U9 两类会话同覆盖 | `批 C · U9 两类会话同覆盖`（coordinator 与 worker 都拿到 context：同名同 order；两者段文本跨步恒定；两者资源行随读数变；worker 段含义务行且不含资源行） | 只给协调者挂 context（或 worker 走旧路）⇒ 红 |
+| 批 3 的 U17（受影响的三条） | `U17 role=false（批 C 复核）`（零段 + context 照常）/ `U17 resources=false 三处 ①②（批 C 复核）`（context 零注册）/ `U17 两处都关 ⇒ 零段注册`（两面都零） | 开关语义只改一处 ⇒ 红 |
+
+**★ 读数如实（本批实施期的口径）**：本批按派单约定**未在实施期执行任何验证/测试命令**（测试命令标注为「由宿主执行」）。因此本小节**没有**贴「修复前必红 / 修复后全绿」的两次实测读数 —— 上表给的是**红相构造**（定向变异的设计），不是实测记录。宿主验收时请执行并回填：
+
+```
+node host-half.test.mjs
+node client-half.test.mjs
+```
+
+（AGENTS.md §三：不要用 `node --test`，沙箱下 spawn EPERM。回填时要贴**套件自报的首尾两行**。）
+
+**真机待验（需重启；由父侧决定时机，实施期未执行）**
+1. **U0** 宿主面预检：桌面 0.2.0-rc.1 上 `typeof sp.context === "function"`、`typeof sp.getContextOrder === "function"`、`CONTEXT_ORDERS` 仍为三键（110/115/120）、130 未被占用。
+2. **撤止血（FR-7，U8 的前置）**：把 `%USERPROFILE%\.dsh\team-link\policy.json` 的 `policy.sections.resources` 恢复为 `true`（并重启）—— 不恢复则资源行整条缺席，命中率天然 ~99%，U8 会**空转假绿**。
+3. **U8 双读数**：至少一名协调者会话 + 至少一名 worker 会话（glm-5.3）各自命中率 **≥95%**，且两份系统提示都**不再逐回合变化**；同时断言被测会话的快照里**实际含** `team-link:resources`。
+4. **U10** 快照账辅助读数（每会话 owned 快照条数 ÷ 请求数；只观测、不设阈值）；**U11** 一次全量压缩之后发出的快照里仍可 grep 到 `team-link:resources`。
+
+**未覆盖 / 如实清单**
+1. **套件读数缺**（见上）—— 本批实施期未跑测试命令，红/绿两次实测读数待宿主回填。
+2. **`README.md` §十的套件计数（本轮已同改）**：那一行是「实跑时点」的快照。批 C 交付时它写 `host 1442 / client 310`，与 `CHANGELOG.md` 0.5.2 条目的 `1477` 不同步（当时如实登记为未决项）。**本轮（分歧修复轮）跑过套件后三处同改为 `1494`**（README 两处 ＋ CHANGELOG），算式见本档末尾的「2026-10-10 批 C 分歧审计修复轮」一节。
+3. **真机四项（U0/U8/U10/U11）未做**：都需重启与真实流量，属父侧步骤。
+4. **`assembly?.agent` 死路径已删除**：段面的 `text` 改为零参闭包（`() => renderRoleText(effective)`），与设计档 §6.2 的会诊更正在一起。
+5. **段面渲染体的 onError 面收窄（★ 本轮已按 v1.1 收回）**：批 2 的 `renderRoleAndResources` 有一个 `onError` 参数（渲染抛错留一行）；批 C 按设计档 §6.1 的签名 `renderRoleText(plan)` **不再有 onError** —— 段面的输入全是插件自己的常量，抛错路径被 try/catch 吞成空串但**不留痕**；留痕只保留在上下文面（`renderResourceContext` 的 `onError`）。**差异审计判 🔵：静默 `catch {}` 与 §9 的 fail-visible 自相矛盾；设计档 §6.1 已按 v1.1 改签名为 `renderRoleText(plan, onError)`，本轮照它实施 —— 详见本档末尾的分歧修复轮一节。**
+
+## 2026-10-10 批 C 分歧审计修复轮（`DIVERGENCE: 6` = 🔴1/🟡4/🔵1 收口）
+
+**一句话**：批 C 交付后的独立差异审计判 **6 条分歧（🔴1 / 🟡4 / 🔵1）＋ 3 条建议**；本轮**只修 D1–D7**（D1–D6 是那 6 条，D7 是设计档 §9 点名的一条复核清单缺口），不加新东西。唯一的 🔴 是**夹具自己撒谎**。
+
+### 两次实测读数（原文）
+
+**修复前（本轮起点，宿主在上一轮交付态上跑的读数；本轮开工时复跑一次，逐字相同）**：
+
+```
+1 FAILURE(S)
+assertion total: 1491 (failed: 1)
+```
+
+红的正是那一条（原文）：
+
+```
+FAIL  批 C · U5 resources=false: 段里**没有**资源行（段只剩角色文本、仍在场），且上下文通道**零注册** —— 不是「注册了但渲染空串」
+```
+
+**修复后（本轮交付态）**：
+
+```
+PASS  decision is enter
+...
+assertion total: 1494 (failed: 0)
+```
+
+`node client-half.test.mjs` 两轮都是 `assertion total: 310 (failed: 0)`（本仓客户端半边对 `sections` / 资源行**零引用**，本轮按派单一字未改）。
+
+### 逐条处置（D1–D7）
+
+| # | 级别 | 处置 | 证据 |
+| --- | --- | --- | --- |
+| **D1** | 🔴 | **U5 夹具静默丢参**：`wb2Env` 形参没有 `sections`，`wb2Env({ sections: { resources: false } })` 的键落进 `...rest` 转发给 `setup()`，而 `setup()` 没有该形参 ⇒ **静默丢弃**、开关保持缺省 `true` ⇒ `env.systemPrompt.contexts.length === 0` **恒假**。修法照 `wb4Env` 的既有正确写法：加 `sections` 形参并嵌进 `settingsSeed["team-link"]`。**附带**：原「U5 对照」用的是 `env.systemPrompt.live()`（活的段，与该开关无关）⇒ 是**空真**；本轮改成 `sections.length === 2`（真承重）。另加一条**前置对照**（缺省时上下文确实注册 2 条）⇒ 删掉形参这个变异当场打红。 | 红相实跑：删 `sections` 形参 ⇒ `1494 (failed: 1)`，**只红 U5 那条**；而新的前置对照仍绿（证明它读的是开关、不是「夹具把开关丢了」）。绿相：`1494 (failed: 0)`。 |
+| **D2** | 🟡 | **计数三方漂移**：`README.md:26` / `:1221` 写 `1442`、`CHANGELOG.md` 0.5.2 条目写 `1477`、交付态实测 `1491 (failed: 1)`。跑过套件后三处同改为**同一个数 `1494`**。**算式**：`1494 = 1491 + 3`（修夹具不改条数，只有新增判据才加）。 | `node host-half.test.mjs` 自报 `assertion total: 1494 (failed: 0)`。三处逐字相同（回读比对见下）。 |
+| **D3** | 🟡 | `lib/index.js` 的 `sections` 注释仍写「资源行在三处全缺（**提示段** / 状态卡第 ⑧ 段 / digest 脚注）」——「提示段」自批 C 起不成立。改成**动态运行时上下文**，并点名 **section / context 两面**（与 :3100-3113 的 `ROLE_SECTION_NAME` 注释同一口径）。 | 回读 `lib/index.js` 的 `sections` 字段注释：现含「**context 面**不注册 …… **三处全缺**（动态运行时上下文 / 状态卡第 ⑧ 段 / digest 脚注）」。 |
+| **D4** | 🟡 | 自治批设计档**四处同主题声明**未随批 C 同改，全部就地改准（不另建档）：`docs/2026-10-09-team-autonomy-design.md` §5 FR-9 行（「段」→ 动态运行时上下文）· §9 边界表（原「零段注册」是**实质错误** ⇒ 改成「`role=false` ⇒ section 面零注册；`resources=false` ⇒ **段仍注册**，只是 context 面零注册」）· §10 批次表（原「提示段（合并注册）」）· `docs/2026-10-09-team-autonomy-implementation-plan.md` §2（原「合并一次注册」）。**附带**：设计档 §5 注记里「§8 的批次判据（U1–U6）……（内容未变）」与实际不符 ⇒ 改成准确措辞并给**可解析指针**「档名：§节」（`docs/2026-10-10-prompt-cache-design.md` §8 ／ `host-half.test.mjs` 的「批 C · …」断言名）。 | 四处逐条回读；指针形态＝`档名：§节`（无「见上 / 见该节」）。 |
+| **D5** | 🔵 | **段面渲染体抛错不留痕**：按设计档 §6.1 v1.1 改签名 `renderRoleText(plan, onError)` —— 抛错**仍吞掉并返回空串**（热路径绝不让装配失败），但经 `onError` **留一行痕**（一次性门）。生产侧传注册器里的 `warnRender`（§6.3 明说它与 §6.2 的 `onError` 是同一个函数）；判据面把批 2 有、批 C 删掉的那条子句补回。 | **红相实跑**：`renderRoleText` 改回静默 `catch {}` ⇒ `1494 (failed: 1)`，**只红**「段渲染体异常吞掉 + 经 onError 留痕恰一次（§6.1 v1.1）」；且同处的「降级为空串」那条仍绿（证明两半分开、不是同一条重复）。 |
+| **D6** | 🔵 | **§6.3「两面都缺 ⇒ 至多两行」原先无夹具**：按设计档 §8 U6 新增第 ⑤ 支 —— `sp` 在但 `section` / `getSectionOrder` / `context` **都不是函数** ⇒ **零注册** 且**两面各恰一行**（合计**至多两行**，不是一行）。夹具＝`systemPromptOptions: { omitSection: true, omitContext: true }`。 | **红相实跑**：让两面**共用一个 warn 门**（`warnContextFace` 复用 `sectionFaceWarned`）⇒ `1494 (failed: 3)` —— U6 ②（只缺 context）/ ④（context 注册抛错）/ **⑤** 一起红（共用门会让「只缺 context」时上下文面那行也不出现）。 |
+| **D7** | 🔵 | `AGENTS.md` §四未点名 `context` / `getContextOrder`（设计档 §9 要求换代复核必须把它们加进清单）。§四补一段**与既有 preset-pin 换代条并列**的「宿主换代还必复核动态运行时上下文两面」，并写明**为什么泛化句抓不到它**：本仓**并不调用 `getContextOrder`**（order 走契约允许的任意有限常量）⇒ 按「实际调用面」核对，这个名字永不进清单。 | 回读 `AGENTS.md` §四：新增段落含 `context` 与 `getContextOrder` 两个名字、`CONTEXT_ORDERS` 三键闭集（110/115/120）、130 未占用。 |
+
+### 定向变异（三条新判据逐条实跑，防「新断言是活锁」）
+
+做法：先把 `host-half.test.mjs` 与 `lib/index.js` 的原文读进内存，逐个写入变异体、跑套件、再把**原文逐字节写回**（跑完与内存副本比对，三次都 `true`）。全部**只红它该红的那条**：
+
+| 变异 | 读数 | 红的断言 |
+| --- | --- | --- |
+| 删掉 `wb2Env` 的 `sections` 形参（静默丢参） | `1494 (failed: 1)` | `批 C · U5 resources=false` |
+| `renderRoleText` 改回静默 `catch {}`（不留痕） | `1494 (failed: 1)` | `批 C · 段渲染体异常吞掉 + 经 onError 留痕恰一次（§6.1 v1.1）` |
+| 两面共用一个 warn 门 | `1494 (failed: 3)` | `批 C · U6 ②` / `批 C · U6 ④` / `批 C · U6 ⑤` |
+
+### 计数算式与三处同改
+
+- **`1494 = 1491 + 3`**。修复夹具**不改条数**（只是让既有那条从恒红变绿）；只有**新增判据**才加，本轮新增恰 **3** 条：
+  1. `批 C · U5（★ 前置：夹具真的推得动开关）` —— D1 的配套对照（1 条）；
+  2. `批 C · 段渲染体异常吞掉 + 经 onError 留痕恰一次（§6.1 v1.1）` —— D5（1 条）；
+  3. `批 C · U6 ⑤（两面都缺…）` —— D6（1 条）。
+- **同改的三处（逐字同值 `1494`）**：`README.md` 的稳定性行（`**1494 + 310** 条断言`）· `README.md` 的「当前读数」行 · `CHANGELOG.md` 的 0.5.2 条目（并在本档新增本轮条目同记）。`node client-half.test.mjs` 的 `310` 三方一致。
+
+### 如实清单（本轮未做 / 已知）
+
+1. **真机四项（U0 / U8 / U10 / U11）继续未做**：都需重启与真实流量，属父侧步骤。
+2. **FR-7（撤止血：把 `policy.sections.resources` 恢复 `true`）未做**：按派单属父侧真机步骤、需重启；本轮一个字节都没碰 `%USERPROFILE%\.dsh\team-link\policy.json`。
+3. **未重启任何东西**；未改 `client-half.test.mjs`（310/0，且它对 sections / 资源行零引用）；未新增开关 / schema / 工具；未改宿主文件。
+4. **`lib/index.js` 的渲染抛错门文案做了必要收窄**：原 `资源行渲染抛错…` ⇒ 现 `角色/资源渲染抛错…`（两面共用一个门，文案必须同时覆盖两面）。`renderResourceContext` 原有那条「经 onError 留痕」的断言只判**计数与错误文本**（不判门文案）⇒ 不受影响；宿主侧 `warnRender` 在生产的两个调用点均传入，行为不变（仍是一次性、仍返回空串）。
+5. **本档（`docs/verification-log.md`）与 `CHANGELOG.md` 的旧读数一律保留为历史**：0.5.0 的 `1442` / 0.5.1 的 `1466` / 0.5.2 的 `1477` / 批 C 交付的 `1491` 都是**各自时点**的真实读数，不改写；「当前值」只认 `1494` 一处口径。
+
+---
+
+### 2026-10-10 · 批 C **真机验收**（U8 双读数 / U10 / FR-7；U0、U11 如实未测）
+
+> 本节由**父侧（architect）实跑**并落账；引用的失败与修复见上两节（首次交付 1491/1、分歧审计修复轮 1494/0）。
+
+**① FR-7 撤止血（执行姿势：改文件 → 重启）**
+
+脚本 `.investigations/prompt-cache-hit-rate-2026-10-10/scripts/apply-FR7-resources-on.mjs`（同 A 止血那套保守写法）。
+读数（逐字段 diff 确认只动两处）：`$.savedAt 2026-10-10T14:47:46.460Z → 2026-10-10T14:52:45.538Z`·
+`$.policy.sections.resources false → true`；首 3 字节 `7b 0a 20`（无 BOM）· `JSON.parse` OK · 8 个团队俱在 · 无 U+FFFD · 字节 205920 → 205919。
+**重启后复核未被回写覆盖**：`sections` 仍 `{"role":true,"resources":true}`、`savedAt` 仍是写入时刻。快照 `20261010-225240-2047` + 文件备份 `policy.backup-before-FR7-20261010T2253.json`。
+
+**② U8 双读数（判据 ≥95%；glm-5.3；解码 = 逐帧 zstd 后按 `assistant/message.usage` 统计 `cacheReadTokens/(inputTokens+cacheReadTokens)`）**
+
+| 会话 | 重启后请求 | **稳定区间** | **命中率** | 系统提示变化次数 | 系统提示含资源行 | 快照含资源行 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 协调者 `team-link-2026-10-08-coordinator-d7ca53f8` | 14 | 第 142–149 轮（12 个请求） | **99.90%** | 2（**均不含**资源行） | **否** | **是**（13 条快照） |
+| worker-1 `team-link-2026-10-08-worker-1-944d2b52` | 3 | 第 65 步 2 – 66 步 1（2 个请求） | **99.55%** | 2（**均不含**资源行） | **否** | **是**（1 条快照） |
+
+逐字资源行（协调者末条快照）：`[team-link 会话资源] · 窗口 1.00M · 压力 712.4K（71.2%） · 压缩阈值 未知（宿主投影不含该读数） · 累计 ≈167.81M · 第 149 轮`
+逐字资源行（worker-1）：`[team-link 会话资源] · 窗口 1.00M · 压力 224.6K（22.5%） · 压缩阈值 未知（宿主投影不含该读数） · 累计 ≈285.64M · 第 65 轮`
+
+**③ 换挡代价（如实登记，非缺陷）**：协调者第 141 轮两步 `6.0% / 5.3%` —— ① `141/1` 是**服务商缓存过期**（会话闲置 1h39m；系统提示内容逐字未变、hash 与重启前同为 `668002cb`）；② `141/2` 是**宪章段首次挂上**（`upsert-team` 触发，系统提示 +448 字符）。worker-1 第 65 步 1 的 `15.4%` 同属重启后冷启。**三者皆一次性，之后 12 / 2 个请求均 ≥99.55%。**
+
+**④ U10 快照账**：协调者 **13 条快照 ÷ 14 个请求 ≈ 0.93 条/请求**；worker-1 注册后 **1 ÷ 1 = 1.0**。每条 483 字符（≈140 token）。
+⇒ **越过设计档 §9.2 的触发线（>1 条/3 请求）⇒ 按该节应另立小批评估「回合门（B 选项）」。** 量级如实登记：140 token 对 ~70 万 token 上下文为 **0.02%**，且追加即静态、照走缓存价。
+（口径：含该行的消息 = 快照条数 + workbench digest 1 条（FR-4 设计的脚注出口）；另有 `agent/inbox/spliced` 事件是同一消息在事件日志里的重复记录，不计。）
+
+**⑤ U11（压缩后仍在）· 未测**：本轮窗口内**未发生全量压缩**，判据无从触发。
+**⑥ U0（宿主面 real call）· 未做**：本轮以运行时行为间接证明（`context()` 注册成功且渲染进快照、`order` 生效）；`typeof sp.context === "function"` 的**直读仍未做**，如实留白。
+
+**⑦ NF-1 缺口被真机复现（本批明确不修，另立批次）**：重启后打开 worker-1 时它**未获注册** —— 其系统提示里 `不要静默等待` / `职责边界` / `[team-link 会话资源]` **全为 false**。再让现任协调者跑一次 `upsert-team`（此时 worker-1 已是活代理）后：系统提示 `28855 → 28993`（+138 字符 = 义务行）且**快照里出现资源行**。
+⇒ **「重启后不自动补挂」是可复现的真缺陷**（= 2026-10-10 第 64 轮那次「角色文本没同步」的同一根因），与批 C 的落点搬家无关。
