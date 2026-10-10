@@ -10246,6 +10246,19 @@ check("§9 第 ⑧ 段原因码④ 对照: 同一张卡上**活会话**（调用
 		return section.some((line) => line.includes("session-self") && line.includes("压力 25.0%")) && section.some((line) => line.includes("非活动会话"));
 	})());
 
+// --- task-20：让**非调用方**的活会话进第 ⑧ 段读窗 ⇒ 集中归一 hostShapeAll 承重 -----------
+// 读窗来自 sessionQuery 的**会话记录**（不是 agents），所以必须同时种 `sessions` 记录与活代理；
+// 只种 extraAgents 的话第 ⑧ 段仍然只有 session-self（复核者探针实测，t-19 🔵1）。
+const WB20_PEER = "session-wb20-peer";
+const wb20Env = () => wb4Env({
+	sessions: [{ header: { id: WB20_PEER, createdAt: 1000, cwd: TEAM_WS }, live: true, persisted: true }],
+	extraAgents: [{ id: WB20_PEER, status: "idle" }],
+});
+const wb20Section = wb4SectionOf(await wb4StatusLines(wb20Env()), "--- 资源/预算");
+check("task-20 前置: 非调用方的活会话确实进了第 ⑧ 段读窗（不是只有 session-self）—— 同时种会话记录与活代理",
+	wb20Section.filter((line) => line.startsWith("- ")).length === 2 && wb20Section.some((line) => line.startsWith("- " + WB20_PEER + "：")));
+check("task-20 ① 非调用方的活会话给出**真实读数**: 压力 25.0%（窗口 1.00M） · 累计 ≈1.0K · 第 7 轮 —— 它的会话对象必须是**宿主真实形状**，而它只由夹具的集中归一 hostShapeAll 造型（改成 no-op ⇒ 本条必红）",
+	wb20Section.some((line) => line.startsWith("- " + WB20_PEER + "：") && line.includes("压力 25.0%") && line.includes("窗口 1.00M") && line.includes("累计 ≈1.0K") && line.includes("第 7 轮") && !line.includes("不可读")));
 // --- U8：轮换四边界（严格大于）+ turns 不可读的降级 --------------------------------
 const wb4Cand = (turns, tokens) => __testing.rotateCandidateOf({ available: true, sessionId: "s", turns, totalTokens: tokens });
 check("U8 轮换四边界（turns）: 99 / 100 **不算**候选、101 算（阈值 100 取严格大于）",
