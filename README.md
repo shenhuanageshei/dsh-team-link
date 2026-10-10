@@ -5,7 +5,7 @@
 > 原名 `dsh-session-link-pro`（0.2.4 及之前），**GitHub 仓库已于 2026-09-18 改名为 `dsh-team-link`**（旧地址由 GitHub 自动重定向）。历史会话日志里的旧工具名 `session_link_pro_*` 与消息 id 前缀 `slp-` 保持原样——它们是取证链，不做回写。
 
 [![tests](https://img.shields.io/badge/tests-1513%20%2B%20310%20assertions-brightgreen)](#十测试)
-[![version](https://img.shields.io/badge/version-0.4.2-blue)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.5.2-blue)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
 Fork 自 [PwnKY/dsh-session-link](https://github.com/PwnKY/dsh-session-link)——深链复制、`/s/<id>` 打开器与深链上下文注入保留自上游；本仓库在其上长出了完整的多会话协作层。
@@ -1260,15 +1260,15 @@ node client-half.test.mjs   # 浏览器半边：卡片渲染 / 降级路径 / �
 | [`docs/team-mode-batch-design-2026-09-26.md`](docs/team-mode-batch-design-2026-09-26.md) | **形态批（B 批，2026-09-26）**：团队**形态**字段（`mode` / `leadSessionId`，只落在 settings）· `team_link_roster action=set-mode`（**第五个封闭动词**：宿主探测 + 双重门 + Lead 校验与默认 + decisions 恰好一行 + 幂等）· 读面**形态段**（形态 + Lead + 成员名册投影 + 完整能力矩阵 + 形态诊断行；roster get 与状态卡 ⑦ 段同源）· **teammate 交卷提示**（提示式、不阻断）；判据 U1–U14 + U11b，§8 的假设 A1–A4 逐条实测，读数见 [`docs/verification-log.md`](docs/verification-log.md) |
 | [`docs/team-upgrade-research-2026-09-17.md`](docs/team-upgrade-research-2026-09-17.md) | 调研：一次 16+ 小时真实多会话联调的复盘，与升级提案（**其 §5 已被设计取代**，以设计文档为准） |
 | [`docs/consult-minutes/`](docs/consult-minutes/) | 多模型会诊纪要（含裁定层：逐条采纳/不采纳与理由、分歧父侧裁定、教训、不可验清单） |
-| [`docs/verification-log.md`](docs/verification-log.md) | **验证账本**（证据，不是说明书）：0.3.1 → 0.4.2 逐轮的红相/绿相读数、审计变异矩阵、以及每次真机验证的原始取证（含 0.3.7 那次「静默失效一整天」的完整调试历程） |
+| [`docs/verification-log.md`](docs/verification-log.md) | **验证账本**（证据，不是说明书）：0.3.1 → 0.5.2 逐轮的红相/绿相读数、审计变异矩阵、以及每次真机验证的原始取证（含 0.3.7 那次「静默失效一整天」的完整调试历程） |
 
 ---
 
 ## Changelog
 
-完整变更史见 **[CHANGELOG.md](CHANGELOG.md)**——0.3.1 → 0.4.2 逐版条目，每版按「修了什么 → 为什么 → 怎么验证」组织，行为修复都附**变异验证**证据（修复前必红 / 修复后全绿）。
+完整变更史见 **[CHANGELOG.md](CHANGELOG.md)**——0.3.1 → 0.5.2 逐版条目，每版按「修了什么 → 为什么 → 怎么验证」组织，行为修复都附**变异验证**证据（修复前必红 / 修复后全绿）。
 
-**最近一次发布：0.4.2（2026-09-29，发布时一次性收口 3 个「未发布」条目：DSH 0.2.0-rc.1 preset pin 换代 `standingKeyFor` → `acquireScope` · preset 租约释放 · 客户端团队面板可读性重设计）**——（上一版 **0.4.1（2026-09-29，发布时一次性收口 10 个「未发布」条目：DSH 0.2.0-rc.1 兼容性闸门 · 部署接线改 `link:` · 策略持久化自持化 · C 批客户端团队面板与形态可视化 · 六轮代码评审/分歧审计修复）**；再上一版 **0.4.0（2026-09-27，发布时一次性收口「团队任务台账」＋「可观测批：读窗扩展 · 团队状态卡 · 台账收件视图/派生回执」＋「形态批：团队形态 · agent-team 档 · teammate 交卷提示」＋三轮分歧/收尾修复轮）** 见下）——**加固与恢复**（导出路由接入平台信任栅栏 · 恢复能力加宽 · 侧栏「会话工具」入口 · 深链聚焦修复）· **§10.2.8 `/team_session` 三条真机缺陷修订**（输入文法 · 结果可见性 · 确认框边界）· **§10.2.8.9 / §10.2.8.10 四项裁定**（默认团队名带日期 · 现任失联则释放并认领 · 调用方回执通道 4 · 无任务也投最小唤醒）。**逐轮红相/绿相读数与真机取证**见 [`docs/verification-log.md`](docs/verification-log.md)。
+**最近一次发布：0.5.2（2026-10-10，热修：重启后真机复验抓到的三处）**——（上一版 **0.5.1（2026-10-10，发布收口：让**既有团队**也吃到自治那套 ＋ 判读行自证口径）**；再上一版 **0.5.0（2026-10-10，发布收口：团队自治三批 + 一次真机修复）**；**0.4.2（2026-09-29，发布时一次性收口 3 个「未发布」条目：DSH 0.2.0-rc.1 preset pin 换代 `standingKeyFor` → `acquireScope` · preset 租约释放 · 客户端团队面板可读性重设计）**——（上一版 **0.4.1（2026-09-29，发布时一次性收口 10 个「未发布」条目：DSH 0.2.0-rc.1 兼容性闸门 · 部署接线改 `link:` · 策略持久化自持化 · C 批客户端团队面板与形态可视化 · 六轮代码评审/分歧审计修复）**；再上一版 **0.4.0（2026-09-27，发布时一次性收口「团队任务台账」＋「可观测批：读窗扩展 · 团队状态卡 · 台账收件视图/派生回执」＋「形态批：团队形态 · agent-team 档 · teammate 交卷提示」＋三轮分歧/收尾修复轮）** 见下）——**加固与恢复**（导出路由接入平台信任栅栏 · 恢复能力加宽 · 侧栏「会话工具」入口 · 深链聚焦修复）· **§10.2.8 `/team_session` 三条真机缺陷修订**（输入文法 · 结果可见性 · 确认框边界）· **§10.2.8.9 / §10.2.8.10 四项裁定**（默认团队名带日期 · 现任失联则释放并认领 · 调用方回执通道 4 · 无任务也投最小唤醒）。**逐轮红相/绿相读数与真机取证**见 [`docs/verification-log.md`](docs/verification-log.md)。
 ---
 
 ## Credits
