@@ -6,6 +6,14 @@
 
 ## 未发布
 
+### 真机修复：状态卡第 ⑧ 段一行读数都读不出来（2026-10-10；批 4）
+
+**改了什么**：`team_link_status` 第 ⑧ 段的会话读数**只接受活动会话真身**（`ctx.agents.get(id)?.session`）；拿不到就如实标「不可读（原因：非活动会话）」，**不再构造任何替身对象**。同时把测试桩改成**镜像宿主**——会话投影桩对不具 `snapshotEvents` 的会话对象**逐字**抛宿主那句错（`session.snapshotEvents is not a function`）。
+
+**为什么**：真机实测（2026-10-10 重启后）第 ⑧ 段**每一行**都渲染「不可读（原因：投影读取抛错：`session.snapshotEvents is not a function`）」——根因是旧实现把 `{ header: { id } }` 这个**替身**传给了宿主投影，而宿主 `stateOf → materializeCells → session.snapshotEvents()`（asar 实读 `dsh-session-projection` 与 `dsh-session` 源码确认）。这正是本仓 `AGENTS.md` §四点名的坑：**桩只镜像自家调用面，就把宿主断层永久挡在套件外**——当时套件 1438 条**全绿**却看不见它。
+
+**怎么验证**：修桩在先、修码在后 ⇒ **实现前自然红 7 条**（红集全落在第 ⑧ 段家族），修后 `node host-half.test.mjs` → `ALL PASS / 1442 (failed: 0)`、`node client-half.test.mjs` → `310 (failed: 0)`。**真机复跑**（同日第二次重启后）：第 ⑧ 段活会话给出真实读数（实测 `压力 45.7%（窗口 1.00M） · 累计 ≈149.22M · 第 48 轮`），非活动会话如实标「非活动会话」——两种情形在同一段里分得开。
+
 ### 团队自治：三层「看得见」（2026-10-09；批 1–3 合并条目）
 
 > 用户原话（2026-10-08）：「协调者三次被纠正『你只负责管理，不要自己实施』」「worker 报『预算耗尽，实现未动』，而它的实测用量是 131M token / 32 轮」。
@@ -20,7 +28,7 @@
 - **总开关（FR-9）**：策略键 `sections.{role, resources}`（缺省都开）—— `role=false` 关掉角色/宪章文本（连工具返回面的重钉），`resources=false` 让资源行在**三处全缺**（提示段 / 第 ⑧ 段 / 摘要脚注）。**键集由八项变九项**（README 的键集描述与 `PolicyConfig` 声明面同批更新）。
 - **运维可见**：`host-half.test.mjs` 的临时目录改为**每进程独有**（并发复跑不再互踩），并在退出钩子里兜底清理。
 
-**怎么验证**：`node host-half.test.mjs`（1417+ 条断言）与 `node client-half.test.mjs`；每条新判据都附变异红相（详见 `docs/verification-log.md` 的批 1/2/3 各节）。
+**怎么验证**：`node host-half.test.mjs`（1442 条断言）与 `node client-half.test.mjs`；每条新判据都附变异红相（详见 `docs/verification-log.md` 的批 1/2/3 各节）。
 ### DEFECT-5（真机 2026-09-30）：`revive` 复活出来的 worker 第一回合必死——resume 面漏了同一份「能跑起来」的组装时序
 
 > 用户原话：「worker会话重启后报错 —— 处理失败 / 本轮运行失败 prompt variable "{{model}}" has no value for this assembly (section "deployment:persona-prefix") / UNKNOWN」。
