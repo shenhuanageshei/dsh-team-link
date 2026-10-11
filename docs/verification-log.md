@@ -3720,5 +3720,440 @@ $ node .investigations/eng-tooling/scripts/balance-scan.mjs host-half.test.mjs
 
 **清理**：临时团队已退役、`team/u9-verify-1012/` 已删（见紧随其后的一节）。
 
+---
+
+### 2026-10-12 · 批 G：自动工作台注册的续期（FR-R1…FR-R5 / U1…U12）
+
+**归属**：设计档 [`2026-10-12-watchdog-renewal-design.md`](2026-10-12-watchdog-renewal-design.md)（§5 FR-R1…FR-R5 · §6 机制伪代码与插入位置 · §7 状态与 schema · §8 U1…U12 · §9 边界 · §10 既有断言迁移）· 需求档 [`2026-10-12-watchdog-renewal-requirements.md`](2026-10-12-watchdog-renewal-requirements.md) · 决策来源 [`consult-minutes/2026-10-12-consult-43-minutes.md`](consult-minutes/2026-10-12-consult-43-minutes.md)（§2 逐条处置 · §3 五项父侧裁定）。
+
+**FR-R5 的「若与新行为不符则同改」逐处判读（本轮实读源码，不是记忆）**：
+
+| 处 | 原文 | 判读 |
+| --- | --- | --- |
+| `markWatcherDead` 注释 | “keeping the registration until its TTL” | **不符** ⇒ 已改（见下表），原名锚留在注释里 |
+| `watch list` 的 dead 文案 | 「注册保留至 TTL」 | **不符**（对 auto 那一档）⇒ 已按 `origin` 分岔 |
+| 摘要脚注（`renderWatchdogDigest`） | 「本条摘要来自**全队工作台**的自动注册，不会被 clear 清掉，**也不需要你维护**」 | **相符** —— 批 G 恰恰让它从「说谎」变成真话（此前 12h 就死、需要人为 arm-team 维持），**一字未改** |
+| `clear` 的拒绝文案 | 「它随团队存在，只能靠 TTL 到期或团队解散消失」 | **相符**（「随团队存在」正是名册门的语义；TTL 仍是名册失效时的收尸路径）⇒ **一字未改** |
+
+**改了什么**（逐个符号；行号 as-of 本次交付的工作树，以符号名为准）：
+
+| 落点 | 改动 | 对应 FR / 判据 |
+| --- | --- | --- |
+| `lib/index.js` 常量区 `WATCHDOG_RENEW_WINDOW_MS = 2 * 3600000` | 新增（窗口 2h；理由与两条被否决的取值写在常量注释里） | FR-R1 / §7 · U1·U3 |
+| `lib/index.js` `planAutoWatchdog` 的 refresh 分支 | 字段形状统一：**保 `createdAt`**、**写 `renewedAt: now`**、`targets` 按调用方现算覆写 | FR-R2 / §7 · U5② |
+| `lib/index.js` 新函数 `autoWatchdogRosterGate(teams, teamName, watcherSession)` | **共享 helper**：团队在场 ∧ watcher 仍是现任 ∧ 非空 targets（**刻意不看**观察者活性）；返回 `{ members }` 或 `{ error }` | FR-R1/R2 · 评审 🟡#6 |
+| `lib/index.js` 新函数 `renewAutoRowIfStillValid(entry, now)` | FR-R1 的六道门 ＋ 窗口 ＋ fail-open ＋ 写盘后 `rearm()`；**只 refresh 不 resurrect**（`planned.created === true` ⇒ 不续） | FR-R1 / §6 · U1·U2·U3·U9·U10·U12 |
+| `lib/index.js` `ensureTeamAutoWatchdogs` | ① `existing` 查找加「**未过期**」谓词（`entry.expiresAt > now`）；② 名册门改走共享 helper（`members` 由它给）；③ `options.now` 可注入（缺省 `Date.now()`，逐字回到旧行为） | FR-R2 / §5 · U5 |
+| `lib/index.js` `patrolOne` | 在**到期门之前**插一行：`origin === auto && await renewAutoRowIfStillValid(entry, now)` ⇒ 续成即 `return`（对本条目、不预扫全表、在 watcher 活性门之前） | FR-R1 / §6 硬约束 · U1·U10 |
+| `lib/index.js` `patrol` 循环体末尾 | `await runPatrolEnsure(now)` | FR-R3 · U6·U11 |
+| `lib/index.js` 新函数 `runPatrolEnsure(now)` | 60s 去抖（进程级时间戳，仿 `runRotationSweep`）＋ 时钟可注入 ＋ 失败只留 warn；调用点**在循环体之后** | FR-R3 / §5 · U6 |
+| `lib/index.js` `watchdogList` 归一化 | 白名单加 `renewedAt`（**条件展开**：非有限数字 ⇒ 键不在场，不留一个显式 `undefined` —— 归一化视图是 `policy.update` 的输入，`JSON.stringify` 会丢掉 `undefined` 成员） | FR-R4 / §7 · U7 |
+| `lib/index.js` `watchdogLines` 渲染 | 每行加「上次续期 <stamp>」/「上次续期（从未续期）」（`watch list` 与状态卡第 ③ 段共用这一处字节） | FR-R4 / §5 · U7 |
+| `lib/index.js` `markWatcherDead` 注释与 warn 文案 | 口径改为「保留至**名册有效期内**；名册失效时由 TTL 收尸」；**原名锚** `keeping the registration until its TTL` 留在注释里 | FR-R5 / §10.2 |
+| `lib/index.js` `team_link_watch action=list` 的 dead 文案 | 按 `origin` 分岔：auto「注册随名册续期，名册失效时由 TTL 收尸」/ manual 逐字保留「注册保留至 TTL」 | FR-R5 · §5（读面文案同批改准） |
+
+**新增判据（24 条，全部在 `host-half.test.mjs` 的「批 G」块，标识符统一 `rg` / `RG_` 中缀）**：U1×3（续期生效＋负相自证 · 逐字段保真＋写频 · 活性档）· U2×5（团队不在名册 / watcher 非现任 / 协调者空缺 / 零可盯成员 / 正相对照）· U3×2（写频 · 窗口外负相）· U4×1（清扫链不卡死）· U5×2（冷启动同 id 原地刷新 · 第二趟 `/team_session` 的 refresh 形状）· U6×1（周期 ensure 重铸 ＋ 去抖负相）· U7×3（两处渲染可见 · 归一化不丢字段 · 从未续期如实渲染）· U8×2（manual 永不续期 · manual 到期旧行为）· U9×1（`targets` 按名册重导）· U10×1（已过期 ⇒ 删而不复活）· U11×1（换届后新协调者的行）· U12×1（fail-open）· 快照陷阱×1（不做外层预扫）。夹具全部用**注入时钟**（`patrol({ now })` 的既有缝隙）驱动，而该注入时钟**锚真墙钟**（`const RG_NOW = Date.now()`）—— ★ **分歧修复轮 D7 更正**（原文锚：**不依赖墙钟**；该措辞**与事实相反**，理由与逐处处置见本档末「2026-10-12 · 批 G 分歧修复轮」一节）；每条红相判据同批给**负相自证**。
+
+**★ 读数如实（本次交付的边界）**：
+
+- **本轮交付方未执行任何命令**：`node host-half.test.mjs` / `node client-half.test.mjs` **未跑**（本仓纪律给定的验证命令由宿主执行），`node --check` 亦未跑 ⇒ 本节的「全绿」**不是**本轮的实测读数，**由宿主回填**。**未调用 `advisor`**。
+- **新增条数 24 是直接读数**（对 `host-half.test.mjs` 做符号检索：`^check("批 G ·` 命中 24 处，其中 0 处是既有断言的改写，全部是新增的 `check(` 调用点）；**总条数 1594 = 1570 + 24 是推算值**（1570 取自本账本「批 F」一节的源码计数记录），**不是本轮实测**。
+- **既有断言迁移（设计档 §10.1 两族）—— 本轮的实际处置是「不改断言、只改口径」，如实入账**：
+  - **`:2083` 一族**（`the registration survives a dead observer (kept until its TTL)`）：该夹具的行是**手工注册**（`watch.register`，`origin: manual`）⇒ 在新语义下**逐字仍成立**（手工行永不续期），**断言一字未改**。设计档 §10.1 预期的「期望必变」在**手工行上不成立**；凡 `origin: auto` 的活性死亡语义，由本批**新增**的 U1 活性档判据
+    （`批 G · U1 活性档: 观察者**没有任何活代理**…照样续`，`host-half.test.mjs` 的批 G 块）覆盖 —— 那条用的是同一条 `setHiddenAgent("session-self", true)` 形状。**「迁移前必红 / 迁移后全绿」两次实测读数缺失**（本轮不能执行命令），如实标注为**未做的读数**。
+  - **`:3181-3193` 一族**（评审裁定 #9「过期行不挂定时器」，现落在 `host-half.test.mjs` 的 `wb2ExpiredRow` 一族）：那些行的 `origin` 是 `manual` **或** `team: null`/队不在名册 ⇒ 续期门**根本进不去**（`origin` 门在外层）⇒ 语义与判据**逐字未动**，`rearm` 的行为一字未改。**本批把该族的两条语义各自钉了一条新判据**：U8②（手工行到期 ⇒ 照旧被收、定时器清空）与 U4（同队「有效但在窗口内」＋「无效且已过期」并存 ⇒ 续有效的、删无效的，链不卡死）。
+  - **两次实测读数（迁移前必红 / 迁移后全绿）本批未取**（属宿主执行面），设计档 §10.1 的那条要求**未满足**，如实列在下方「未做到」清单里。
+- **「共享 helper 只有一个」可核**：`autoWatchdogRosterGate` 的定义处 1 个、调用处 2 个（`renewAutoRowIfStillValid` 与 `ensureTeamAutoWatchdogs`）⇒ 两处读**同一份**谓词，不存在复制两份的单边漂移。
+- **零新 import / 零新写路径 / 零新定时器**：模块级 `import` 仍 8 条（本批一行未加）；写落点仍只有 `policy.update`；定时器仍只有「每条注册一个巡逻定时器」那一处（`schedule`），`runPatrolEnsure` 复用现有巡逻定时器，**不新建**定时器。
+
+**未做到（如实，不声称完成）**：
+
+1. **任何命令的实测读数**（`node host-half.test.mjs` 的红/绿两次、`node --check` 的语法自查）—— 本仓纪律把验证命令划给宿主，本轮交付方**零执行**。
+2. **既有断言迁移的「迁移前必红 / 迁移后全绿」两族两次实测读数**（设计档 §10.1 / `AGENTS.md` §三）—— 见上「既有断言迁移」段：本轮的实际处置是「断言未改、口径与新增判据接管」，所以那两次读数即便执行了也**不适用于**这两族（它们在新语义下本就该绿）；**设计档 §10.1 的字面要求因此未被满足**，留待父侧裁决：或按本节的处置入档（改写为「原断言保持不变 ＋ 新增活性档判据」），或另加一条**会变色**的锚测试。
+3. **真机项**（`consult-minutes` §5 的不可验清单）：冷启动 >12h 的真实时序、机器 sleep 后睡过「2h 窗口 + 到期点」的真实路径、`renewedAt` 在真状态卡上的可读性 —— 均需真机长时段，属父侧/用户。
+
+**纪律声明**：本次交付**未执行任何命令**（`node …` / `python` / PowerShell 一律未跑），**未调用 `advisor`**；一切读写都经 read / grep / edit 工具。全部落盘文件均为 **UTF-8 无 BOM**（编辑工具直写，未经 `Set-Content` / `Out-File`）。**框定 token 零逐字写入**：本节的文本里没有那种包裹结构，若需构造一律用码点（`String.fromCharCode(0xFF5C)`）。
+
+---
+
+### 2026-10-12 · 批 G 分歧修复轮（D1–D9；只修这九条，不夹带新东西）
+
+**归属**：设计档 [`2026-10-12-watchdog-renewal-design.md`](2026-10-12-watchdog-renewal-design.md)（§5 FR-R3 的措辞更正 ＋ §10 实施回执第 4 条）· 需求档 [`2026-10-12-watchdog-renewal-requirements.md`](2026-10-12-watchdog-renewal-requirements.md)。上一条批 G 节见上。
+
+**来源**：一份**只读审计**（`module.registerHooks` 打纯内存补丁跑真套件、**零落盘**）给出 **9 条分歧**与逐条修复方向；
+本节只登记本轮的处置与**未做到**的条目，不重复上一节的交付面。
+
+**改动面（逐个符号；行号 as-of 本次修复轮的工作树，以符号名为准）**：
+
+| 落点 | 改动 | 对应分歧 |
+| --- | --- | --- |
+| `lib/index.js` `createWatchdog` 尾部的返回 | 匿名对象字面量**具名**为 `controller`（`const controller = { … }; return controller;`），并在其上方写明为什么必须具名（D1 的根因与后果） | D1 🔴 |
+| `lib/index.js` `runPatrolEnsure` | `ensureTeamAutoWatchdogs(ctx, policy, watchdog, { now })` → `…, controller, { now }` | D1 🔴 |
+| `host-half.test.mjs` 批 G 块头 ＋ `RG_NOW` | 新增 `const RG_NOW = Date.now()`；块头把「一律用注入时钟、不依赖墙钟」改准为「注入时钟**锚真墙钟**」并写明两条理由（attach ensure 不注入 `now`；`rearm()` 判过期读 `Date.now()`） | D3 🔴 / D7 |
+| `host-half.test.mjs` `rgRow` | `expiresAt: RG_NOW + remainingMs`、`createdAt` 缺省 `RG_NOW - 6h`（原为 `WD_NOW` 面）；全部 `patrol({ now })` 改锚 `RG_NOW` | D3 🔴 |
+| `host-half.test.mjs` 新 helper `rgPlant(env, rows)` | 「把注册行种进命名空间」的唯一动作 —— 供**必须在 attach 后置链之后**才种行的夹具调用（U2 四态 / U4 / U10 / U6②） | D5 / D6 同族 |
+| `host-half.test.mjs` `rgRefuseRun` / U4 / U10 | 种行前多等一格宏任务（`await tick()`）：attach 后置链里的 `ensureTeamAutoWatchdogs` 是 **fire-and-forget**（`Promise.resolve().then(...)`，`policy.onAttach`）⇒ 链尾那行 info 打出时它**未必已经跑完**；不等它就种行，它会反过来处理夹具刚种下的行（U10 的「过期行被当场刷新」正是这条缝隙的产物）。`tick()` 是既有夹具对这一条缝隙的同一做法（U20 / wb6Env / rgColdEnv） | D3 / D6 同族（判据面时序） |
+| `host-half.test.mjs` 8 个夹具 | `setup(...)` → `watchdogEnv(...)`：`rgRefuseEnv` · `rgChainEnv` · `rgExpiredEnv` · `rgManualLiveEnv` · `rgManualExpiredEnv` · `rgColdEnv` · `rgRespawnEnv` · `rgHandoverEnv`（`selfCwd`/`sessions`/`extraAgents`/`settingsSeed` 四处参数逐个翻译成 `targets`/`teams`/`watchdogs`；随之删掉只服务于旧写法的 `rgTargetAgent`） | D2 🔴 |
+| `host-half.test.mjs` U1 活性档 | 夹具多一条**不在续期分支上**的手工行：被续的 auto 行续成即 `return`（走不到 watcher 活性门），手工行照旧走到那里被标 dead ⇒ 两半在同一次巡逻里同时可读（原断言 `deadWatchers.size === 1` 在此**永远红**） | 随 D1 暴露 |
+| `host-half.test.mjs` U4 | 两行**种在 attach 之后**（此刻都没有定时器）＋ 先单条巡逻（`patrol({ id })` ＝生产形状）后全量巡逻；「该合法死掉」那一档的队改成**现任空缺**（ensure 也不会为它重铸） | D2 / D5 |
+| `host-half.test.mjs` U6 | ①→③ 由 `+1ms` 改为 **`+61s`**（跨过 `PATROL_SWEEP_MIN_INTERVAL_MS` 的 60s 去抖），④ 仍留在 60s 之内做去抖负相；全程同一 `RG_NOW` 面 | D2 / D4 |
+| `host-half.test.mjs` U8① | 同队再种一条**在窗口外的 auto 伴随行**（ensure 此刻报 `present`）⇒「零 `watchdogs` 写」只咬手工行，不被 FR-R3 的补挂污染 | D2 / D5 |
+| `host-half.test.mjs` U10 | 过期行改在 `waitForChain` **之后**种（否则 attach 的 FR-R2 先把它刷成未过期）；断言从「表零注册」改成「**那个 id** 消失 ＋ 它的定时器清掉」（尾部 ensure 会重铸**新 id** 的行，那是本批有意行为） | D6 同族 |
+| `host-half.test.mjs` U11 | 由「两趟巡逻观察中间态」改成「**一轮**巡逻之内：旧行死 ∧ 新行**同轮**铸出」（中间态在实现里不存在） | D5 |
+| `host-half.test.mjs` U5② | 两趟 `roles=worker-a`（**已登记** ⇒ `plan.creating.length === 0` ⇒ handler 幂等早退、**从不调用 `armTeamWatchdog`**）改为 `roles=worker-b` / `roles=worker-c`（批次非空）⇒ 真的走到 refresh 分支 | D6 |
+| `README.md` 徽章 ＋ 属性表 ＋ §十「当前读数」 | 计数同步到 **1594**（批 D/E/F 枚举后补 **批 G 新增 24 条**），并把 1594 的**计数**出处写成审计侧对修复前工作树的独立实测 `assertion total: 1594 (failed: 18)`；修复后的读数标注为**由宿主回填** | D8 |
+| `CHANGELOG.md` 批 G 节 | 「不依赖墙钟」改准为「注入时钟**锚真墙钟**」＋ 为什么；条数口径改为有独立实测背书；新增「分歧修复轮（D1–D9）」小节 | D7 |
+| `docs/verification-log.md` 上一条批 G 节的那一句 | **就地标注更正**（保留原措辞「不依赖墙钟」作**原文锚**，紧随其后写明更正与理由）＋ 本文件末尾整节登记本轮处置。★ 这是对「只追加」纪律的一次**显式例外**：父侧 D7 明确要求改账本里那一句，故按本仓「改写不删除、留原名锚」的既有纪律处理（原文一字未删） | D7 |
+| 设计档 §5 FR-R3 ＋ §10 实施回执 | 「**不 await 在 tick 的关键路径上**」按落码改准（落码是 `await runPatrolEnsure(now)`）并留原文锚；§10.1 的两次读数**再次如实登记为未做** | D9 |
+
+**D1 的同族自查（逐个外部标识符过作用域；本批已经栽过一次同类错）**：把 `createWatchdog(ctx, policy, rotation, sections)` 体内引用的
+**每一个**外部标识符列出来并逐个查了定义处 ——
+
+- **形参/闭包内**（`ctx` / `policy` / `rotation` / `sections`；`timers` / `ticked` / `deadWatchers` / `lastAgentState` / `digested` /
+  `disposed`；`stopTimer` / `forget` / `schedule` / `removeWatchdog` / `recentlyTicked` / `markTicked` / `markWatcherDead` /
+  `readTargetRows` / `rememberAgentStates` / `watcherArmedActive` / `deliverDigest` / `renewAutoRowIfStillValid` / `patrolOne` /
+  `patrol` / `lastPatrolEnsureAt` / `runPatrolEnsure` / `lastPatrolSweepAt` / `runRotationSweep` / `rearm` / `start` / `cancel` /
+  新增的 `controller`）：**全部在本闭包内定义**，其中 `rearm` 是**函数声明**（在 `removeWatchdog` 里被先用后定义，靠 hoisting 成立）；
+  `controller` 虽声明在函数**末行**，但它的唯一读者是 `runPatrolEnsure`，而后者只在 `createWatchdog` 返回之后被调用
+  （定时器回调 / `apply` 的调用点）⇒ **无 TDZ 风险**。
+- **模块级**（`PLUGIN_LABEL` / `describeError` / `readGoalSignal` / `buildLivenessSignal` / `LV_RUN_MIN` / `lastActivityOf` /
+  `readSessionSurface` / `classifyWatchdogTargets` / `watchdogDigestActionable` / `watchdogDigestSignature` /
+  `WATCHDOG_DIGEST_DEBOUNCE_MS` / `digestFooters` / `relayUserMessage` / `renderWatchdogDigest` / `autoWatchdogRosterGate` /
+  `planAutoWatchdog` / `WATCHDOG_RENEW_WINDOW_MS` / `WATCHDOG_ORIGIN_AUTO` / `TICKABLE_VERDICTS` / `tickMessage` /
+  `PATROL_SWEEP_MIN_INTERVAL_MS` / `ensureTeamAutoWatchdogs`；内建 `Map` / `setInterval` / `clearInterval` / `Date`）：
+  **全部在模块作用域有定义**（逐个 grep 到定义行）。
+- **唯一越界者就是 D1 那个 `watchdog`**（`apply` 体内的 `const watchdog` 不在本闭包的作用域链上）⇒ 修掉之后，本函数体内
+  **不再有**任何引用模块级/外层而实际不可解析的标识符。
+
+**六条重设计判据的「新红相构造」（判据必须真能红；构造即定向变异）**：
+
+| 判据 | 新红相构造 |
+| --- | --- |
+| **U4** | ① 去掉 `renewAutoRowIfStillValid` 里的 `rearm()` ⇒ 那条**种在 attach 之后、本来没有定时器**的续期行**仍然没有定时器**（`rgChainRenewArmed` 为假）；② 把窗口守卫放宽到含已过期行 ⇒ 「该合法死掉」那条被原地续 ⇒ 收不掉、表里剩两条 |
+| **U6** | 撤掉 `patrol` 尾部的 `await runPatrolEnsure(now)` ⇒ 名册有效却在表里无行时**永不重建**（`rgRespawnRows` 为空）；反向：把去抖写成恒真 ⇒ ④ 那一轮会多出一条 ⇒ 红 |
+| **U8①** | 让续期分支接手工行（摘掉 `origin === WATCHDOG_AUTO` 那道门）⇒ 手工行被写 ⇒ 逐字节比对与「零 `watchdogs` 写」双双红 |
+| **U10** | 把窗口守卫放宽成「含已过期行」（＝被否决的窗口 0）⇒ 该行被**原地续**（**id 不变**）⇒ 「那个 id 消失」这一条红 |
+| **U11** | 撤掉周期 ensure ⇒ 新协调者永远没有行（`rgHandoverNew` 为空）⇒ 红；反向：让旧行在名册失效后仍被续 ⇒ 「旧 id 消失」红 |
+| **U5②** | refresh 分支仍重写 `createdAt`（旧行为 `createdAt: now`）或不写 `renewedAt` ⇒ 红；若两趟走了**新建**分支 ⇒ id 变化 ⇒ 也红（`id` 不变正是「走的是 refresh 而不是新建」的判别式） |
+
+**★ 读数如实（本轮交付的边界）**：
+
+- **本轮交付方未执行任何命令**：`node host-half.test.mjs` / `node client-half.test.mjs` / `node --check` **一律未跑**
+  ⇒ 修复后的红/绿两次读数**由宿主回填**（命令原文：`node host-half.test.mjs`）。**未调用 `advisor`**。
+- **计数**：批 G 的判据数仍是 **24**（`^check("批 G ·` 命中 24 处，本轮**只改这 24 条自身**：既有断言一字未动、
+  条数不变）；总条数 **1594** 的**直接读数是审计侧**对**修复前**工作树的实测
+  `assertion total: 1594 (failed: 18)`（18 条红全部落在批 G 的这 24 条里；本轮逐条归因并修复）。
+  **修复后的实测总数仍由宿主回填**（本轮不声称它是 1594 —— 条数不变，但绿相与否只能由宿主跑出来）。
+- **未做（如实，不声称完成）**：① 修复后的套件红/绿读数（宿主执行面）· ② 设计档 §10.1 的两族「迁移前必红 /
+  迁移后全绿」两次读数（本轮**再次**未取；且那两族的夹具在新语义下本就该绿，该要求的字面满足方式仍留父侧裁决）·
+  ③ 真机项（consult §5 的不可验清单：冷启动 >12h 真实时序 / 睡过「2h 窗口 + 到期点」的真实路径 / 状态卡上
+  `renewedAt` 的可读性）—— 均需真机长时段，属父侧/用户。
+
+**纪律声明（本轮）**：**未执行任何命令**、**未调用 `advisor`**；一切读写都经 read / grep / edit 工具；落盘文件均为
+**UTF-8 无 BOM**（编辑工具直写）。**框定 token 零逐字写入**（本节无那种包裹结构）。
+
+---
+
+### 2026-10-12 · 批 G **最后一轮修复**（只做三件：Fix A / Fix B / Fix C，不夹带新东西）
+
+**归属**：设计档 [`2026-10-12-watchdog-renewal-design.md`](2026-10-12-watchdog-renewal-design.md)（§5 FR-R4 / §8 U7 / U12）
+· 需求档 [`2026-10-12-watchdog-renewal-requirements.md`](2026-10-12-watchdog-renewal-requirements.md)。上两条批 G 节见上。
+
+**来源**：一次**只读审计**（本机 11 连跑 ＋ 旧实现对照 ＋ 内存探针，探针逐字读数见下）把剩余三条红逐条定性：
+**一个真实现缺陷（Fix A）＋ 一个假绿判据（Fix B）**，外加一条**既有测试的时序健壮性**（Fix C，非本批回归）。
+本轮**只**修这三条，**不夹带任何新东西**。
+
+#### Fix A 🔴 —— `team_link_watch action=list` 漏了「上次续期」那一格
+
+**问题**：设计档 §5 FR-R4 明文要求 `renewedAt` 出现在**两处**渲染面（状态卡第 ③ 段 **与** `watch list`）。
+交付态只做了一处 —— 全库「上次续期」只有**一个**渲染点（状态卡那一侧）；list 的行模板里**根本没有这一格**。
+
+**审计探针逐字**（同一份 policy、同一时刻）：
+
+```
+list 渲染  = …阈值：静默 10min · 巡检 10min · 到期 2026-10-12 13:42:23 · 团队 rg-trace · 来源 auto（…）      ⇒ 无「上次续期」
+状态卡渲染 = …到期 … · 上次续期 2026-10-12 01:42:23 · 来源 auto（…）                                        ⇒ 有
+```
+
+⇒ 两条 U7 红的其实是**同一处**缺口（`renewedAt` 本身**真的写进了** `policy.get().watchdogs`，
+归一化也**已正确** —— 同批 U7-b 的 PASS 就是铁证：缺口只在**渲染**，不在写入）。
+
+**改法**：把状态卡那一格的表达式抽成**共享 helper** `watchdogRenewField(entry)`，两处**同调它** ——
+本档既有纪律是「两处**共用同一份字节**」，**没有**在 list 里另写一份格式化。
+
+| 落点（行号 as-of 本轮交付后的工作树） | 改动 |
+| --- | --- |
+| `lib/index.js` `function watchdogRenewField(entry)` | **新增**（定义在 `watchdogLines` 之前，第 4762 行）：`renewedAt` 是有限数 ⇒ `" · 上次续期 " + readStamp(entry.renewedAt)`，否则 `" · 上次续期（从未续期）"`。**唯一实现**，调用处**不得**再抄一份格式化 |
+| `lib/index.js` `watchdogLines` | 原内联三元表达式（两分支两次 `readStamp`）换成 `const renewField = watchdogRenewField(entry);` —— 调用点 **`lib/index.js:4786`**（状态卡第 ③ 段，行为**逐字节不变**） |
+| `lib/index.js` `team_link_watch action=list` 行模板 | 该行的 `到期 ${readStamp(entry.expiresAt)}` 之后接 `${watchdogRenewField(entry)}` —— 调用点 **`lib/index.js:13311`**（**本次补上的那一格**） |
+
+**可核**：`grep -n "watchdogRenewField" lib/index.js` ⇒ **1 处定义（:4762）＋ 2 处调用（:4786 / :13311）**，共 3 行命中；
+`grep -n "上次续期" lib/index.js` ⇒ 命中**只落在** helper 的函数体（:4764 / :4765）与两处注释里，**没有任何第二份格式化**。
+
+#### Fix B 🔴 —— U12 的注入打在**死代码**上（判据假绿），改成真能拒写 `scope.update`
+
+**问题**：夹具打的是 `settings.namespaces.get("team-link").update = …`，但
+
+- 桩的 `update` 是 `settings.register()` 返回的 **scope 对象字面量**上的内联方法（`host-half.test.mjs` 的 `makeSettings`）；
+- `namespaces` Map 里存的是 `state = { base, data, updates }` —— **根本没有 `update` 这个字段**；
+- 插件侧调的是 `lib/index.js:1967 await scope.update(patch)`（scope 在 `attach()` 里由 `settings.register(...)` 的返回值捕获）。
+
+⇒ **异常从未抛出**，续期**真的写盘成功** ⇒ 该判据**假绿**（它自称守住 fail-open，实际没测到那条路径：
+**哪天 try/catch 被删，它照样绿**）。**审计探针逐字**：
+
+```
+PROBE-U12POST {"threw":null, "after":{…,"renewedAt":1791740752717}, "writesAfter":1}
+              ⇒ 不抛 ✓、被续了 ✗、恰一笔真写 ✓
+```
+
+**改前 / 改后 逐字对照**：
+
+| 位置 | 逐字内容 |
+| --- | --- |
+| 夹具（改前） | `rgFailOpenEnv.settings.namespaces.get("team-link").update = async () => { throw new Error("settings update refused by stub"); };` |
+| 桩 · `update` 体（改后新增一格） | `if (state.updateRefusal !== undefined) throw state.updateRefusal;` |
+| 夹具（改后） | `const rgFailOpenNs = rgFailOpenEnv.settings.namespaces.get("team-link");` ＋ `rgFailOpenNs.updateRefusal = new Error("settings update refused by stub");` |
+
+**为什么现在真能拒写**：插件与夹具**共用同一个 scope 对象** —— 两次 `settings.register("team-link", …)` 的
+键都是**同一个 namespace 字符串**，而桩 `register` 只把 `state` 放进 Map、每次都返回一个**新的 scope 对象字面量**；
+⇒ 夹具从 Map 取到 `state` 后写 `state.updateRefusal`，**下一次**插件调用 `scope.update` 时读的正是这一格
+（scope 的方法体闭包着同一个 `state`）⇒ 在 `state.updates.push(...)` **之前**抛出 ⇒ 一笔真写都不落。
+
+**同批补的两格读数**（★ 判据不再假绿的那一半）：
+
+1. **前置自证**（`waitForChain` 之后、开关打开之前）：`rgWatchdogWrites(rgFailOpenEnv) === 0` **且** 目标行仍是夹具原值
+   （`renewedAt === undefined`）—— 证明「开关打开前没人写过」，于是后面那条「被拒写 ⇒ 盘上没动静」读的**真的是这一次巡逻**的增量；
+2. **鉴别性读数**（U12 那条本体）：`rgFailOpenThrew === "settings update refused by stub"`（★ 旧夹具下它是 `null` ——
+   异常没抛过）**且** `rgWatchdogWrites(rgFailOpenEnv) === 0`（巡逻前基准）—— 旧夹具下这里会 **+1**。
+
+**影响面**：`state.updateRefusal` 全库只在**这一处**被写（夹具）与读（桩），缺省 `undefined` ⇒ 桩的历史行为一字不差，
+**其余夹具零影响**。全库**只有**这一处打错地址：`rgRearmRefusedEnv` 走的是**桩内真路径**（`settingsUpdateThrows`），**不受影响**。
+
+#### Fix C —— U26 真机形状的时序健壮性（**既有测试，非本批回归**）
+
+**定性**：审计与宿主共同确认 `U26 真机形状（文件后端：scope === null）` **不是本批改红的**（本机 11 连跑 **0/11 红**；
+**旧实现上也绿**；截断到它之后 3/3 绿）—— 但它**有过一次假红**（宿主那次 `failed: 4` 就是它）。
+唯一敏感点：那条有界等待只有 **3000ms**，等的是**异步 attach 后置链 ＋ 带 fsync 的原子写**。
+
+**改法（只加固，不改语义）**：
+
+| 落点 | 改前 | 改后 |
+| --- | --- | --- |
+| 有界等待余量 | `const u26bDeadline = Date.now() + 3000;` | `const u26bDeadline = Date.now() + 30000;` |
+| 轮询间隔 | `setTimeout(resolve, 5)` | `setTimeout(resolve, 20)`（降低轮询自身对事件循环的挤压） |
+| 判据形状 | **一条** `check()` 里挤着**四个子句**（红了说不清是哪一格） | **四条**独立 `check()`，名字沿用 `U26 真机形状（文件后端：scope === null）` 前缀，拆前原名锚留在紧邻注释里 |
+
+**拆成了哪四条**（子句逐字未动，只是各自独立）：① 落盘行数为 2（补挂真的落盘）· ② 其中 `origin === "auto"` 的**恰一条**
+· ③ 那条的 `team === U26B_TEAM`（观察者＝该队现任协调者）· ④ 那条的 `targets === "u26b-worker"` 且持久化那条 manual
+**拿到定时器**（FR-7 重挂真发生）。
+★ **只拆不改**：**没有任何断言被弱化**（四个子句的布尔表达式逐字复制，只是分到四条 `check()` 里；唯一新增的是每条自己的名字与读面提示）。
+
+#### 本轮改动面汇总（逐个符号；行号 as-of 本轮交付后的工作树，以符号名为准）
+
+| 落点 | 改动 | 对应 |
+| --- | --- | --- |
+| `lib/index.js` 新函数 `watchdogRenewField(entry)`（:4762） | 新增共享 helper（那一格的**唯一实现**） | Fix A / FR-R4 · U7 |
+| `lib/index.js` `watchdogLines`（调用点 :4786） | 内联三元 → `watchdogRenewField(entry)`（行为逐字节不变） | Fix A |
+| `lib/index.js` `team_link_watch` 的 `action === "list"` 行模板（调用点 :13311） | 补上续期那一格（**本次真正修的那一处**） | Fix A / FR-R4 · U7 |
+| `host-half.test.mjs` 桩 `makeSettings` 的 scope `update` 体（:162） | 新增活查开关 `if (state.updateRefusal !== undefined) throw state.updateRefusal;`（缺省 `undefined` ⇒ 历史行为一字不差） | Fix B |
+| `host-half.test.mjs` U12 夹具（:12492 附近） | 注入地址由死代码 `namespaces.get("team-link").update = …` 改为活查开关 `rgFailOpenNs.updateRefusal = new Error(…)`；补**前置自证**一条 | Fix B / §8 U12 |
+| `host-half.test.mjs` U12 判据本体 | 首句由 `rgFailOpenThrew === null` 收紧为 `=== "settings update refused by stub"`；末句补 `rgWatchdogWrites(...) === rgFailOpenWritesBefore && rgFailOpenWritesBefore === 0` | Fix B |
+| `host-half.test.mjs` U26 真机形状（:11189 / :11191 / :11200–:11207） | 余量 3000→30000ms · 轮询 5→20ms · 一条四子句 → 四条独立 `check()`（留原名锚，**只拆不改**） | Fix C（既有测试，非本批回归） |
+
+**计数（本轮改动的直接读数与推算值分开记）**：
+
+- **直接读数**：`host-half.test.mjs` 中 `^check("批 G ·` 命中 **25 处**（上一轮是 24 —— 本轮新增的那条是 `批 G · U12 前置自证`）；
+  `lib/index.js` 中 `watchdogRenewField` 命中 **3 处**（1 定义 ＋ 2 调用）。
+- **推算值（不是实测）**：套件 `assertion total` 由 **1594 → 1598**（＝ 上一轮审计侧实测的 1594 ＋ 本轮净增 4 ＝ 批 G 新增的那条 1 条
+  ＋ U26 那条由 1 条拆成 4 条的 3 条）。**修复后的红/绿两次读数与总数由宿主回填**。
+
+**★ 读数如实（本轮交付的边界）**：
+
+- **本轮交付方未执行任何命令**：`node host-half.test.mjs` / `node client-half.test.mjs` / `node --check` **一律未跑**
+  （本仓纪律把验证命令划给宿主）⇒ 修复后的绿相读数**由宿主回填**（命令原文：`node host-half.test.mjs`）。**未调用 `advisor`**。
+- **Fix B 的「真能拒写」本轮是推理 ＋ 逐行读码的结论，不是本轮实测**：判据是「插件与夹具共用同一个 scope 对象」这条
+  符号链（桩只把 `state` 放进 Map、每次都返回新 scope 对象字面量；插件在 `attach()` 里捕获 `settings.register(...)` 的返回值）。
+  审计侧的探针读数（`writesAfter: 1`、`threw: null`）是**修复前**的，**修复后**的 `threw === "settings update refused by stub"`
+  与 `writes === 0` 两条要等宿主跑出来。
+- **未做（如实，不声称完成）**：① 修复后的套件读数（宿主执行面）；② Fix B 的「修复前必红 / 修复后全绿」两次实测
+  （`AGENTS.md` §三：本轮同样零命令执行）—— 修复前的红相由审计探针读数间接支持（探针说「不抛、被续了」＝判据本该红而它绿），
+  但**两次读数本身未取**；③ 真机项（`consult-minutes` §5 的不可验清单）原样留在上一节。
+
+**纪律声明（本轮）**：**未执行任何命令**、**未调用 `advisor`**（亦未调用任何长跑工具）；一切读写都经 read / grep / edit 工具；
+落盘文件均为 **UTF-8 无 BOM**（编辑工具直写，未经 `Set-Content` / `Out-File`）；**未新增 import**；看门狗的其它参数
+（静默阈值 / 巡检间隔 / 投递条件 / TTL 常量）**一个都没动**；新增的测试标识符继续用 **`Rg` / `rg` 中缀**。
+**框定 token 零逐字写入**（本节无那种包裹结构；若需构造一律用码点 `String.fromCharCode(0xFF5C)`）。
+
+---
+
+### 2026-10-12 · 批 G **最后两条判据修复**（U12 反断言 ＋ U7-c 观测通道；`lib/` 零改动）
+
+**归属**：设计档 [`2026-10-12-watchdog-renewal-design.md`](2026-10-12-watchdog-renewal-design.md)（§8 U7 / U12）
+· 需求档 [`2026-10-12-watchdog-renewal-requirements.md`](2026-10-12-watchdog-renewal-requirements.md)。
+本节只记**测试文件里的两条判据/夹具缺陷**，上一条批 G 节（Fix A / Fix B / Fix C）见上。
+
+**来源**：一次**只读审计**（`lib/` 逐行对照 ＋ 内存探针两相实测），把交付态残留的**两条红**逐条定性为
+**判据面缺陷**（不是实现缺陷）：`lib/index.js` **零改动**。审计给出的补丁**逐字落地**，本轮**不夹带任何新东西**。
+
+#### U12 —— 判据把观测锚在「实现刻意不放它出去」的那一格上（**反断言**）
+
+**问题**：判据的六条子句里**只有 ② 是假的**，而它不是「通道选错」，是**反断言** ——
+`rgFailOpenThrew === "settings update refused by stub"` 恰好在**实现正确时**（fail-open 生效、异常被吞）为假，
+在**实现崩坏时**（巡逻崩、异常逃逸）为真。子句 ①（巡逻不抛）在代码里**根本没有被单独断言**（只写在标题里）。
+
+**只读审计的探针逐字读数**（修复前）：
+
+```
+{"threw":null,"c1_patrolDidNotThrow":true,"c2_threwEqualsStubMessage":false,"c3_fieldsUnchanged":true,
+ "c4_rowStillThere":true,"c5_timerInPlace":true,"c6_writeCountUnchanged":true,
+ "writesBefore":0,"writesAfter":0,"updates":[]}
+```
+
+⇒ ①③④⑤⑥ **全真**，只有 ② 假。
+
+**异常真的抛了、也真是那一句** —— `lib/index.js` 的 `renewAutoRowIfStillValid` → store 的 `await scope.update(patch)`（`:1967`）
+→ 桩 `update` 体（`host-half.test.mjs:162`）；但**只**被 `lib/index.js:3201` 的 `catch` 吞掉（fail-open，**实现正确**）。
+而 `rgFailOpenThrew` 只捕获**逃出 `patrol` 的异常**（`host-half.test.mjs:12500-12504` 那个 try/catch）
+⇒ 它在实现正确时**结构上恒为 `null`** ⇒ 该子句**恒假**。
+
+**改法（三处，逐字落地）**：
+
+| # | 落点 | 改前 → 改后 |
+| --- | --- | --- |
+| ① | 桩 `makeSettings` 的 `state` | `{ base: …, data: …, updates: [] }` → `{ base: …, data: …, updates: [], refusals: [] }` |
+| ② | 桩 `makeSettings` 的 scope `update` 活查开关 | `if (state.updateRefusal !== undefined) throw state.updateRefusal;` → 同一条 `if` 的**体内先记后退**：`state.refusals.push(String((state.updateRefusal && state.updateRefusal.message) \|\| state.updateRefusal)); throw state.updateRefusal;` |
+| ③ | U12 判据本体 | 首句 `rgFailOpenThrew === "settings update refused by stub"` → `rgFailOpenThrew === null` **且** `rgFailOpenNs.refusals.length === 1 && rgFailOpenNs.refusals[0] === "settings update refused by stub"`；`rgFailOpenBefore !== null && rgFailOpenAfter !== null` 逐字保留；第 ③④⑤⑥ 子句**一个字节都没动** |
+| ④ | 同一条 `check()` 的**标题** | 「② ★ 注入**真的被拒**（异常就是夹具那一句 …）」→ 「② ★ 注入**真的被拒** —— 判据挂在**桩侧的拒绝计数**上（`refusals` 恰好一条、正是夹具那一句 `settings update refused by stub`）」，并显式写明**不得**读「逃出巡逻的异常消息」及其原因（旧标题写的「异常逃逸」口径与之矛盾，已删） |
+
+**为什么改后既真又能红**：实现正确时 —— 异常在 `renewAutoRowIfStillValid` 里被吞，`rgFailOpenThrew` 为 `null`（真），
+桩侧 `refusals` 恰好记到那一条（真）⇒ **PASS**；挖掉 try/catch —— 异常逃逸 ⇒ `rgFailOpenThrew` 不再为 `null`
+（本条**红**），且写盘路径在 `refusals.push` 之前已抛 ⇒ 第 ⑥ 子句（零写）同步破。审计侧已用内存探针**实测两相**
+（修后 PASS / 挖掉 try-catch 后 FAIL ⇒ 红相真的在）。
+
+**影响面**：`state.refusals` 只在**这一处**被写（桩）与读（U12 夹具），缺省 `[]` ⇒ 其余夹具零影响；
+`state.updates` 与第 ③④⑤⑥ 子句**逐字保留**。★ 上一条批 G 节 Fix B 表格里「收紧为 `=== "settings update refused by stub"`」那一行
+是**本轮被推翻的口径**：当时认为「异常真抛出来」＝判据不再假绿，而实测（探针 ② 假）证明**异常被实现刻意吞掉**，
+该式恒假 —— 那才是假绿的真正来源。**本轮口径以上表为准**。
+
+#### U7-c —— 判据读的是「条目头行」，而续期格在「阈值续行」上
+
+**问题**：判据的四个半里**第 2、3 半假**，第 1、4 半真。
+
+**只读审计的探针逐字读数**（修复前）：
+
+```
+{"rowsLength":2,"c1_twoRows":true,"c2_autoHasStamp":false,"c3_manualNeverRenewed":false,"c4_manualLacksStamp":true,
+ "rows":["- wd-rg-trace-mix-auto [自己] — 观察者 session-self（空闲）",
+         "- wd-rg-trace-mix-manual [自己] — 观察者 session-self（空闲）"]}
+```
+
+**根因**：`rgTraceMixRows` 用 `.filter((line) => line.startsWith("- wd-"))` 取行 ⇒ 只拿到两条**头行**（无续期格）⇒ c2/c3 都假。
+**实现没有问题**：`team_link_watch action=list` 的行结构是**一条头行 ＋ 两条续行**（各以**四个空格**开头）——
+续期那一格附在**第三行**（阈值行，`lib/index.js:13311` 的模板里 `${watchdogRenewField(entry)}`），
+头行（`lib/index.js:13305`）只有「观察者 …」；rawList 里两行**都**打印了续期格。
+★ 审计同时证伪了「`team = null` 会走另一条分支」这条假设：`watch action=list` 是**全量遍历**，阈值行**没有** `entry.team` 门
+（只是 `entry.team ?? "—"`）。
+
+**改法（只改取行方式一处，逐字落地）**：
+
+| 落点 | 改前 → 改后 |
+| --- | --- |
+| `rgTraceMixRows` 的取行方式 | `rgTraceMixList.split("\n").filter((line) => line.startsWith("- wd-"))` → `rgTraceMixList.split("\n").reduce((acc, line) => { if (line.startsWith("- wd-")) acc.push(line); else if (acc.length > 0 && line.startsWith("    ")) acc[acc.length - 1] += "\n" + line; return acc; }, [])`（把以四个空格开头的续行**拼回上一条 `- wd-` 块**） |
+
+**为什么改后既真又能红**：`rows.length === 2` 仍成立（两条 `- wd-` 头行 ⇒ 两个块）；auto 块含续行 ⇒
+`includes("上次续期 " + rgTraceStamp)` **真**；manual 块含续行 ⇒ `includes("上次续期（从未续期）")` **真**，
+且 manual 块的到期串（`02:54:35`）**不等于** `rgTraceStamp` ⇒ 第 4 半（`!includes(stamp)`）**仍真**（判据的鉴别力没有被削弱）。
+★ `:12553` 的标题与 `:12558-12561` 的四条子句**一字未改**（设计档要求）。
+★ 这条判据的读数**能**代表状态卡那一侧：两处渲染同调 `lib/index.js` 的 `watchdogRenewField`（`grep` 可核：1 处定义
+＋ 2 处调用），即**共用同一份字节** ⇒ auto 块里出现的那一串必然与状态卡那侧同串。
+
+#### 本轮改动面汇总（逐个符号；行号 as-of 本轮交付后的工作树，以符号名为准）
+
+本轮改动**全部落在同一个文件**，共**四处**编辑点（````host-half.test.mjs````）：
+
+| # | 落点（符号 / 锚串） | 改动 | 对应 |
+| --- | --- | --- | --- |
+| 1 | 桩 `makeSettings` 的 `state` 字面量（`:144`） | 加 `refusals: []` | U12-U1 |
+| 2 | 桩 `makeSettings` 的 scope `update` 体的活查开关（`:166-169`） | 由「直接 throw」改为「**先记后退**」 | U12-U2 |
+| 3 | U12 判据本体的判定式 ＋ 同一条 `check()` 的标题（`:12507-12515`） | 反断言（异常逃逸）→ 桩侧拒绝计数；标题同步改准 | U12-U3 / U12-U4 |
+| 4 | U7-c 的 `rgTraceMixRows` 取行方式（`:12550-12554`） | `.filter(头行)` → `.reduce(整块)` | U7-c |
+
+**`lib/` 零改动（红线，可核）**：本轮**没有**任何 `lib/` 编辑动作 ——「改前必红 / 改后全绿」两相都是**测试文件**的属性，
+审计已用**内存探针**在**不落盘**的前提下实测（修后 PASS / 挖掉 try-catch 后 FAIL）。
+**同批核对（非改动）**：`lib/index.js` 的 `watchdogRenewField`（定义 `:4762`、调用 `:4786` / `:13311`）
+与 `action === "list"` 的行结构（头行 `:13305` ＋ 续行 `:13306` / `:13311`，续行四个空格）—— 这两处**只读核对**，用于确认
+「续期格在续行上」这条前提；`lib/` 一个字节都没动。
+
+**计数（本轮只做编辑，断言条数不变）**：本轮**不新增也不删除**任何 `check()` ⇒ `assertion total` 与上一轮
+（**1595**，即 1594 基线 ＋ 批 G 的 `U12 前置自证`）**相同**；两条被修的判据**原名保留**（标题仍在，
+`grep "^check(\"批 G ·"` 的命中数不变）⇒ **不存在**「改名导致计数漂移」的问题。**修复后的红/绿两次读数与总数由宿主回填**。
+
+**★ 读数如实（本轮交付的边界）**：
+
+- **本轮交付方未执行任何命令**：`node host-half.test.mjs` / `node client-half.test.mjs` / `node --check` **一律未跑**
+  （本仓纪律把验证命令划给宿主）⇒ 修复后的绿相读数**由宿主回填**（命令原文：`node host-half.test.mjs`）。**未调用 `advisor`**
+  （亦未调用任何长跑工具）。本轮全部读数是 **只读审计侧的内存探针读数**（本节上面两处 `json` 块，均为**修复前**的实况），
+  以及本交付方经 read / grep 的**逐行核对**；**本交付方自己的两次实测未取**。
+- **未做（如实，不声称完成）**：① 修复后的套件读数（宿主执行面）；② 「修复前必红 / 修复后全绿」的**本交付方**两次实测
+  （`AGENTS.md` §三：本轮零命令执行）—— 红相由审计的**内存探针两相**支持，但**两次读数本身未由本交付方取**。
+
+**纪律声明（本轮）**：**未执行任何命令**、**未调用 `advisor`**（亦未调用任何长跑工具）；一切读写都经 read / grep / edit 工具；
+落盘文件均为 **UTF-8 无 BOM**（编辑工具直写，未经 `Set-Content` / `Out-File`）；**未新增 import**；
+看门狗的其它参数（静默阈值 / 巡检间隔 / 投递条件 / TTL 常量）**一个都没动**；**`lib/` 零改动**（未列入本轮改动面）。
+**框定 token 零逐字写入**（本节无那种包裹结构）。
+
+---
+
+### 2026-10-12 · 批 G **宿主回执**（收口）＋ 一处计数指正
+
+**一、两次实测读数（命令与自报行原文）**
+
+```
+$ node host-half.test.mjs
+ALL PASS
+assertion total: 1598 (failed: 0)          (exit 0)
+
+$ node client-half.test.mjs
+ALL PASS
+assertion total: 310 (failed: 0)           (exit 0)
+
+$ node .investigations/token-sanitize-2026-10-11/scripts/scrub-sources.mjs .
+扫了 85 个文件；写死原串的行 0 处；（体检模式，零写入）
+
+$ node .investigations/eng-tooling/scripts/balance-scan.mjs host-half.test.mjs
+✓ 括号与引号全部配平（未发现语法类不平衡）
+```
+`lib/index.js` 的 import 面仍 **8 条**（八模块白名单闸门未被扩）。四条 stage check 全部 `PASS`。
+
+**二、★ 计数指正（交付方推算值 vs 宿主实测）**
+
+上一节末尾写「本轮不新增也不删除任何 `check()` ⇒ `assertion total` 与上一轮（**1595**）相同」—— **`1595` 是错的**。
+**实测 `1598 = 1594（Fix C 之前的基线）＋ U26 一条拆四条（+3）＋ `批 G · U12 前置自证`（+1）**。
+⇒ **以宿主实测的 `1598` 为准**；本节即该读数的落账处。
+
+**三、本轮交付的完整收敛轨迹（三次只读审计 · 每次都是并集）**
+
+| 阶段 | 读数 | 定性 |
+| --- | --- | --- |
+| 首个交付 | **崩溃**（`ReferenceError: policy is not defined`） | 作用域错位（新函数写在模块级，`policy` 是 `createWatchdog` 的形参）⇒ 已修 |
+| 第 1 次审计后 | **18 红 / 1594** | 审计 D1–D9：**D1 FR-R3 整条是死的**（`:3322` 引用不存在的 `watchdog`，每轮巡逻抛错被自家 catch 吞成 warn，而本部署 warn 是空操作）· **D2 八个夹具用错工厂** · **D3 夹具时钟面（2023）vs attach 链墙钟（2026）** —— 触发者是**本批自己的 FR-R2**（它把 attach 链变成过期行的写者）· D4–D9 判据/文档面 |
+| 第 2 次审计后 | **3 红 / 1594**（`U26` 经证伪摘出：本机 11 连跑 0/11 红、旧实现也绿） | `U12` 是**假绿判据**（注入打在死代码上）· 两条 `U7` 是**同一个真实现缺陷**（`watch list` 漏了续期格）⇒ Fix A/B/C |
+| 第 3 次审计后 | **2 红 / 1598** | 两条均定性为**判据面缺陷**（`lib/` 零改动）：`U12` 第 ② 条是**反断言**（实现正确时恒假、崩坏时恒真）；`U7-c` 读的是**条目头行**而续期格在**阈值续行**上 ⇒ 逐字补丁 |
+| **收口** | **0 红 / 1598** | 上表全绿 |
+
+**四、本轮最贵的两条教训（写进账本，供后续批次引用）**
+
+1. **「本批自己的修复，会把既有夹具从无害变成致命」** —— D3 即此：改前 attach 链对夹具行一个字都不写（`existing` 不查 `expiresAt` ⇒ 当 present ⇒ `continue`）；
+   FR-R2 给 `existing` 加「未过期」谓词后，attach 链**第一次成为这些行的写者** ⇒ 活在 2023 假时钟上的夹具行，在测试体读基准之前就被墙钟刷过。
+   **旧测试当时是绿的，不是因为它对，是因为没人写它。**
+2. **「判据把观测锚在实现刻意不落的那一格上」** —— `U12` 读**异常逃逸通道**（而 fail-open 的全部内容就是不让它逃逸）；
+   `U7-c` 读**条目头行**（而续期格按「两处共用一份字节」的设计落在**阈值续行**）。这两类比普通错断言难发现得多：
+   **它们真的在测那个机制，只是测错了那一格** —— 红时像实现坏了，绿时（如 `U12` 修复前）在替不该担保的东西担保。
+
+**五、审计手法留档（可复用）**：三次只读审计都用 `module.registerHooks` 在**内存里**打探针，或把副本落到 `%TEMP%`，
+**仓库逐字节未动**却拿到了「修好夹具后会怎样」这种**只有改完才能看到**的读数；第 2 次还用 `git show HEAD:…` 做**旧实现对照**，
+把一条既有测试的假红（`U26`）与本批**摘清关系**。⇒ **这是本仓后续排查可优先采用的手法**：先问「这个读数能不能不动仓库拿到」。
+
+
 
 

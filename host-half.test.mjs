@@ -141,7 +141,7 @@ function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegiste
 				const isLegacy = String(namespace) === "session-link-pro";
 				// ★ 批 5（U20 的「缺失才写」判据）：每次 update 落一条**补丁记录** —— 「第二次 attach 一个字
 				// 都没写」这件事只能靠写次数读出来（内容相同的重写会换掉 data.watchdogs 的数组对象）。
-				const state = { base: structuredClone(options.base ?? {}), data: structuredClone(seed[String(namespace)] ?? {}), updates: [] };
+				const state = { base: structuredClone(options.base ?? {}), data: structuredClone(seed[String(namespace)] ?? {}), updates: [], refusals: [] };
 				namespaces.set(String(namespace), state);
 				return {
 					get() {
@@ -151,6 +151,22 @@ function makeSettings(seed = {}, { settingsRegisterThrows = false, legacyRegiste
 					},
 					async update(patch) {
 					guard();
+					// ★ 批 G · U12 修复轮（假绿判据）：**注入点在 scope 上，不在 namespace state 上**。
+					// 插件调的是 `settings.register()` **返回的那个 scope** 的 `update`
+					// （`lib/index.js:1967 await scope.update(patch)`，scope 在 `attach()` 里由本工厂的返回值捕获），
+					// 而 `namespaces` Map 里存的是 `state`（`{ base, data, updates }`）—— 它**根本没有 `update` 字段**。
+					// ⇒ 旧夹具 `namespaces.get("team-link").update = …` 打在死代码上：异常一次都没抛过，
+					// 续期**真的写盘成功了**，而 U12 照样绿（哪天 try/catch 被删，它还是绿）。
+					// 这一格是活查开关：夹具把它设成 Error ⇒ 下面这一句就在**真到达路径**上抛出来。
+					// 缺省 `undefined` ⇒ 一字不差地保留本桩的历史行为（其余夹具零影响）。
+					// ★ U12 修复轮（判据面）：**先记后退** —— 逃出 `patrol` 的异常永远为 `null`
+					//   （`lib/index.js:3201` 的 catch 把 fail-open 的异常吞掉，那正是实现正确的形状），
+					//   所以「拒写真的发生过」只能在**桩这一侧**读：记下这一次拒绝的文案再抛。
+					//   缺省 `undefined` ⇒ 一个字节都不记、一字不差地保留本桩的历史行为（其余夹具零影响）。
+					if (state.updateRefusal !== undefined) {
+						state.refusals.push(String((state.updateRefusal && state.updateRefusal.message) || state.updateRefusal));
+						throw state.updateRefusal;
+					}
 					// 评审 round-3 🟡 #1: register 成功但 update 抛错 —— 折叠必失败的唯一到达路径。
 					// 状态**先不动**（不 Object.assign）：折叠失败后窗口数据必须仍在文件那一侧。
 					if (settingsUpdateThrows) throw new Error("settings update refused by stub");
@@ -11173,16 +11189,29 @@ const u26bReadRows = async () => {
 	}
 };
 // 有界等待：按**墙钟**给足（原子写带 fsync，负载下偶尔慢），不是赌 N 个 tick；正常路径一次就过。
-const u26bDeadline = Date.now() + 3000;
+// ★ 交付修复轮（Fix C，**非本批回归**）：这一条曾有过一次**假红**（唯一敏感点就是这里的等待余量：
+//   等的是异步 attach 后置链 + 带 fsync 的原子写）。加固只动**余量与轮询节奏**，语义一个字不改：
+//   ① 余量 3000ms → **30000ms**（负载下偶发慢不再被误判成「补挂没发生」）；
+//   ② 轮询间隔 5ms → **20ms**（降低轮询自身对事件循环的挤压 —— 本来要等的那条链也在同一个循环上）。
+const u26bDeadline = Date.now() + 30000;
 let u26bRows = await u26bReadRows();
 while (u26bRows.length < 2 && Date.now() < u26bDeadline) {
-	await new Promise((resolve) => { setTimeout(resolve, 5); });
+	await new Promise((resolve) => { setTimeout(resolve, 20); });
 	u26bRows = await u26bReadRows();
 }
-check("U26 真机形状（文件后端：scope === null）: attach 处理器在**没有设置服务**的部署里也真的被叫到了 —— 落盘的 policy.json 里除了原有那条 manual 多出**恰一条** origin=auto（补挂真发生），watcher=该队现任、targets=队员；红相＝去掉补一次 ⇒ 文件里仍只有那一条 manual（真机实测：mtime 停在启动前、watchdogs 只有 1 条 manual）· 落盘读数 " + JSON.stringify(u26bRows.map((row) => row.origin + ":" + row.team)),
-	u26bRows.length === 2 && u26bRows.filter((row) => row.origin === "auto").length === 1
-		&& at(u26bRows.filter((row) => row.origin === "auto"), 0, {}).team === U26B_TEAM
-		&& at(u26bRows.filter((row) => row.origin === "auto"), 0, {}).targets.join(",") === "u26b-worker"
+// ★ 交付修复轮（Fix C）：原先这四条子句挤在**一条** `check()` 里（红了说不清是哪一格）⇒ 拆成四条
+//   独立 `check()`，全部沿用 `U26 真机形状（文件后端：scope === null）` 前缀、断言一字未改（只拆不改）。
+//   原名锚（拆前的单条判据原文首句）：「U26 真机形状（文件后端：scope === null）: attach 处理器在
+//   **没有设置服务**的部署里也真的被叫到了 —— 落盘的 policy.json 里除了原有那条 manual 多出**恰一条**
+//   origin=auto（补挂真发生），watcher=该队现任、targets=队员」。读到的四格逐格如下：
+check("U26 真机形状（文件后端：scope === null）· ① 补挂真的落盘: 落盘的 policy.json 里除了原有那条 manual 多出**恰一条** origin=auto —— 行数为 2（红相＝去掉补一次 ⇒ 文件里仍只有那一条 manual；真机实测：mtime 停在启动前、watchdogs 只有 1 条 manual）· 落盘读数 " + JSON.stringify(u26bRows.map((row) => row.origin + ":" + row.team)),
+	u26bRows.length === 2);
+check("U26 真机形状（文件后端：scope === null）· ② 多出来的那一条**恰是** auto（不冒充：计数不是靠「行数变了」推的，是逐行读 origin 得到的）",
+	u26bRows.filter((row) => row.origin === "auto").length === 1);
+check("U26 真机形状（文件后端：scope === null）· ③ 观察者 = 该队现任协调者（补挂写的是名册里的现任，不是随手一个会话 id）",
+	at(u26bRows.filter((row) => row.origin === "auto"), 0, {}).team === U26B_TEAM);
+check("U26 真机形状（文件后端：scope === null）· ④ 目标 = 队员（`targets` 按名册导出）**且** FR-7 的重挂真发生（持久化那条 manual 拿到定时器）",
+	at(u26bRows.filter((row) => row.origin === "auto"), 0, {}).targets.join(",") === "u26b-worker"
 		&& __testing.watchdogFor(u26bEnv.ctx).timers.has(u26bRow.id));
 
 // --- U27: attach 后置链读面（FR-17）---------------------------------------------
@@ -12178,7 +12207,483 @@ rmSync(BE_WS, { recursive: true, force: true });
 rmSync(escDir, { recursive: true, force: true });
 rmSync(tmpDir, { recursive: true, force: true });
 rmSync(TEAM_TMP, { recursive: true, force: true });
-// A 项：把本进程的临时根整个收掉（前三个 rmSync 保留原语义，这一行收尾不影响它们）。
+
+// ===========================================================================
+// 批 G · 自动工作台注册的续期（2026-10-12）
+// 归属：docs/2026-10-12-watchdog-renewal-design.md §5（FR-R1…FR-R5）· §6（机制伪代码与插入位置）·
+//   §7（状态与 schema）· §8（U1…U12）· §9（边界）；需求档 docs/2026-10-12-watchdog-renewal-requirements.md。
+// 夹具纪律（§8 末行）：判据用**注入时钟**（`patrol({ now })` 的既有缝隙）驱动，而该注入时钟**锚真墙钟**
+//   （`RG_NOW = Date.now()`，见下）。★ 分歧修复轮 D3：为什么**必须**锚墙钟 —— 这些夹具行的第一个写者
+//   不是测试体，而是 **attach 后置链的 `ensureTeamAutoWatchdogs`**（FR-R2）：它**不注入 `now`** ⇒ 走真实
+//   `Date.now()`；`rearm()` 判过期同样用 `Date.now()`。若把行种在 2023 的假时钟上（其它块的 `WD_NOW`
+//   那套），attach 会先把它们当「已过期」刷新一遍（实测：`expiresAt` 被写成墙钟+12h、`renewedAt` 被写下、
+//   `createdAt` 保留）⇒ 本批三条 U1 的失败子句（`expiresAt === now+1h` / `renewedAt === undefined` /
+//   窗口判定）**全部落空**。⇒ 本块的时钟面 = 墙钟锚（`RG_NOW`），与 `WD_NOW` **互不混用**。
+//   推论（D6 同族）：`ensure` 还会在 attach 与巡逻尾部把**过期行**刷新/重铸成未过期 —— 所以凡要观察
+//   「一条行**已过期**时的行为」的夹具（U2 四态负向 / U10），行一律种在 `waitForChain` **之后**
+//   （见 `rgPlant`），否则那个读数当场被遮住。
+//   每条红相判据都同批给**负相自证**（证明夹具真的推得动，而不是恒真）。
+// ★ 本文所有标识符用 `Rg` 中缀（`rg…`），避免与既有顶格声明重名（批 E 的教训：重名 = 整档解析失败）。
+// ===========================================================================
+
+/** ★ D3（分歧修复轮）：本块的时钟面 —— **锚真墙钟**（理由见上）。 */
+const RG_NOW = Date.now();
+/** 命名空间里落过的 `watchdogs` 补丁数 —— 「续期到底写没写」只能靠写次数读出来（U3 的写频判据）。 */
+const rgWatchdogWrites = (env) => env.settings.namespaces.get("team-link").updates.filter((patch) => Object.prototype.hasOwnProperty.call(patch, "watchdogs")).length;
+/**
+ * 把注册行种进命名空间（**必须在 attach 后置链落定之后再调用**，见块头 D3/推论）。
+ * 直接改命名空间的 `data` = 「盘上本来就有这些行」那种现实，不经过任何工具入口。
+ */
+const rgPlant = (env, rows) => { env.settings.namespaces.get("team-link").data.watchdogs = rows; };
+/** 本批的夹具名册行（规范形状，与 b5Team 同源；默认协调者 = 调用会话、一名队员）。 */
+const rgTeam = (name, roles = undefined, workspace = B5_WS) =>
+	b5Team(name, workspace, roles ?? [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "session-peer")]);
+/**
+ * 一条**续期夹具行**：`expiresAt` 相对**本块的注入时钟** `RG_NOW`（它本身锚在墙钟上，见块头）。
+ * @param remainingMs - 距到期还有多久（负值 = 已过期）。
+ */
+const rgRow = (id, team, { remainingMs, watcherSession = "session-self", targets = ["session-peer"], createdAt = RG_NOW - 6 * 3600000, silentMinutes = 10, intervalMinutes = 10, origin = "auto" } = {}) =>
+	({ id, team, watcherSession, targets, silentMinutes, intervalMinutes, createdAt, expiresAt: RG_NOW + remainingMs, origin });
+/** 该队此刻在盘上的那一条 auto 行（未归一化的**落盘形状**）。 */
+const rgAutoRow = (env, team) => (b5Watchdogs(env).filter((entry) => entry.origin === __testing.WATCHDOG_ORIGIN_AUTO && entry.team === team)[0]) ?? null;
+
+// --- U1：续期生效 ＋ 逐字段保真（含 ★ 活性档：watcher 不 live 也照续） ------------------
+// 窗口内（距到期 1h < 2h）＋ 名册有效（队伍在场 ∧ watcher 是现任 ∧ 有可盯成员）⇒ 续期。
+// 负相自证（同一条夹具的第一个半句）：续期**之前**那一行的 `expiresAt` 就是夹具种下去的那个值
+// —— 于是「到期前移」这件事真的被观察到了，而不是被夹具本身预先写死。
+const rgLiveEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-live")],
+	watchdogs: [rgRow("wd-rg-live", "rg-live", { remainingMs: 60 * 60_000 })],
+});
+await waitForChain(rgLiveEnv, 1);
+const rgLiveBefore = rgAutoRow(rgLiveEnv, "rg-live");
+const rgLiveWritesBefore = rgWatchdogWrites(rgLiveEnv);
+await rgLiveEnv.watchdog.patrol({ now: RG_NOW });
+const rgLiveAfter = rgAutoRow(rgLiveEnv, "rg-live");
+check("批 G · U1 续期生效（红相＝撤掉 patrolOne 的续期分支 ⇒ 这一行不动、随后到期被删 ⇒ 本条红）: 窗口内 + 名册有效 ⇒ `expiresAt` 顺延到 now+12h、`renewedAt=now`；★ **负相自证**：续期前那一行的 `expiresAt` 就是夹具种下的 `RG_NOW+1h`（不是被夹具预写成新值 —— 该行在 attach 那一刻**未过期**，所以后置链的 `ensure` 报 `present`、一个字都没写）",
+	rgLiveBefore !== null && rgLiveBefore.expiresAt === RG_NOW + 60 * 60_000 && rgLiveBefore.renewedAt === undefined
+		&& rgLiveAfter !== null && rgLiveAfter.expiresAt === RG_NOW + 12 * 3600_000 && rgLiveAfter.renewedAt === RG_NOW);
+check("批 G · U1 逐字段保真: `id` / `createdAt` / `silentMinutes` / `intervalMinutes` / `team` / `watcherSession` / `targets` 逐字段不变，`watchdogs` **数组长度不变**（不产生重复条目），定时器**在位**（同一条 id）；★ 写频：这一次巡逻**恰一笔** `watchdogs` 写（续期那一笔；巡逻尾部那一步 ensure 是 `present` 零写）",
+	rgLiveAfter.id === rgLiveBefore.id && rgLiveAfter.createdAt === rgLiveBefore.createdAt
+		&& rgLiveAfter.silentMinutes === rgLiveBefore.silentMinutes && rgLiveAfter.intervalMinutes === rgLiveBefore.intervalMinutes
+		&& rgLiveAfter.team === rgLiveBefore.team && rgLiveAfter.watcherSession === rgLiveBefore.watcherSession
+		&& rgLiveAfter.targets.join(",") === rgLiveBefore.targets.join(",")
+		&& b5Watchdogs(rgLiveEnv).length === 1
+		&& rgLiveEnv.watchdog.timers.has(rgLiveAfter.id)
+		&& rgWatchdogWrites(rgLiveEnv) === rgLiveWritesBefore + 1);
+// ★ 活性档（设计档 §4 D3 的 2:1 裁定钉成判据，§8 U1 的「另含活性档」）：
+//   观察者会话在进程内**不 live**（隐藏活代理）＋ 名册有效 ＋ 窗口内 ⇒ **照样续**。
+//   红相＝给续期加一道活性门（kimi-k3 的少数派意见）⇒ 本条红。这条同时钉住**插入位置**在 watcher 门之前。
+// ★ 分歧修复轮（随 D1 一并落地的判据面修正）：续期**成功即 `return`**（设计档 §6 的硬约束），所以那条
+//   被续的 auto 行走不到 watcher 活性门 ⇒ 光靠它取不到 `deadWatchers` 的读数（原断言在此**永远红**，
+//   与「18 红」里的那一条同源）。这里同一次巡逻里再放一条**不在续期分支上**的行（手工档）：它走
+//   活性门 ⇒ 被标 dead。于是两半在同一次巡逻里同时可读 —— 「被续的那条根本没碰活性门」与
+//   「死观察者照旧被标记、照旧零投递」互为对照，而不是互相缺席。
+const rgDeadWatcherEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-dead-watcher")],
+	watchdogs: [
+		rgRow("wd-rg-dead-watcher", "rg-dead-watcher", { remainingMs: 60 * 60_000 }),
+		rgRow("wd-rg-dead-manual", null, { remainingMs: 5 * 3600_000, origin: "manual" }),
+	],
+});
+await waitForChain(rgDeadWatcherEnv, 1);
+rgDeadWatcherEnv.setHiddenAgent("session-self", true);
+await rgDeadWatcherEnv.watchdog.patrol({ now: RG_NOW });
+const rgDeadWatcherRow = rgAutoRow(rgDeadWatcherEnv, "rg-dead-watcher");
+check("批 G · U1 活性档: 观察者**没有任何活代理**（进程内不 live）＋ 名册有效 ＋ 窗口内 ⇒ **照样续**（`expiresAt` 前移到 now+12h、`renewedAt` 写下、行未被删、定时器仍在）—— 红相＝给续期加活性门（或把判定放到 watcher 门之后）⇒ 本条红；同时同一次巡逻里那条**不在续期分支上**的手工行照旧走到活性门被标 dead（`deadWatchers` 恰一条 ⇒ 证明「被续的那条根本没碰活性门」不是「活性门整个没跑」的同义句），且「死观察者不做投递」的既有语义逐字未动：本轮零投递",
+	rgDeadWatcherEnv.agentFor("session-self") === undefined && rgDeadWatcherRow !== null
+		&& rgDeadWatcherRow.expiresAt === RG_NOW + 12 * 3600_000 && rgDeadWatcherRow.renewedAt === RG_NOW
+		&& rgDeadWatcherEnv.watchdog.timers.has("wd-rg-dead-watcher")
+		&& rgDeadWatcherEnv.watchdog.deadWatchers.size === 1 && rgDeadWatcherEnv.watchdog.deadWatchers.has("wd-rg-dead-manual")
+		&& rgDeadWatcherEnv.senderCalls.followedup.length === 0);
+
+// --- U2：四态负向（不续，照旧到期被清）＋ 一档正相对照 --------------------------------
+// 每一态都用**同一个形状**：行已过期（`now > expiresAt`）⇒ 若门失守被续 ⇒ 行留下（红）；门守住 ⇒
+// `removeWatchdog` 收掉（绿）。**正相对照**（最后一条）用同一形状但名册有效 ⇒ 行被续（证明四态之红
+// 不是「删除门本来就吃掉一切」这句话的另一种说法）。
+// ★ 分歧修复轮 D2（夹具工厂）＋ D6 同族（种行时机）：夹具一律走 `watchdogEnv`（只有它挂 `env.watchdog` 控制器；
+//   `setup` 不挂 ⇒ 驱动 `env.watchdog.*` 会当场 `TypeError`），且**过期的**行一律种在 `waitForChain`
+//   **之后** —— 否则 attach 后置链的 FR-R2 会先把它们刷新成未过期（同 id、写 `renewedAt`），
+//   「已过期 ⇒ 照旧被清」这个读数就永远观察不到。
+const rgRefuseEnv = (team) => watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [team],
+});
+const rgRefuseRun = async (env, row) => {
+	await waitForChain(env, 1);
+	// ★ 多一格宏任务再种行：attach 后置链里的 `ensureTeamAutoWatchdogs` 是**fire-and-forget**
+	//   （`Promise.resolve().then(...)`，`lib/index.js` 的 `policy.onAttach`）⇒ 链尾那行 info 打出时它
+	//   可能还没跑完；不等它落定就种行，它会反过来处理我们种下的行（U10 那种「过期行被当场刷新」的读数
+	//   就是这么被遮住的）。`tick()` 是既有夹具对这一条缝隙的同一做法（U20 / wb6Env / rgColdEnv）。
+	await tick();
+	rgPlant(env, [row]);
+	await env.watchdog.patrol({ now: RG_NOW });
+	return b5Watchdogs(env);
+};
+const rgNoTeamRows = await rgRefuseRun(rgRefuseEnv(rgTeam("rg-other-team")), rgRow("wd-rg-no-team", "rg-gone-team", { remainingMs: -1000 }));
+check("批 G · U2 ① 团队不在名册（团队已删 / 设置 UI 直改 teams）⇒ **不续**，照旧到期自清（红相＝摘掉「团队在场」那一门 ⇒ 该行被续 ⇒ 本条红）—— ★ 判据咬**那个 id 的消失**：同一次巡逻的尾部 ensure 会为**别的**有效队补挂新 id 的行，那是本批的有意行为，不比表的长度",
+	!rgNoTeamRows.some((entry) => entry.id === "wd-rg-no-team"));
+const rgForeignRows = await rgRefuseRun(rgRefuseEnv(rgTeam("rg-foreign", [wb2Role("coordinator", "session-other"), wb2Role("worker-a", "session-peer")])), rgRow("wd-rg-foreign", "rg-foreign", { remainingMs: -1000 }));
+check("批 G · U2 ② watcher 已不是现任协调者（换届 / 换人）⇒ **不续**，照旧到期自清（红相＝摘掉现任比对 ⇒ 旧行被续成永生僵尸 ⇒ 本条红）",
+	!rgForeignRows.some((entry) => entry.id === "wd-rg-foreign"));
+const rgVacantRows = await rgRefuseRun(rgRefuseEnv(rgTeam("rg-vacant", [wb2Role("coordinator", null), wb2Role("worker-a", "session-peer")])), rgRow("wd-rg-vacant", "rg-vacant", { remainingMs: -1000 }));
+check("批 G · U2 ③ 协调者空缺（已退役）⇒ **不续**，照旧到期自清（红相＝摘掉空缺判定 ⇒ 该行被续 ⇒ 本条红）",
+	!rgVacantRows.some((entry) => entry.id === "wd-rg-vacant"));
+const rgLonelyRows = await rgRefuseRun(rgRefuseEnv(rgTeam("rg-lonely", [wb2Role("coordinator", "session-self")])), rgRow("wd-rg-lonely", "rg-lonely", { remainingMs: -1000 }));
+check("批 G · U2 ④ 零可盯成员（除观察者外无人）⇒ **不续**，照旧到期自清（红相＝摘掉非空 targets 那一门 ⇒ 该行被续 ⇒ 本条红）",
+	!rgLonelyRows.some((entry) => entry.id === "wd-rg-lonely"));
+const rgKeepRows = await rgRefuseRun(rgRefuseEnv(rgTeam("rg-keep")), rgRow("wd-rg-keep", "rg-keep", { remainingMs: 60 * 60_000 }));
+check("批 G · U2 正相对照（★ 负相自证：四态之红不是「删除门吃掉一切」的同义句）: **同一形状**的一条夹具，只把到期点挪进窗口（且名册有效）⇒ 它**被续**（`expiresAt` 前移到 now+12h、`renewedAt=now`）—— 于是上面四条各自真的在判那一门",
+	rgKeepRows.length === 1 && rgKeepRows[0].id === "wd-rg-keep"
+		&& rgKeepRows[0].expiresAt === RG_NOW + 12 * 3600_000 && rgKeepRows[0].renewedAt === RG_NOW);
+
+// --- U3：写频（窗口内连巡逻两次 ⇒ 第二次零写）＋ 窗口外负相 ---------------------------
+// 防 churn 回潮：无条件滑动 = 13 条 × 每 10min 一次落盘（会诊明确否决的备选）。
+const rgChurnEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-churn")],
+	watchdogs: [rgRow("wd-rg-churn", "rg-churn", { remainingMs: 60 * 60_000 })],
+});
+await waitForChain(rgChurnEnv, 1);
+const rgChurnWritesBefore = rgWatchdogWrites(rgChurnEnv);
+await rgChurnEnv.watchdog.patrol({ now: RG_NOW });
+const rgChurnWritesAfterFirst = rgWatchdogWrites(rgChurnEnv);
+const rgChurnSnapshot = JSON.stringify(rgAutoRow(rgChurnEnv, "rg-churn"));
+await rgChurnEnv.watchdog.patrol({ now: RG_NOW + 60_000 });
+const rgChurnWritesAfterSecond = rgWatchdogWrites(rgChurnEnv);
+check("批 G · U3 写频（红相＝把窗口判定写错（如无条件续）⇒ 第二次也写 ⇒ 本条红）: 两次巡逻（间隔 1min）—— 第一次续期**恰写一笔**、第二次**零** `watchdogs` 写（续期后新到期点是 `now+12h` ⇒ 距到期 11h > 窗口 2h ⇒ 第二次什么都不做），且行内容与第一次之后**逐字节相同**",
+	rgChurnWritesAfterFirst === rgChurnWritesBefore + 1 && rgChurnWritesAfterSecond === rgChurnWritesAfterFirst
+		&& JSON.stringify(rgAutoRow(rgChurnEnv, "rg-churn")) === rgChurnSnapshot
+		&& rgAutoRow(rgChurnEnv, "rg-churn").expiresAt === RG_NOW + 12 * 3600_000);
+const rgOutsideEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-outside")],
+	watchdogs: [rgRow("wd-rg-outside", "rg-outside", { remainingMs: 5 * 3600_000 })],
+});
+await waitForChain(rgOutsideEnv, 1);
+const rgOutsideBefore = JSON.stringify(rgAutoRow(rgOutsideEnv, "rg-outside"));
+await rgOutsideEnv.watchdog.patrol({ now: RG_NOW });
+check("批 G · U3 窗口外的负相（★ 自证「窗口」真的在判定，而不是「只要是 auto 就续」）: 距到期**远超**窗口的一条夹具（剩 5h）⇒ 巡逻之后行**逐字节未动**、零 `watchdogs` 写",
+	JSON.stringify(rgAutoRow(rgOutsideEnv, "rg-outside")) === rgOutsideBefore
+		&& rgWatchdogWrites(rgOutsideEnv) === 0);
+
+// --- U4：清扫链不卡死（续有效的、删无效的，链走到空） --------------------------------
+// 机理（设计档 §4 D5）：续期让某条行**不再走删除** ⇒ 若续期写盘后不补 `rearm()`，那条刚续出来的行
+// 就**没有定时器**（生产里巡逻只由定时器驱动 ⇒ 它就等于停摆），同队「该合法死掉」的过期行也没人碰。
+// ★ 分歧修复轮 D2/D5 重设计：① 夹具换回 `watchdogEnv`（`setup` 不挂 `env.watchdog`）；
+//   ② 两行**种在 attach 之后**（此时 `rearm()` 已经跑过）⇒ 它们此刻**都没有定时器** ——
+//      「续期写盘后补一次 `rearm()`」这件事因此**在这里真的可观察**（旧夹具里续期那条行在 attach 就
+//      拿到了定时器，去掉 `rearm()` 也照样绿 ⇒ 判据空真）；
+//   ③ 驱动形状按生产来：先**单条**巡逻（每条注册自己的定时器就是 `patrol({ id })` 这个形状）看续期 ＋
+//      `rearm`；再**全量**巡逻看「该合法死掉」那条被删除门收掉；
+//   ④ 「该合法死掉」那一档的队用**现任空缺**（不只 watcher 非现任）：这样巡逻尾部的周期 ensure
+//      也不会为它当场重铸一条 ⇒ 「链走到空」这个读数不被下一层的重建遮住（表的长度不再是判据的负担）。
+const rgChainEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [
+		rgTeam("rg-chain-live"),
+		rgTeam("rg-chain-stale", [wb2Role("coordinator", null), wb2Role("worker-a", "session-peer")]),
+	],
+});
+await waitForChain(rgChainEnv, 1);
+await tick();   // ★ 等 attach 后置链里的 fire-and-forget ensure 落定再种行（同 rgRefuseRun 的注释）
+rgPlant(rgChainEnv, [
+	rgRow("wd-rg-chain-live", "rg-chain-live", { remainingMs: 60 * 60_000 }),
+	rgRow("wd-rg-chain-stale", "rg-chain-stale", { remainingMs: -60_000 }),
+]);
+await rgChainEnv.watchdog.patrol({ now: RG_NOW, id: "wd-rg-chain-live" });
+const rgChainRenewed = rgAutoRow(rgChainEnv, "rg-chain-live");
+const rgChainRenewArmed = rgChainEnv.watchdog.timers.has("wd-rg-chain-live");
+await rgChainEnv.watchdog.patrol({ now: RG_NOW + 1000 });
+const rgChainRows = b5Watchdogs(rgChainEnv);
+check("批 G · U4 清扫链不卡死（红相两半各自可红：① 去掉续期写盘后的 `rearm()` ⇒ 那条种在 attach 之后、**本来没有定时器**的续期行**仍然没有定时器**；② 窗口守卫放宽到「含已过期行」⇒ 该合法死掉的那条被原地续 ⇒ 不收）: 两行都种在 attach 之后（此刻都无定时器）—— **有效的**那条被续（`expiresAt` 前移到 now+12h、`renewedAt=now`、id 不变）**并由续期后的 `rearm()` 挂上定时器**；**该合法死掉的**那条（现任空缺 ⇒ 名册门拒绝）在随后的全量巡逻里被 `removeWatchdog` 收掉（定时器一并清）；尾部周期 ensure 不为它重铸（名册门同样拒绝）⇒ 表里只剩续期那一条",
+	rgChainRenewed !== null && rgChainRenewed.id === "wd-rg-chain-live"
+		&& rgChainRenewed.expiresAt === RG_NOW + 12 * 3600_000 && rgChainRenewed.renewedAt === RG_NOW
+		&& rgChainRenewArmed
+		&& rgChainRows.length === 1 && rgChainRows[0].id === "wd-rg-chain-live"
+		&& rgChainEnv.watchdog.timers.has("wd-rg-chain-live") && !rgChainEnv.watchdog.timers.has("wd-rg-chain-stale"));
+
+// --- U10：名册有效但已过期 ⇒ 删而不复活（被否决的「窗口 0」不得静默回潮） -------------
+const rgExpiredEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-expired")],
+});
+await waitForChain(rgExpiredEnv, 1);
+await tick();   // ★ 等 attach 后置链里的 fire-and-forget ensure 落定再种行（同 rgRefuseRun 的注释）
+// ★ 分歧修复轮 D6 同族：行**种在 attach 之后**。若种在 `settingsSeed` 里，attach 后置链的 FR-R2 会先把
+//   它当「已过期」**刷新成未过期**（同 id、写 `renewedAt`）⇒「已过期」这个被观察的状态当场被遮住。
+rgPlant(rgExpiredEnv, [rgRow("wd-rg-expired", "rg-expired", { remainingMs: -1 })]);
+// ★ 这一条只驱动**那一条行**（`{ id }` = 每条注册自己的定时器在生产里的真实形状）：全量巡逻的尾部会跑
+//   FR-R3 的周期 ensure，而这条夹具的**名册仍然有效** ⇒ 它会当场重铸一条**新 id** 的行。判据咬的是
+//   **旧 id 的消失**（＝那条过期行没有被原地续），不是表的长度。
+await rgExpiredEnv.watchdog.patrol({ now: RG_NOW, id: "wd-rg-expired" });
+const rgExpiredRows = b5Watchdogs(rgExpiredEnv);
+check("批 G · U10 名册有效但已过期 ⇒ **删而不复活**（★ 需求档 NF-G1 的明文要求；红相＝把窗口守卫放宽成含过期行（＝被否决的「窗口 0」）⇒ 那条行被**原地续**（**id 不变**、`expiresAt` 前移到 now+12h、`renewedAt` 写下）⇒ 本条红）: `now > expiresAt` 的那条行走 `removeWatchdog`（**不**原地续）—— 定位于该条行的巡逻之后，**那个 id** 在表里消失、它的定时器也清了；★ 对照半（同一形状、**同一时钟**，只把到期点挪到窗口内）见 U2 末条：它**被原地续**，证明这里红的是「已过期不复活」而不是「这条夹具压根不成立」",
+	!rgExpiredRows.some((entry) => entry.id === "wd-rg-expired")
+		&& !rgExpiredEnv.watchdog.timers.has("wd-rg-expired"));
+
+// --- U8：不回归（manual 行逐字节旧行为） ----------------------------------------------
+// ★ 分歧修复轮 D2（工厂）＋ D5（零写基线）：FR-R3 修好之后，巡逻尾部的周期 ensure 会为「有名册、
+//   但**没有有效 auto 行**」的队补挂一条 —— 那是本批**有意**的行为，不是手工行被续。所以这条夹具
+//   同时种一条**同队的 auto 伴随行**（距到期 5h，在续期窗口外）：ensure 此刻报 `present`、零写，
+//   于是「零 `watchdogs` 写」这个读数**只**咬「手工行有没有被碰」，不会被 ensure 的补挂污染。
+const rgManualLiveEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-manual-live")],
+	watchdogs: [
+		rgRow("wd-rg-manual-live", null, { remainingMs: 60 * 60_000, origin: "manual" }),
+		rgRow("wd-rg-auto-companion", "rg-manual-live", { remainingMs: 5 * 3600_000 }),
+	],
+});
+await waitForChain(rgManualLiveEnv, 1);
+const rgManualLiveBefore = JSON.stringify(b5Watchdogs(rgManualLiveEnv));
+await rgManualLiveEnv.watchdog.patrol({ now: RG_NOW });
+check("批 G · U8 不回归 ① 手工行**永不续期**（非目标 3：人工 TTL 是用户的意志）: 窗口内 + 名册有效的手工行 ⇒ 巡逻之后**逐字节未动**（无 `renewedAt`、`expiresAt` 不变、零 `watchdogs` 写）；同队的 auto 伴随行（距到期 5h、在窗口外）也逐字节不动 ⇒ 这一笔零写**不来自** ensure 的漏补",
+	JSON.stringify(b5Watchdogs(rgManualLiveEnv)) === rgManualLiveBefore
+		&& b5Watchdogs(rgManualLiveEnv).find((entry) => entry.id === "wd-rg-manual-live")?.renewedAt === undefined
+		&& rgWatchdogWrites(rgManualLiveEnv) === 0);
+const rgManualExpiredEnv = watchdogEnv({
+	watchdogs: [rgRow("wd-rg-manual-expired", null, { remainingMs: -1000, origin: "manual" })],
+});
+await waitForChain(rgManualExpiredEnv, 1);
+await rgManualExpiredEnv.watchdog.patrol({ now: RG_NOW });
+check("批 G · U8 不回归 ② 手工行到期**逐字节旧行为**（TTL 自清最先，audit D1）: 已过期的手工行照旧被 `removeWatchdog` 收掉、定时器一并清空 —— 续期分支**根本进不去**（`origin` 门在外层），周期 ensure 也无队可补（名册为空）",
+	b5Watchdogs(rgManualExpiredEnv).length === 0 && rgManualExpiredEnv.watchdog.timers.size === 0);
+
+// --- U9：`targets` 按名册重导出（会诊采纳的行为必须有判据） ---------------------------
+// 这是今天的**隐性缺口**：attach / arm-team 见 `present` 就 `continue`，中途入队的成员从未被盯上。
+const rgDriftEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) }, "session-peer-2": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-drift")],
+	watchdogs: [rgRow("wd-rg-drift", "rg-drift", { remainingMs: 60 * 60_000 })],
+});
+await waitForChain(rgDriftEnv, 1);
+const rgDriftBefore = rgAutoRow(rgDriftEnv, "rg-drift");
+// 成员漂移：往名册里加一名新成员（**直接改命名空间** = 用户在设置 UI 里改 teams 那条路）。
+rgDriftEnv.settings.namespaces.get("team-link").data.teams[0].roles.push(structuredClone(wb2Role("worker-b", "session-peer-2")));
+await rgDriftEnv.watchdog.patrol({ now: RG_NOW });
+const rgDriftAfter = rgAutoRow(rgDriftEnv, "rg-drift");
+check("批 G · U9 `targets` 按名册重导出（红相＝续期保留旧 `targets`（＝今天的隐性缺口）⇒ 本条红）: 名册有效 + 窗口内 + **成员漂移**夹具 ⇒ 续期后 `targets` **含新成员**；★ 负相自证：续期**之前**那一行的 `targets` 只有旧成员（新成员确实是巡逻之后才进来的）",
+	rgDriftBefore !== null && rgDriftBefore.targets.join(",") === "session-peer"
+		&& rgDriftAfter !== null && rgDriftAfter.targets.join(",") === "session-peer,session-peer-2"
+		&& rgDriftAfter.renewedAt === RG_NOW);
+
+// --- U12：fail-open 的失败路径 --------------------------------------------------------
+// `policy.update` 抛错 ⇒ 巡逻**不抛**、条目**保留旧 `expiresAt`**、下个 tick 仍会重试
+// （退化到今天的行为，**不引入新死法**）。红相＝去掉续期里的 try/catch ⇒ 巡逻崩 ⇒ 本条红。
+const rgFailOpenEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-fail-open")],
+	watchdogs: [rgRow("wd-rg-fail-open", "rg-fail-open", { remainingMs: 60 * 60_000 })],
+});
+await waitForChain(rgFailOpenEnv, 1);
+const rgFailOpenBefore = rgAutoRow(rgFailOpenEnv, "rg-fail-open");
+// 打桩：store 拒写（真机那类 settings 服务抖动）。**只打这一处**，patrol 自身照走真实现。
+// ★ 修复轮：旧写法 `rgFailOpenEnv.settings.namespaces.get("team-link").update = async () => { throw … }`
+//   打在**死代码**上 —— namespace state 没有 `update` 字段，插件调的是 `settings.register()` 返回的
+//   **scope** 上的 `update`（见本文件 `makeSettings` 的 scope 工厂）。⇒ 异常从未抛出、续期真的写盘成功，
+//   本条判据**假绿**（自称守住 fail-open，实际没走到那条路径；删掉 try/catch 它照样绿）。
+//   现在打的是桩里的**活查开关** `state.updateRefusal`（夹具注入 Error）⇒ 插件真到达的那一句 `update`
+//   会当场抛出，`lib/index.js` 里 `renewAutoRowIfStillValid` 的 try/catch 才**真的**被触发。
+const rgFailOpenNs = rgFailOpenEnv.settings.namespaces.get("team-link");
+// ★ 下面那条**鉴别性读数**的基准：巡逻前那一刻盘上的 `watchdogs` 补丁数 —— 紧接的前置自证断言它是 0
+//   （「开关打开前没人写过」），这里把它绑成一个名字，让最后那半句读起来是「巡逻带来的增量」。
+const rgFailOpenWritesBefore = rgWatchdogWrites(rgFailOpenEnv);
+// ★ 前置自证（★ 修复轮的验收要求）：开关打开**之前**一笔都没写过 —— 否则下面那条「写被拒 ⇒ 盘上没动静」
+//   就算通过也说明不了任何事（写入数本来就走不到增量）。同理，此刻条目还没被续过（这一步在巡逻之前）。
+check("批 G · U12 前置自证（开关打开前盘上零写 ⇒ 下面「被拒写」那条读的数真的是**这一次**巡逻的增量）: attach 后置链已落定、注入尚未生效时 —— `watchdogs` 补丁数为 0，且目标行仍停在夹具原值（`renewedAt` 不存在）",
+	rgWatchdogWrites(rgFailOpenEnv) === 0
+		&& rgFailOpenBefore !== null && rgFailOpenBefore.renewedAt === undefined);
+rgFailOpenNs.updateRefusal = new Error("settings update refused by stub");
+let rgFailOpenThrew = null;
+try {
+	await rgFailOpenEnv.watchdog.patrol({ now: RG_NOW });
+} catch (error) {
+	rgFailOpenThrew = String(error?.message ?? error);
+}
+const rgFailOpenAfter = rgAutoRow(rgFailOpenEnv, "rg-fail-open");
+check("批 G · U12 fail-open（红相＝去掉 try/catch ⇒ 巡逻崩、异常冒到调用方 ⇒ 本条红）: 续期写盘抛错 ⇒ ① 巡逻**不抛**（异常被吞掉）；② ★ 注入**真的被拒** —— 判据挂在**桩侧的拒绝计数**上（`refusals` 恰好一条、正是夹具那一句 `settings update refused by stub`）；⚠️ 判据**不得**读「逃出巡逻的异常消息」：`rgFailOpenThrew` 只捕获逃出 `patrol` 的异常，而实现**刻意**在 `renewAutoRowIfStillValid` 里吞掉它（fail-open）⇒ 那一格在实现正确时恒为 `null`，把它当判据就是反断言（旧标题写的「异常就是夹具那一句」在结构上永远不成立）；③ 条目**保留旧 `expiresAt`**（逐字段与写前相同、**没有** `renewedAt`）；④ 行**未被删除**（下一个 tick 仍会重试 —— 窗口还开着，12 次机会）；⑤ 定时器仍在位；⑥ ★ 盘上的 `watchdogs` 补丁数**与巡逻前逐字相同 === 0** —— 桩的 `update` 体在 push 之前就抛了，一笔真写都没落",
+	rgFailOpenThrew === null
+		&& rgFailOpenNs.refusals.length === 1 && rgFailOpenNs.refusals[0] === "settings update refused by stub"
+		&& rgFailOpenBefore !== null && rgFailOpenAfter !== null
+		&& rgFailOpenAfter.expiresAt === rgFailOpenBefore.expiresAt
+		&& rgFailOpenAfter.renewedAt === undefined
+		&& rgFailOpenAfter.createdAt === rgFailOpenBefore.createdAt
+		&& rgFailOpenEnv.watchdog.timers.has("wd-rg-fail-open")
+		&& rgWatchdogWrites(rgFailOpenEnv) === rgFailOpenWritesBefore && rgFailOpenWritesBefore === 0);
+
+// --- U7：留痕可核（行字段 ＋ 归一化白名单 ＋ 渲染） ------------------------------------
+const rgTraceEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-trace")],
+	watchdogs: [rgRow("wd-rg-trace", "rg-trace", { remainingMs: 60 * 60_000 })],
+});
+await waitForChain(rgTraceEnv, 1);
+await rgTraceEnv.watchdog.patrol({ now: RG_NOW });
+const rgTraceList = String(await rgTraceEnv.watch.execute({ action: "list" }, execFor(rgTraceEnv.senderAgent)));
+const rgTraceStatusLines = await wb4StatusLines(rgTraceEnv);
+const rgTraceSection = wb4SectionOf(rgTraceStatusLines, "--- 看门狗（policy.watchdogs；").join("\n");
+const rgTraceStamp = stampOf(RG_NOW);
+check("批 G · U7 留痕可核（红相＝不把 `renewedAt` 加进 `watchdogList` 的**归一化白名单** ⇒ 字段每次读写循环都被静默丢掉、渲染里看不到 ⇒ 本条红）: 续期之后 —— `team_link_watch action=list` 与状态卡第 ③ 段**两处**渲染里都出现「上次续期 " + rgTraceStamp + "」（两处共用同一份字节）",
+	rgTraceList.includes("上次续期 " + rgTraceStamp) && rgTraceSection.includes("上次续期 " + rgTraceStamp));
+check("批 G · U7 归一化不丢字段（★ 直接读归一化之后的视图，不靠渲染间接推断）: `policy.get().watchdogs` 里那一行**既有** `renewedAt`（=== RG_NOW）也有 `createdAt`（夹具原值）—— 读写一个来回之后两者都还在",
+	(() => {
+		const view = __testing.policyFor(rgTraceEnv.ctx).get().watchdogs.find((entry) => entry.id === "wd-rg-trace");
+		return view !== undefined && view.renewedAt === RG_NOW && view.createdAt === RG_NOW - 6 * 3600000;
+	})());
+// U7 的第二半：**从未续期**的行如实渲染「（从未续期）」，且与「已续期」的那一行**各说各的读数**。
+// 手工行永远不会被续（非目标 3），所以它对那一格是准确的读数而不是缺口；这条同时自证「上次续期 …」
+// 那一串**只在真的续过**的行上出现（否则它就只是一句恒真的装饰）。
+const rgTraceManualEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-trace-mix")],
+	watchdogs: [
+		rgRow("wd-rg-trace-mix-auto", "rg-trace-mix", { remainingMs: 60 * 60_000 }),
+		rgRow("wd-rg-trace-mix-manual", null, { remainingMs: 60 * 60_000, origin: "manual" }),
+	],
+});
+await waitForChain(rgTraceManualEnv, 1);
+await rgTraceManualEnv.watchdog.patrol({ now: RG_NOW });
+const rgTraceMixList = String(await rgTraceManualEnv.watch.execute({ action: "list" }, execFor(rgTraceManualEnv.senderAgent)));
+const rgTraceMixRows = rgTraceMixList.split("\n").reduce((acc, line) => {
+	if (line.startsWith("- wd-")) acc.push(line);
+	else if (acc.length > 0 && line.startsWith("    ")) acc[acc.length - 1] += "\n" + line;
+	return acc;
+}, []);
+const rgTraceMixAuto = rgTraceMixRows.find((line) => line.includes("wd-rg-trace-mix-auto")) ?? "";
+const rgTraceMixManual = rgTraceMixRows.find((line) => line.includes("wd-rg-trace-mix-manual")) ?? "";
+check("批 G · U7 未续期的行如实渲染「上次续期（从未续期）」而不是留白/编造（★ 负相自证：那一串只在**真的续过**的行上出现 —— 手工行同一次 list 里就是「从未续期」）: 两行各说各的读数，且**同一串时间戳**只出现在 auto 那一行",
+	rgTraceMixRows.length === 2
+		&& rgTraceMixAuto.includes("上次续期 " + rgTraceStamp)
+		&& rgTraceMixManual.includes("上次续期（从未续期）")
+		&& !rgTraceMixManual.includes(rgTraceStamp));
+
+// --- U5：FR-R2 冷启动（attach 时行**已过期**且名册仍有效 ⇒ 同 id 原地刷新并挂表） -------
+// 这是与 FR-R1 **同源但独立存在**的洞：旧实现 `existing` 查找不查 `expiresAt` ⇒ 过期行被当
+// 「在场」报 `present` 然后 `continue`，随即被清扫链逐条收掉 ⇒ 工作台**当场死透**（比 12h 慢死更快）。
+// ★ 这一条的时钟面**就是墙钟**（与块头的 D3 同一个理由）：attach 的 ensure 走真实 `Date.now()`
+//   （`armTeamWatchdog` 那一路不注入时钟），所以「已过期」只能相对**墙钟**表达。
+// ★ 分歧修复轮 D2：夹具换回 `watchdogEnv`（`setup` 不挂 `env.watchdog` ⇒ 断言里的定时器读数取不到）。
+const rgColdTeam = "rg-cold";
+const rgColdCreatedAt = 1_700_000_000_000;
+const rgColdEnv = watchdogEnv({
+	teams: [rgTeam(rgColdTeam, [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "session-peer"), wb2Role("worker-b", "session-peer-2")])],
+	watchdogs: [{ id: "wd-rg-cold", team: rgColdTeam, watcherSession: "session-self", targets: ["session-peer"], silentMinutes: 10, intervalMinutes: 10, expiresAt: RG_NOW - 3600_000, createdAt: rgColdCreatedAt, origin: "auto" }],
+});
+await waitForChain(rgColdEnv, 1);
+await tick();
+const rgColdRow = rgAutoRow(rgColdEnv, rgColdTeam);
+check("批 G · U5 ① 冷启动（红相＝去掉 `existing` 查找里的「未过期」谓词 ⇒ 该行报 `present` 后被清扫链收掉（工作台当场死透）⇒ 本条红）: attach 时行**已过期**且名册仍有效 ⇒ **同 `id` 原地刷新**（不是被当成 `present` 跳过）＋ **挂上定时器**；字段形状与 FR-R1 同形：`createdAt` **保留原值**、`renewedAt` 已写、`targets` 按名册重导出（新成员在内）",
+	rgColdRow !== null && rgColdRow.id === "wd-rg-cold" && rgColdRow.createdAt === rgColdCreatedAt
+		&& typeof rgColdRow.renewedAt === "number" && rgColdRow.renewedAt > 0
+		&& rgColdRow.expiresAt > Date.now()
+		&& rgColdRow.targets.join(",") === "session-peer,session-peer-2"
+		&& rgColdEnv.watchdog.timers.has("wd-rg-cold")
+		&& b5Watchdogs(rgColdEnv).length === 1);
+// U5 ②：**同一队 + 同一协调者会话再次 `/team_session` 建队**（那条**无 existing 守卫**的路径）
+// ⇒ 命中 refresh 分支时字段形状**同样**是「保 `createdAt` / 写 `renewedAt`」。
+// ★ 这是评审第 3 轮 🟡#12 点名的「refresh 分支今天有活调用方」——夹具种一条**可辨识的** `createdAt`，
+//   若该分支重写它，本条立刻红（而不是靠 `Date.now()` 的毫秒巧合）。
+const rgBuildTeam = "rg-refresh";
+const rgBuildSeedAt = 1_600_000_000_000;
+// ★ 分歧修复轮 D6：这一条**必须**走一条真能到达 refresh 分支的路径 —— 原夹具两趟都写 `roles=worker-a`
+//   （该角色**已登记**）⇒ handler 在 `plan.creating.length === 0` 那一支**幂等早退**（实测回执：
+//   「已登记本次请求的全部 1 个角色…无需创建」），**从不调用 `armTeamWatchdog`** ⇒ refresh 分支
+//   根本没人碰（设计档 🟡#12 声称的「该分支今天有活调用方」因此无人验证，判据也就空真）。
+//   现在两趟各请求一个**尚未登记**的角色（worker-b / worker-c）⇒ 批次非空、handler 走到
+//   `armTeamWatchdog` ⇒ `planAutoWatchdog` 命中已存在的 (origin=auto, watcher=session-self, team) 行
+//   ⇒ 走 refresh 分支。**id 不变**这一条就是「走的确实是 refresh 而不是新建」的判别式。
+const rgBuildEnv = teamSessionEnv({ askScript: ["创建", "创建"] });
+rgBuildEnv.ns.data.teams = [structuredClone(b5Team(rgBuildTeam, B5_WS, [wb2Role("coordinator", "session-self"), wb2Role("worker-a", "rg-refresh-peer")]))];
+rgBuildEnv.ns.data.watchdogs = [{ id: "wd-rg-refresh", team: rgBuildTeam, watcherSession: "session-self", targets: ["rg-refresh-peer"], silentMinutes: 10, intervalMinutes: 10, expiresAt: Date.now() + 12 * 3600_000, createdAt: rgBuildSeedAt, origin: "auto" }];
+// ★ 基准读数在**两趟建队之前**取：`createdAt` 是那一刻的值（也就是夹具刚种下的那个可辨识值），
+//   断言的是「两趟之后它仍是这个值」。取基准而不是写死常量，是为了不依赖 attach 后置链的调度顺序。
+const rgBuildRows = () => rgBuildEnv.ns.data.watchdogs.filter((entry) => entry.origin === "auto" && entry.team === rgBuildTeam);
+const rgBuildBefore = rgBuildRows()[0];
+const rgBuildFirst = await rgBuildEnv.run(`n=1 team=${rgBuildTeam} roles=worker-b task=第一趟`);
+const rgBuildSecond = await rgBuildEnv.run(`n=1 team=${rgBuildTeam} roles=worker-c task=第二趟`);
+check("批 G · U5 ② 两趟 `/team_session`（走那条**无 existing 守卫**的路径，且批次**非空** ⇒ 真的调用 `armTeamWatchdog`）⇒ 命中 refresh 分支时字段形状同样是「保 `createdAt` / 写 `renewedAt`」（红相＝refresh 分支仍重写 `createdAt`（旧行为 `createdAt: now`）或不写 `renewedAt` ⇒ 本条红；若两趟走了**新建**分支 ⇒ id 会变 ⇒ 也红）: 两趟之后仍**恰一条** auto 行、`id` 未变（＝走的真是 refresh 而不是新建）、`createdAt` 仍是**建队之前**那个值（**不是**建队时刻）、`renewedAt` 已写、到期在将来",
+	rgBuildBefore !== undefined && rgBuildBefore.createdAt === rgBuildSeedAt
+		&& rgBuildFirst.kind === "success" && rgBuildSecond.kind === "success"
+		&& rgBuildRows().length === 1
+		&& rgBuildRows()[0].id === "wd-rg-refresh"
+		&& rgBuildRows()[0].createdAt === rgBuildBefore.createdAt
+		&& typeof rgBuildRows()[0].renewedAt === "number" && rgBuildRows()[0].renewedAt > 0
+		&& rgBuildRows()[0].expiresAt > Date.now());
+
+// --- U6 / U11：FR-R3 运行期复活（去抖周期 ensure）＋ 换届后新协调者的行 ----------------
+// U6：名册有效但行**已被清扫** ⇒ 周期 ensure 重铸一条。
+// 夹具按**真实形状**分步走：① 巡逻一轮把去抖窗口打开（此刻那条行还在表里，ensure 报 `present`）；
+// ② 把那条行移走（「睡过窗口 + 到期点」之后清扫链的产物）；③ **跨过 60s 去抖窗口**之后再过一轮 ⇒ 重铸；
+// ④ 紧接一轮（距上一次不足 60s）⇒ 零新增（去抖）。
+// ★ 分歧修复轮 D2/D4：① 夹具换回 `watchdogEnv`（`setup` 不挂 `env.watchdog`）；
+//   ② ①→③ 之间**必须真的跨过** `PATROL_SWEEP_MIN_INTERVAL_MS`（60s）—— 原夹具只差 1ms，
+//      周期 ensure 被自己的去抖挡住 ⇒「重铸」这个读数根本推不动（绿得毫无意义）；
+//   ③ 全程用**同一注入时钟面** `RG_NOW`（它本身锚墙钟，见块头）—— 不再混用 `Date.now()` 与 `WD_NOW`。
+const rgRespawnEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-respawn")],
+	watchdogs: [rgRow("wd-rg-respawn", "rg-respawn", { remainingMs: 60 * 60_000 })],
+});
+await waitForChain(rgRespawnEnv, 1);
+const rgRespawnBefore = b5Watchdogs(rgRespawnEnv).filter((entry) => entry.team === "rg-respawn").length;
+// ① **去抖窗口开启**：`options.id` 指名一条**不存在的**注册 ⇒ 循环一条都不跑，但循环**之后**的
+//    `runPatrolEnsure` 照走（`ensure` 此刻读到的名册里该队已有行 ⇒ 它什么都不写）。
+await rgRespawnEnv.watchdog.patrol({ now: RG_NOW, id: "wd-rg-respawn-absent" });
+// ② 模拟那条行**已被清扫**（「睡过窗口 + 到期点」之后的产物：行没有定时器，也没有人续它）。
+rgPlant(rgRespawnEnv, []);
+const rgRespawnAfterSweep = b5Watchdogs(rgRespawnEnv).filter((entry) => entry.team === "rg-respawn");
+// ③ 名册仍有效但**表里已无该行**、且距上一次 ensure 已 **61s**（跨过去抖窗口）⇒ 周期 ensure 重铸。
+await rgRespawnEnv.watchdog.patrol({ now: RG_NOW + 61_000, id: "wd-rg-respawn-absent" });
+const rgRespawnRows = b5Watchdogs(rgRespawnEnv).filter((entry) => entry.origin === "auto" && entry.team === "rg-respawn");
+// ④ **去抖窗口的负相**：紧接着（同一时钟面、距上一次不足 60s）再巡逻一次 ⇒ 零新增。
+await rgRespawnEnv.watchdog.patrol({ now: RG_NOW + 62_000, id: "wd-rg-respawn-absent" });
+const rgRespawnAfterDebounce = b5Watchdogs(rgRespawnEnv).filter((entry) => entry.origin === "auto" && entry.team === "rg-respawn");
+check("批 G · U6 FR-R3 复活（红相＝撤掉巡逻尾部的周期 ensure ⇒ 永不重建 ⇒ 本条红）: 前置自证 —— 那条行**曾在表里**；① 那条行还在时（去抖窗口开启那一轮）**零重建**；② 名册有效但**行已被清扫** ⇒ **跨过 60s 去抖窗口**后的那一轮由周期 ensure **重铸一条**（`origin=auto`、watcher=该队现任、`targets` 按名册现算）并**挂上定时器**；③ 紧接着（距上一次不足 60s）再巡逻 ⇒ **零新增**（去抖真的在门，不是每次巡逻都写）",
+	rgRespawnBefore === 1 && rgRespawnAfterSweep.length === 0
+		&& rgRespawnRows.length === 1
+		&& rgRespawnRows[0].watcherSession === "session-self"
+		&& rgRespawnRows[0].targets.join(",") === "session-peer"
+		&& rgRespawnEnv.watchdog.timers.has(rgRespawnRows[0].id)
+		&& rgRespawnAfterDebounce.length === 1 && rgRespawnAfterDebounce[0].id === rgRespawnRows[0].id);
+// U11：换届后**新**协调者的行 —— 旧协调者的行随名册门失效而死；新协调者在无行状态下由周期 ensure 铸出。
+// ★ 分歧修复轮 D5：这两件事发生在**同一次巡逻的同一轮**里（巡逻循环先收旧行，循环之后的 ensure 立刻按
+//   名册铸新行）⇒ 「旧的已死、新的还没有」这个中间态**在实现里根本不存在**。原判据分两趟巡逻去观察它，
+//   第一趟之后 `length === 0` 就已经不成立（新行同轮就铸出来了）⇒ 判据永远红。如实改成「旧行死 ∧
+//   新行**同轮**铸出」，并把两半都钉住（旧 id 消失 ＋ 它的定时器清掉；新行在场 ＋ 它的定时器挂上）。
+const RG_NEW_COORD = "rg-new-coordinator";
+const rgHandoverEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(RG_NOW - 120_000) }, [RG_NEW_COORD]: { events: oneShotSurface(RG_NOW - 120_000) } },
+	teams: [rgTeam("rg-handover")],
+	watchdogs: [rgRow("wd-rg-old-coord", "rg-handover", { remainingMs: 60 * 60_000, watcherSession: "session-self" })],
+});
+await waitForChain(rgHandoverEnv, 1);
+// 换届：名册的 coordinator 换成新会话（**直接改命名空间** = 一次换人落定之后的现实）；同时把旧行改成已过期
+// —— 名册门失效 ⇒ 它照旧被 TTL 收掉（**不**被续成永生僵尸）。
+rgHandoverEnv.settings.namespaces.get("team-link").data.teams[0].roles = [structuredClone(wb2Role("coordinator", RG_NEW_COORD)), structuredClone(wb2Role("worker-a", "session-peer"))];
+const rgHandoverOldRow = b5Watchdogs(rgHandoverEnv).find((entry) => entry.id === "wd-rg-old-coord");
+rgHandoverOldRow.expiresAt = RG_NOW - 1000;
+await rgHandoverEnv.watchdog.patrol({ now: RG_NOW });
+const rgHandoverRows = b5Watchdogs(rgHandoverEnv);
+const rgHandoverNew = rgHandoverRows.filter((entry) => entry.origin === "auto" && entry.team === "rg-handover");
+check("批 G · U11 换届（红相＝撤掉周期 ensure ⇒ 新协调者永远没有行 ⇒ 本条红）: **一轮**巡逻之内 —— ① 旧协调者（`session-self`）的行随名册门失效而**死**（到期门收它，**不**被续）；② 同轮由周期 ensure 为**新**协调者铸出它自己的行（watcher=新现任、targets=除它之外的队员）并挂上定时器。★ 中间态（旧的已死、新的还没有）在实现里不存在 ⇒ 判据读的是**这一轮结束时**的两半",
+	!rgHandoverRows.some((entry) => entry.id === "wd-rg-old-coord")
+		&& !rgHandoverEnv.watchdog.timers.has("wd-rg-old-coord")
+		&& rgHandoverNew.length === 1
+		&& rgHandoverNew[0].watcherSession === RG_NEW_COORD
+		&& rgHandoverNew[0].targets.join(",") === "session-peer"
+		&& rgHandoverEnv.watchdog.timers.has(rgHandoverNew[0].id));
+
+// --- 第四面：**不做外层预扫**（快照陷阱，设计档 §4 D1 的否决项） ----------------------
+// 外层循环迭代的是 `policy.get().watchdogs` 的**快照**，续期后再碰到旧 `entry` 对象会拿旧
+// `expiresAt` 走删除门，**把刚续的行删掉**。判据：一次**全量**巡逻之后，那条刚被续的行**仍在**。
+check("批 G · U5/U10 第四面 不做外层预扫（快照陷阱）: 一次**全量**巡逻（不带 `id`）之后，窗口内那条刚被续的行**仍在表里**且 `expiresAt` 是**续期后**的值 —— 它没有在同一个循环里被自己那份旧快照走删除门删掉",
+	rgLiveAfter !== null && b5Watchdogs(rgLiveEnv).some((entry) => entry.id === rgLiveAfter.id && entry.expiresAt === RG_NOW + 12 * 3600_000));
+
+// A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
+// ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
 rmSync(TEST_ROOT, { recursive: true, force: true });
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
