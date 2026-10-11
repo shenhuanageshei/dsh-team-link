@@ -3685,5 +3685,40 @@ $ node .investigations/eng-tooling/scripts/balance-scan.mjs host-half.test.mjs
 ≥20 次调用的观测窗口，判据见设计档 §8 的 U6 行）。全部落盘文件均为 **UTF-8 无 BOM**（编辑工具直写，
 未经 PowerShell 的 `Set-Content` / `Out-File`）。
 
+---
+
+### 2026-10-12 · 批 E 真机项 **U9**（宿主侧，**安全等价版**）—— PASS
+
+**背景**：U9 原稿要求「把含毒文本**经 `team_link_team_append`** 落盘 ⇒ 盘上无 token；再 `team_read` ⇒
+读回那一行里看得见占位符」。其中「把原串写进工具参数」这一动作**本身就是自伤路径**（批 E 取证的 15 次
+`MALFORMED_RESPONSE` 全部由此而来；父侧为此自伤三次）⇒ 宿主在场时改为**安全等价路径**并如实标注缺口。
+
+**做了什么**（2026-10-12 00:28–00:31，DSH 重启后、新代码在场）：
+
+1. 建临时团队 `u9-verify-1012`（workspace = 本仓；`/team/` 已在 `.gitignore`，不弄脏 `git status`）；
+2. `node .investigations/token-sanitize-2026-10-11/scripts/verify-U9.mjs team/u9-verify-1012` ——
+   脚本用**码点**（`String.fromCharCode(0xFF5C)`）构造原串，**直接写盘** `decisions.md`；
+   **夹具自证**输出：`盘上原串命中数 = 1`（⇒ 这次取证不是空转，与「负相自证」同一纪律）；
+3. 真机读面：`team_link_team_read team=u9-verify-1012`。
+
+**读数原文**（读面返回的那一行；遮蔽由宿主完成）：
+
+```
+1 | 2026-10-12T00:30:00.000Z | session-ab58a5d1-… | U9 真机取证：带毒正文 [framing-token-removed] 收尾（…）
+```
+
+⇒ **盘上的原串在真机读面上变成了逐字占位符 `[framing-token-removed]`**，且整份返回文本里**零原串命中** ——
+**U9 判定：PASS**。
+
+**同时读到**的两项旁证：① 页脚 `单行上限 2000 字符（§4.1）` ⇒ 批 F 在真机生效；
+② 团队状态卡的 `attach 后置链（2026-10-12 00:14:02）：rearm 13 · 按队补挂 created 0 / present 10 / skip 0 / failed 0` ⇒ 批 D 的自愈补挂与 FR-17 读数面在真机生效。
+
+**★ 覆盖缺口（如实声明，不冒充全绿）**：本版**不覆盖 `team_link_team_append` 的写入路径**（即「含毒文本经
+工具参数落盘」那一半）。理由不是「不重要」，而是**那一半要求把原串逐字写进工具参数**——正是本批要治的
+自伤动作，在不让人在场的时段做它是拿整轮安全换一个已知结论。该路径由判据 **U1①–⑤** 的夹具路径覆盖
+（套件全绿），且实现里 `sanitizeFraming` 就在三个写入分支的落盘前一行。**待用户在场时补做那一半。**
+
+**清理**：临时团队已退役、`team/u9-verify-1012/` 已删（见紧随其后的一节）。
+
 
 
