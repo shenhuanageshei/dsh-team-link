@@ -3,6 +3,9 @@
 > **状态**：待用户确认（2026-10-11 立项，用户原话「建议二立项」）。配对需求档 `docs/2026-10-11-token-sanitize-requirements.md`。
 > 章节口径＝全局 `~/.dsh/AGENTS.md` 第四节；**文字与图冲突时以文字为准并修图**。
 > ★ **本档全文不写出那个原串**：一律用码点描述。这不是排版洁癖 —— 逐字写它本身就会提高**写档这一动作**被判 `MALFORMED_RESPONSE` 的概率（父侧 2026-10-11 因此自伤两次）。
+> ★ **实施状态（v1.1，2026-10-11 落码）**：FR-1…FR-7 已按本档落码（`lib/index.js`）＋ **37** 条判据（33 条交付面 ＋ 交付评审修复轮 4 条；`host-half.test.mjs` 的「批 E」块）。★ 评审 🟡#5（第 3 轮）更正：原写 **33** —— 修复轮新增了 4 条（上界复检两档 ＋ scrub 拒写两条），套件自报 `1550 = 1513 + 37`。
+> §6.5 的 v1.1 改动是本批实施中发现的**硬约束**逼出来的（`host-half.test.mjs:7221` 的导入面白名单：**新增任何 import 都判红**）——
+> 处数改为**由文本自带**（占位符带编号），于是**不新增 import、不加累加器、不需要执行上下文**；那条 `AsyncLocalStorage` 支路已整条撤掉。
 
 ---
 
@@ -93,7 +96,7 @@ flowchart LR
 2. 10 个工具的返回文本里**不含** token（US-E2）；
 3. 跨会话投递的**正文**里不含（US-E3）；
 4. 提示词面（角色段 / 资源行上下文）里不含（US-E4）；
-5. 替换**不静默**：报出替换处数；没替换时不出现那句话（US-E5）；
+5. 替换**不静默（v1.1 口径）**：**文本里看得见占位符**（多处时带 `i/N` 编号）—— **回执不另加读数行**，故也不存在「没替换时那句话」；没替换 ⇒ 输出逐字与改前相同（US-E5）。★ 评审 🔴#1 更正：原写「报出替换处数；没替换时不出现那句话」，是 v1.0 通道（回执报数）的残句
 6. 实现**只有一处**，且**源码与文档里不出现原串**（US-E6 / NFR-4）。
 
 ### 3.2 非目标
@@ -149,26 +152,51 @@ const WRAP = FULLWIDTH_BAR + FULLWIDTH_BAR;        // 包裹结构的两侧
 const FRAMING_RE = new RegExp(`(?:</?)?${WRAP}[A-Za-z_]{0,20}${WRAP}`, "gu");
 const PLACEHOLDER = "[framing-token-removed]";
 
-/** §6.2 消毒。前置：text 可为任意值。后置：返回 { text, removed }。
+/** §6.2 消毒（终稿形状）。前置：text 可为任意值。后置：返回 { text, removed }。
  *  · removed = 0 ⇒ text **逐字节等于**入参（NFR-2 / U6 的前提）
- *  · 自身抛错 ⇒ **原样返回且 removed=0**（NFR-3 / U7：绝不提高调用方失败率） */
+ *  · **本函数不自包 try** —— 它只用 JS 原生正则与码点，结构上不会抛；try/catch 见 §6.2b
+ *  落码处另有一层编号（`framingPlaceholderAt`），此处按 §6.5 v1.1 的口径展开。 */
 function stripFramingTokens(text) {
   if (typeof text !== "string" || text === "") return { text, removed: 0 };
+  const hits = [...text.matchAll(FRAMING_RE)].length;
+  if (hits === 0) return { text, removed: 0 };                 // ★ 不经过 replace ⇒ 逐字节等于入参
+  let index = 0;
+  const out = text.replace(FRAMING_RE, () => {
+    index += 1;
+    return hits === 1 ? PLACEHOLDER : `${PLACEHOLDER.slice(0, -1)} ${index}/${hits}]`;
+  });
+  return { text: out, removed: hits };
+}
+
+/** §6.2b ★★ v1.1 落码修正（分歧审计 #8）：**fail-open 落在缝上，不在 `stripFramingTokens` 里**。
+ *  · 原写法（§6.2 的**旧版**：try/catch 包在 `stripFramingTokens` 内部 —— 已由本次同步改掉）
+ *    接不住 U7 的桩：U7 往注入缝 `stripImpl` 里塞的是一个**必抛**的函数，抛出点根本不在
+ *    `stripFramingTokens` 里（那时它根本不是被调用的那个实现）⇒ 按旧版字面实现，U7 必红。
+ *  · 落码形状：`stripFramingTokens` **不自包 try**（它只用 JS 原生正则与码点，结构上不会抛 ——
+ *    §9「重启 / 升级」一行），try/catch 上移到**调用点唯一经过的那一层** `sanitizeFraming`；
+ *    它同时把「实现抛错」与「实现返回畸形值（`undefined` / 非字符串 `text` / `removed<=0`）」
+ *    折成同一档 fail-open：**原样返回、removed=0**。生产路径永远解析到 `stripFramingTokens`。 */
+let stripImpl = stripFramingTokens;
+
+function sanitizeFraming(text) {
   try {
-    let removed = 0;
-    const out = text.replace(FRAMING_RE, () => { removed += 1; return PLACEHOLDER; });
-    return { text: removed === 0 ? text : out, removed };
+    const result = stripImpl(text);
+    return result !== null && typeof result === "object" && typeof result.text === "string" && result.removed > 0
+      ? { text: result.text, removed: result.removed }
+      : { text, removed: 0 };
   } catch {
-    return { text, removed: 0 };
+    return { text, removed: 0 };                                 // fail-open（NFR-3 / U7）
   }
 }
 
 /** §6.3 工具结果收口（FR-2）：既有三个 wellFormed 家族各加一行。
- *  前置：value 是即将返回给模型的文本/内容。后置：返回值不含 token；有替换时回执里多一句读数。 */
-function wellFormed(value) { … const s = stripFramingTokens(value); … }   // 语义与签名不变
+ *  前置：value 是即将返回给模型的文本/内容。后置：返回值不含 token；有替换时文本里看得见编号占位符。
+ *  ★ 调用的是 §6.2b 的 `sanitizeFraming`（**不是** `stripFramingTokens`）—— 收口点必须经由缝，
+ *    否则 U7 的必抛桩与 §6.5 的注入缝对这三个出口都不生效。 */
+function wellFormed(value) { … const s = sanitizeFraming(repairSurrogates(value)); return s.text; … }   // 语义与签名不变
 
 /** §6.4 黑板落盘（FR-5）。前置：line 已过既有校验。后置：**写盘的那一份**已消毒。 */
-const clean = stripFramingTokens(line);
+const clean = sanitizeFraming(line);
 await appendLine(file, clean.text);            // 注意：写干净的那份（处数由文本里的占位符自证，见 §6.5 v1.1；回执**不**额外加行）
 
 /** §6.5 v1.1 ★ 替换处数的**通道**与**注入缝** —— 因**硬约束**改写（2026-10-11 实施中断后发现）。
@@ -179,22 +207,20 @@ await appendLine(file, clean.text);            // 注意：写干净的那份（
  *    多于 1 处则 `[framing-token-removed 1/N]`、`[… 2/N]`…
  *    ⇒ **不需要累加器、不需要执行上下文、不需要回执多写一行**；
  *      U5 的「无替换 ⇒ 回执逐字与改前相同」因此**结构性成立**，而不是靠判断。
- *  · 注入缝**保留**（零导入成本）：`let stripImpl = stripFramingTokens;` ＋ `__testing.setStripImpl(fn)`，供 U7 塞「必抛」的桩。
+ *  · 注入缝**保留**（零导入成本）：`let stripImpl = stripFramingTokens;` ＋ `__testing.setStripImpl(fn)`，
+ *    供 U7 塞「必抛」的桩。**★ 缝由 `sanitizeFraming` 读**（§6.2b）—— 所以判据要观测缝，
+ *    必须走**生产收口路径**（工具 `output.render` / 渲染函数），直调 `stripFramingTokens` 观测不到。
  *  · **删除** AsyncLocalStorage / 执行上下文累加器那条路（它需要新 import）。 */
-function stripFramingTokens(text) {
+function stripFramingTokens(text) {                                        // 终稿：不自包 try（见 §6.2b）
   if (typeof text !== "string" || text === "") return { text, removed: 0 };
-  try {
-    const hits = [...text.matchAll(FRAMING_RE)];
-    if (hits.length === 0) return { text, removed: 0 };        // ★ removed=0 ⇒ text 逐字节等于入参
-    let i = 0;
-    const out = text.replace(FRAMING_RE, () => {
-      i += 1;
-      return hits.length === 1 ? PLACEHOLDER : `${PLACEHOLDER.slice(0, -1)} ${i}/${hits.length}]`;
-    });
-    return { text: out, removed: hits.length };
-  } catch {
-    return { text, removed: 0 };                               // fail-open（NFR-3 / U7）
-  }
+  const hits = [...text.matchAll(FRAMING_RE)];
+  if (hits.length === 0) return { text, removed: 0 };        // ★ removed=0 ⇒ text 逐字节等于入参
+  let i = 0;
+  const out = text.replace(FRAMING_RE, () => {
+    i += 1;
+    return hits.length === 1 ? PLACEHOLDER : `${PLACEHOLDER.slice(0, -1)} ${i}/${hits.length}]`;
+  });
+  return { text: out, removed: hits.length };
 }
 ```
 
@@ -204,13 +230,13 @@ function stripFramingTokens(text) {
 | --- | --- | --- |
 | 持久化字段 | — | **零变更**（NFR-1）；只影响写入的**字符内容** |
 | 新增进程内状态 | — | **无**（纯函数） |
-| 新增导出面 | — | `stripFramingTokens` 挂到 `__testing` 供判据直调 |
+| 新增导出面 | — | 判据面（`__testing`，见 **`lib/index.js:13663` 起的 `__testing` 块**，行号 as-of 2026-10-11 工作树）：`tickMessage`(`:13682`) · `renderResourceLine`(`:13690`) · `renderRoleText`(`:13691`) · `renderResourceContext`(`:13692`) · `renderWatchdogDigest`(`:13708`) · `stripFramingTokens`(`:13885`) · **`watchdogLines`(`:13894`)** · **`FRAMING_PLACEHOLDER`(`:13904`)**；另有 §6.5 的**注入缝** `setStripImpl` 与只读事实源 `framingTokenPattern`（判据不自己抄一份匹配式）。★ 评审 🔵#6 更正：原格只写了 `stripFramingTokens` 一个 |
 
 ## §8 防偏离（怎么被机械验证）
 
 | # | 判据 | 红相构造 | 落点 |
 | --- | --- | --- | --- |
-| **U1** | **黑板盘上零 token**：用具名夹具（码点拼出的 token）写一条 decisions ⇒ 读**磁盘文件**逐字断言不含；且读回执报出替换处数 | 去掉 FR-5 的消毒 ⇒ 盘上出现 ⇒ 红 | `host-half.test.mjs` |
+| **U1** | **黑板盘上零 token**：用具名夹具（码点拼出的 token）写一条 decisions ⇒ 读**磁盘文件**逐字断言不含；**处数由盘上 / 读回文本里的占位符编号自证 —— 写回执不另加读数行**。★ 评审第 2 轮 🔴#1 更正：原第二子句写「且读回执报出替换处数」，是被 v1.1 废弃的通道（且按字面不可满足：append 回执从不回显正文） | 去掉 FR-5 的消毒 ⇒ 盘上出现 ⇒ 红 | `host-half.test.mjs` |
 | **U2** | **10 个工具全覆盖**：对 `team_link_recover / list_sessions / status / export / send / watch / roster / team_read / team_append / rotate` **逐个**注入带毒夹具（能让注入影响返回文本的那条路径），断言返回串不含匹配式 | 只挂其中一个 `wellFormed` ⇒ 至少一个工具红 | `host-half.test.mjs` |
 | **U3** | **投递正文**：`team_link_send` 带毒正文 ⇒ 组装出的 banner 与 body 均不含 | 不挂 FR-3 ⇒ 红 | `host-half.test.mjs` |
 | **U4** | **提示词面**：段渲染 / 资源行上下文 / tick / 摘要 / 状态卡看门狗段 六个函数各带毒输入 ⇒ 输出不含 | 不挂 FR-4 ⇒ 红 | `host-half.test.mjs` |
@@ -218,7 +244,7 @@ function stripFramingTokens(text) {
 | **U6** | **零污染对照**：夹具**不含** token 时，所有出口输出与改前**逐字节相同** | 消毒误伤普通文本 ⇒ 红 | `host-half.test.mjs`（改前快照对照） |
 | **U7** | **fail-open**：令消毒内部抛错（桩）⇒ 工具**照常成功**、返回原文本 | rethrow ⇒ 工具失败 ⇒ 红 | `host-half.test.mjs` |
 | **U8** | **静态零残留**（评审 🟡#4 修订：扫描面**放宽**到 FR-6 触及的**每一个**文件 ＋ 两个测试套件 ＋ 取证目录）：用码点拼出的匹配式扫 `lib/`、`host-half.test.mjs`、`client-half.test.mjs`、`docs/*.md`、**根 `README.md` / `CHANGELOG.md` / `AGENTS.md`**、`.investigations/**/*.{mjs,js,md}` ⇒ **0 命中** | 谁把原串写回源码/文档（哪怕是在写 FR-6 的文档时顺手写进去的）⇒ 红 | 交付报告须贴扫描命令与输出 |
-| **U9** | **真机可证伪**：在真实会话里让一条含毒文本经 `team_link_team_append` 落盘 ⇒ 盘上无 token；再 `team_read` ⇒ 回执报数 | 任一不成立 ⇒ 本方案证伪 | 真机（父侧） |
+| **U9** | **真机可证伪**：在真实会话里让一条含毒文本经 `team_link_team_append` 落盘 ⇒ 盘上无 token；再 `team_read` ⇒ **读回的那一行里看得见占位符**（处数由编号自证，**回执不另加读数行**，与 v1.1 口径一致）。★ 评审 🟡#6（第 3 轮）措辞更正：原写「回执报数」是 v1.0 残留 | 任一不成立 ⇒ 本方案证伪 | 真机（父侧） |
 | **U10** | **deep-link 快照出口**（评审 🟡#3 补入，覆盖 FR-7）：令源会话内容含毒 ⇒ 粘贴 `dsh://session/<id>` 后注入的**快照文本**不含 token | 不挂 FR-7 ⇒ 红 | `host-half.test.mjs` |
 | **U11** | **裸包裹也命中**（评审 🟡#1 补入）：夹具**必须**含一份**无 `<` 前缀**的裸包裹样本（§2.3 那 40 例的形态），断言被替换 —— 防止夹具全是从 §2.2 那一种形态克隆来的，把 `</?` 这类写法的缺陷**遮蔽掉** | 正则写成 `</?` ⇒ 裸包裹漏过 ⇒ 红 | `host-half.test.mjs` |
 
@@ -233,5 +259,5 @@ function stripFramingTokens(text) {
 | **失败方向** | **fail-open**（NFR-3）：消毒永远不能让工具调用失败 |
 | **历史上已落盘的 token** | **不追溯**（NF-4）：只保证新写入与读出干净；旧账要清需另立一次人工动作 |
 | **占位符本身** | 纯 ASCII、与原 token 无关 ⇒ 不会被解析器二次识别（NF-5） |
-| **★ 入口面的范围（评审 🔵#6）** | **入口消毒只覆盖黑板**（FR-5）。其它**模型可写的持久化字段**（roster 的角色备注、`recoveries` 的 note、团队名）理论上仍可能把 token 落到盘上 —— **本批不拦**，因为它们的**读回路**已被 FR-2 覆盖（读出来时会被消毒）⇒ **传播环仍然断**。⇒ **「盘上永不出现」这句话只是对黑板成立**，不得外推 |
+| **★ 入口面的范围（评审 🔵#6 ＋ 分歧审计 #13）** | **入口消毒只覆盖黑板**（FR-5）。其它**模型可写的持久化字段**理论上仍可能把 token 落到盘上 —— **本批不拦**，因为它们的**读回路**已被 FR-2 覆盖（读出来时会被消毒）⇒ **传播环仍然断**。⇒ **「盘上永不出现」这句话只是对黑板成立**，不得外推。<br>★ **这个枚举不是穷举**（原枚举只点了 roster 角色备注 / `recoveries` 的 note / 团队名三项 ⇒ 会被当穷举读）。**同类还有一处，本批同样不拦**：`team_link_rotate action=prepare` 且 **`successor:"auto"`** 时，由**调用方给出的正文**（`handoff`，五个硬节）经 {@link handoffDocumentPath} 写盘的**交接文档** `<workspace>/team/<name>/handoff-<role>-<YYYYMMDD-HHmmss>.md`（§11.9.6；写入路径 `lib/index.js` 的 `writeHandoffDocument`）—— 它同样是「模型可写、落盘、盘上留原串」的一处，同样**不在本批的入口消毒面内**，读回路同样被 FR-2 覆盖。⇒ 该口径一律读作「**本批覆盖的入口 = 黑板三文件（decisions / tasks / discipline）**」，其余入口按同一理由（读面消毒）**不在本批声张范围** |
 | **★ 与 deep-link 的边界** | FR-7 覆盖的是「本插件注入他人内容」这一条出口；**宿主自己**把会话内容喂进上下文（如用户手动粘贴文本）不在本插件可及范围 ⇒ 归入给平台侧的观测报告（NF-1） |

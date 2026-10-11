@@ -11528,6 +11528,431 @@ check("批 D · U8 门控缓存释放（红相＝只清注册不清缓存 ⇒ �
 		&& at(wb8Env.systemPrompt.contexts, 1, {}).disposed === 1
 		&& at(wb8Env.systemPrompt.sections, 1, {}).disposed === 1);
 
+// ===========================================================================
+// 批 E（框定 token 消毒面）—— 设计档 docs/2026-10-11-token-sanitize-design.md
+// §5 的 FR-1…FR-7 与 §8 的判据 U1…U11（U9 是真机项，属父侧，本套件不覆盖）。
+//
+// ★ 本块的**文本纪律**（设计档 §6.1 / `.investigations/token-sanitize-2026-10-11/README.md`）：
+//   那个框定 token 是 DeepSeek 的**特殊 token**，**逐字写进任何文件**都会提高「写这一动作」
+//   被判 `MALFORMED_RESPONSE` 的概率（父侧 2026-10-11 因此自伤三次）⇒ 本块的每一个夹具都
+//   **由码点拼出**（`String.fromCharCode(0xFF5C)`），并且**断言里也不写原串** —— 用的是
+//   `__testing.framingTokenPattern()`（与实现同一个匹配式工厂：两处各拼一遍正是「锁的是
+//   复制品」）。U8 那条静态扫描把这条纪律钉成全仓可核。
+//
+// ★ 本块的**红相口径**（如实声明）：`__testing.setStripImpl` 是设计档 §6.5 保留的注入缝 ——
+//   把消毒换成**直通**（原样返回、removed=0）或**冒充干净文本**（整体替换成一个常量）就是
+//   这批的两种「未挂 / 挂错」红相。凡标了红相的判据都在断言里**同批做一次变异自证**（同一条
+//   check 内，先证明「变异后被观测到」，再断言「生产实现下不发生」），所以这条判据的**敏感性
+//   是实测的**，不是靠「我说它会红」。
+//   ★ 2026-10-11 更正：「冒充干净文本」那一档的桩**必须自称有替换**（`removed: 1`）——
+//   `sanitizeFraming`（§6.2b）把 `removed <= 0` 折成「原样返回」，于是 `removed: 0` 的桩
+//   结构上不可观测（自证会恒假，见 U6⑤ 的注释）。
+//
+// ★ 本块的**占位符期望串**一律由同源 helper 生成（`framePh(i, n)` / `framePhSeen`，本块顶部）：
+//   **禁止手打** `" 1/2]"` 这类片段 —— 手打的期望串已连续两轮把断言写成恒假。
+// ===========================================================================
+
+/** 全角竖线 U+FF5C（**不是** ASCII 的 `|`）—— 本块一切夹具的原子。 */
+const FRAME_BAR = String.fromCharCode(0xff5c);
+/** 包裹结构的两侧。 */
+const FRAME_WRAP = FRAME_BAR + FRAME_BAR;
+/** 命中 1 处时逐字的占位符（设计档 §0.3 ② 用户拍板的那一串）。 */
+const FRAME_PH = __testing.FRAMING_PLACEHOLDER;
+/** 占位符的**词干**（`[framing-token-removed`，**不含**收尾方括号）——带编号与不带编号两种形态都以它开头。 */
+const FRAME_PH_STEM = FRAME_PH.slice(0, -1);
+/** ★★ 同源 helper（父侧 2026-10-11 的口径）：第 i / n 处的占位符 —— `n <= 1` ⇒ 逐字占位符；
+ *  `n > 1` ⇒ `[framing-token-removed i/n]`。**判据里禁止手打** `" 1/2]"` 这类片段：手打的期望串
+ *  已连续两轮把断言写成恒假（「编号 vs 不编号」那一类）。 */
+const framePh = (index = 1, total = 1) => total <= 1 ? FRAME_PH : `${FRAME_PH_STEM} ${index}/${total}]`;
+/** 「输出里看得见占位符」＝**词干**在场（两种形态同批覆盖）。
+ *  ★ 这条 helper 本身就是一处更正：`FRAME_PH` **带**收尾方括号，而多处命中产出的是
+ *  `[framing-token-removed 1/2]` ⇒ `includes(FRAME_PH)` 对**多命中**输出**恒假**
+ *  （上一轮注释里「`FRAME_PH` 是带编号形态的真前缀」那句话是错的 —— 真前缀是**去掉收尾方括号**的词干）。 */
+const framePhSeen = (text) => String(text ?? "").includes(FRAME_PH_STEM);
+/** 一处框定 token：`[</?]` 可选前缀 ＋ 两竖线 ＋ 词 ＋ 两竖线。 */
+const frameTok = (word = "DSML", prefix = "") => `${prefix}${FRAME_WRAP}${word}${FRAME_WRAP}`;
+/** 生产匹配式的**唯一**事实源（`__testing.framingTokenPattern`）——判据不自己抄一份。 */
+const frameHit = (text) => (String(text ?? "").match(__testing.framingTokenPattern()) ?? []).length;
+/** 「干净」＝该串里零处包裹结构。 */
+const frameClean = (text) => frameHit(text) === 0;
+/** 「其余字节保留」的两个探针词 —— 它们写在**两处包裹之外**（消毒只吃包裹本身 ⇒ 输出里逐字相邻在场）。 */
+const FRAME_PROBE_A = "标记";
+const FRAME_PROBE_B = "参数";
+/**
+ * 一次带毒的确定性载荷：**两处真命中** —— `</` 前缀那一种（§2.2 实测形态）＋ 无前缀的**裸包裹**
+ * （§2.3 那 40 例的形态，U11 点名要的那一种）。两处的**词不同**（`DSML` / `parameter`），于是
+ * 「两处都替、各带编号」由同一条夹具覆盖；两个探针词留在两处包裹之外，供「其余字节逐字保留」用。
+ *
+ * ★ 本轮更正一（父侧 2026-10-11 逐条诊断的第 1/3/5/9 条红的**共同根因**）：上一轮（分歧修复轮 ④）
+ *   把第二处的词从 `parameter` 换成了 `参数` —— 而匹配式的词位是 `[A-Za-z_]{0,20}`，**中文词根本不是
+ *   命中**（`[BARS]参数[BARS]` ＝ `FRAME_WRAP ＋「参数」＋ FRAME_WRAP` 里两对竖线之间没有 ASCII 词，
+ *   整段匹配失败）。于是这条夹具实际只有 **1 处**命中：按 2 处写的 U11② / U3① / U3③ 以及
+ *   `frameHit(...) === 2` 的 U8② **全部恒红**；
+ *   而残留的那一段（同样不是命中）又让「零命中」那一族看不见这个缺陷。
+ *   ⇒ 第二处的词回到 ASCII（`parameter`）；探针词仍取**包裹之外**的词，见下面两个常量。
+ *
+ * ★ 本轮更正二（探针词的位置）：旧写法把探针夹在 `<` 与 token 之间（`<标` ＋ token ＋ `记`）——
+ *   替换之后「标」「记」两字被**占位符隔开**，`includes("标记")` 结构性地**恒假**（U3② / U10② 即红）。
+ *   ⇒ 探针词改为**整词坐在包裹之外**（`标记` / `参数`），消毒一个字节都不动它们。
+ *
+ * ★ 与「看得见占位符」那一族断言的关系：命中 2 处时实现产的是 `[framing-token-removed 1/2]` 与
+ *   `[framing-token-removed 2/2]`，而 `FRAME_PH`（**带**收尾方括号的那一串）**不是**它们的前缀
+ *   ⇒ 多命中的输出上必须用 `framePh(i, n)` / `framePhSeen`（本块顶部那两个同源 helper），
+ *   **不能**用 `includes(FRAME_PH)`（上一轮那句「真前缀」的结论是错的，见 helper 的注释）。
+ */
+const FRAME_POISON2 = `${frameTok("DSML", "</")}${FRAME_PROBE_A}${frameTok("parameter")}${FRAME_PROBE_B}`;
+
+const batchENow = 1_700_000_000_000;
+const BE_TEAM = "be-team";
+const BE_WS = path.join(TEST_ROOT, "batch-e-ws");
+rmSync(BE_WS, { recursive: true, force: true });
+
+// --- U5 §6.5 v1.1：处数**由文本自带**（1 处 = 逐字占位符；N>1 处 = 带编号） -------------
+const u5One = __testing.stripFramingTokens(`A${frameTok("DSML", "</")}B`);
+const u5Two = __testing.stripFramingTokens(`A${frameTok("DSML", "</")}B${frameTok()}C`);
+const u5Three = __testing.stripFramingTokens(`${frameTok("a")}-${frameTok("bc")}-${frameTok("d")}`);
+check("批 E · U5 ① 1 处 ⇒ 逐字占位符（用户 2026-10-11 拍板的那一串，不带编号）＋ removed=1",
+	u5One.removed === 1 && u5One.text === `A${framePh(1, 1)}B`);
+check("批 E · U5 ② N>1 处 ⇒ 占位符**带编号** `… 1/N`、`… 2/N`（编号即「不静默」的全部机制：处数写进文本本身，不改回执、不加累加器、不新增 import）",
+	u5Two.removed === 2 && u5Two.text === `A${framePh(1, 2)}B${framePh(2, 2)}C`);
+check("批 E · U5 ③ 三处同样逐处编号，且**总处数**取自独立扫描（不是「替换到第几个」）",
+	u5Three.removed === 3 && u5Three.text.includes(framePh(1, 3)) && u5Three.text.includes(framePh(2, 3)) && u5Three.text.includes(framePh(3, 3)));
+// ★ U5 的第 ⑤ 条（「不静默在**真实回执**上成立」）落在下面 U1 那一段 —— 它读的是
+//   `team_link_team_append` 真跑出来的回执文本，只有在那一批夹具跑完之后才存在。
+
+// --- U6 零污染对照：含 token 的夹具去掉 token 之后，输出与**不含** token 的输入逐字节相同 ---
+// ★ 分歧修复轮（🟡#7 的同族缺陷）：这条夹具**必须真干净**（零命中）。旧写法把「20 词包裹」
+//   也放进同一条串里，而那**正是一处命中**（`{0,20}` 的上界含 20）⇒ `removed` 是 1 不是 0，
+//   U6① 的 `removed===0` 与 U8③ 的 `frameHit===0` **两条同时恒假**。
+//   ⇒ 拆成两个夹具：「真干净」（本条，零命中）与「刚好 20 词」（下一条，恰好 1 处命中）；
+//   U6② 的上界两半（含 20 / 不含 21）改由 `u6Boundary` 承载，两条判据各归其位。
+const u6Clean = "零污染的正文：ASCII 竖线 a|b、半截包裹 " + FRAME_BAR + FRAME_BAR + "半截、单枚 " + FRAME_BAR + "，都不该动。";
+/** `[A-Za-z_]{0,20}` 的**上界**两半：20 词恰好 1 处命中、21 词 0 处（两个都在同一条串里，谁也不遮蔽谁）。 */
+const u6Boundary = "20 词 " + FRAME_WRAP + "A".repeat(20) + FRAME_WRAP + " 与 21 词 " + FRAME_WRAP + "A".repeat(21) + FRAME_WRAP + " 都不该动。";
+check("批 E · U6 ① 零污染对照：干净文本 ⇒ `removed=0` 且 `text` **逐字节等于**入参（`===`，不是「看起来一样」）",
+	(() => {
+		const result = __testing.stripFramingTokens(u6Clean);
+		return result.removed === 0 && result.text === u6Clean;
+	})());
+check("批 E · U6 ② 边界同批钉住（设计档 §9）：ASCII 竖线 / 半截包裹（只有一侧两竖线）/ 单枚全角竖线 **都不命中**；`[A-Za-z_]{0,20}` 的上界**含 20 不含 21**",
+	frameHit("a||b and a\u007Cb and " + FRAME_BAR + "x") === 0
+		&& frameHit(FRAME_WRAP + "半截") === 0
+		&& frameHit(u6Boundary) === 1
+		&& frameHit(u6Boundary.split(" 与 ")[1]) === 0);
+check("批 E · U6 ③ 非字符串（undefined / null / 数字 / 对象）原样返回、`removed=0`、**不抛**（§9 空集与畸形输入）",
+	(() => {
+		for (const value of [undefined, null, 0, 123, {}, []]) {
+			const result = __testing.stripFramingTokens(value);
+			if (result.removed !== 0 || result.text !== value) return false;
+		}
+		return true;
+	})());
+check("批 E · U6 ④ 空串原样（不因 `\"\"` 走进 `replace` 那条路）",
+	__testing.stripFramingTokens("").removed === 0 && __testing.stripFramingTokens("").text === "");
+
+// --- U7 fail-open：消毒自己坏了 ⇒ 工具照常成功、返回原文本 ------------------------------
+const u7Thrown = [];
+const u7Env = setup({ sessions: [], useSettings: true, selfCwd: BE_WS });
+try {
+	__testing.setStripImpl(() => { throw new Error("batch-E U7 桩：消毒内部必抛"); });
+	const u7Out = await u7Env.tool("team_link_roster").execute({ action: "get", team: "u7-team" }, execFor(u7Env.senderAgent));
+	u7Thrown.push(String(u7Out));
+} catch (error) {
+	u7Thrown.push(`【抛出：${String(error?.message ?? error)}】`);
+} finally {
+	__testing.setStripImpl(undefined);
+}
+check("批 E · U7 ① fail-open：消毒内部**必抛**时工具调用照常成功（不抛、不失败），返回的是**原文本**（NFR-3：消毒永远不能让任何工具调用失败）",
+	u7Thrown.length === 1 && !u7Thrown[0].startsWith("【抛出") && u7Thrown[0].includes("不在注册表中") && u7Thrown[0].includes("u7-team"));
+check("批 E · U7 ② 同一发毒输入下，消毒缝已还原（`stripImplIsDefault`）——上一条的绿不是靠一个还坏着的缝",
+	__testing.stripImplIsDefault() === true);
+
+// --- U11 裸包裹也命中（§2.3 那 40 例的形态：**没有** `<` 前缀） ------------------------
+check("批 E · U11 ① 无前缀的**裸包裹**被替换（正则写成 `</?` 这类必需前缀 ⇒ 本条红）；带 `<`/`</` 前缀的另一种形态**同批**也要中（两半都在，谁也不遮蔽谁）",
+	(() => {
+		const bare = __testing.stripFramingTokens(`前${frameTok()}后`);
+		const angle = __testing.stripFramingTokens(`前${frameTok("DSML", "</")}后`);
+		const open = __testing.stripFramingTokens(`前${frameTok("DSML", "<")}后`);
+		return bare.removed === 1 && bare.text === `前${framePh(1, 1)}后`
+			&& angle.removed === 1 && angle.text === `前${framePh(1, 1)}后`
+			&& open.removed === 1 && open.text === `前${framePh(1, 1)}后`;
+	})());
+check("批 E · U11 ② 两处一次替换（一处裸包裹 ＋ 一处前缀形态）⇒ 两处都替、各带编号 —— 同一条夹具同时覆盖 U11 与 U5 的 N>1 半边",
+	(() => {
+		const result = __testing.stripFramingTokens(FRAME_POISON2);
+		return result.removed === 2
+			&& result.text.includes(framePh(1, 2))
+			&& result.text.includes(framePh(2, 2))
+			&& frameClean(result.text);
+	})());
+
+// --- U2 十个工具全覆盖 ---------------------------------------------------------------
+// 结构性半边：本插件**全部 10 个工具**都经 `textOutput().render`（或它的扩展 `sendOutput()`）
+// 出模型可见文本，而 `render` 就是消毒挂在 `wellFormed` 上的那一处 ⇒ 「一个都没漏」是
+// **结构性**的，不是逐处记得。判据对每个工具**逐个**喂一个带毒返回值（模型可见文本不可能是
+// 调用方以外的字节 —— 这一面正是「返回值里出现什么都必须干净」），断言渲染出的每一个文本块都干净。
+const BE_TOOLS = ["team_link_recover", "team_link_list_sessions", "team_link_status", "team_link_export", "team_link_send", "team_link_watch", "team_link_roster", "team_link_team_read", "team_link_team_append", "team_link_rotate"];
+const u2BeEnv = setup({ sessions: [], useSettings: true, selfCwd: BE_WS });
+const u2Rows = BE_TOOLS.map((toolName) => {
+	const tool = u2BeEnv.tool(toolName);
+	if (tool === undefined || typeof tool.output?.render !== "function") return { toolName, present: false, clean: false };
+	// ★ 「未注册 / 没有 render 面」一律折成 `present: false` 的**红**，不抛：本套件的顶层 await
+	//   没有 try，一次抛就把这一块**剩下的判据全部跳过**（旧写法在缺 `__testing.watchdogLines`
+	//   时正是这样整块崩掉）。判据要红得看得见，不要红成崩。
+	const blocks = tool.output.render({}, FRAME_POISON2);
+	const joined = (Array.isArray(blocks) ? blocks : []).map((block) => String(block?.text ?? "")).join("\n");
+	// ★ 「看得见占位符」用**同源 helper**：本夹具是 2 处命中 ⇒ 实产带编号的 `[… 1/2]` / `[… 2/2]`，
+	//   而 `FRAME_PH` 带收尾方括号、**不是**它们的前缀 ⇒ 旧写法 `joined.includes(FRAME_PH)` 恒假。
+	return { toolName, present: true, clean: frameClean(joined) && joined.includes(framePh(1, 2)) && joined.includes(framePh(2, 2)) };
+});
+check(`批 E · U2 ① 十个工具**逐个**喂带毒返回值 ⇒ 每一个的 `+"`output.render`"+` 输出都零命中（呈现实测：${u2Rows.filter((row) => row.clean).length}/10）——「一个都没漏」是结构性的：10 个工具全经同一个收口点`,
+	u2Rows.length === 10 && u2Rows.every((row) => row.present && row.clean));
+
+// --- U6 ⑤ 变异自证 ＋ U7 前置锚（★ 分歧修复轮：挪到「手边有生产渲染路径」的位置） -----------
+// 红相口径②要求「凡标了红相的判据都在断言里同批做一次变异自证」。**变异的可观测面是
+// `sanitizeFraming` 那一层**（注入缝 `stripImpl` 只被它读，`lib/index.js:586`），而
+// `__testing.stripFramingTokens` 是**真函数本身**（缝的默认实现）⇒ 直调它**永远看不到变异**
+// （旧写法正是直调 ⇒ 这条自证是空的）。修法：把这条自证（与紧随其后的 U7 前置锚）挪到 U2 的
+// 夹具环境之后，改用**工具渲染路径**（工具 output.render → wellFormed → sanitizeFraming）——
+// 那是生产的、真的被观测的那一层。
+//
+// ★ 本轮更正（父侧 2026-10-11 的第 2 条红）：上一版的桩是 `{ text: "[SCRUBBED]", removed: 0 }`，
+//   而 `sanitizeFraming`（§6.2b）把 `removed <= 0` 判为**不可信读数**、一律折成「原样返回」⇒
+//   这个桩**观测不到**（`mutated === u6Clean`，自证恒假）。⇒ 桩改成**自称有 1 处替换**
+//   （`removed: 1`）：这才是「冒充干净文本」这个红相的真实形状 —— 它骗的是**读数**，
+//   于是生产渲染路径真的会采用它，自证因此可观测。同批补第二半：带毒输入在该桩下也变成那个常量
+//   ⇒ U2/U4 那一族的 `framePhSeen` 半边**确实能咬**（这正是本批「不静默」判据的敏感性来源）。
+check("批 E · U6 ⑤ **变异自证**（红相口径②）：把消毒缝换成「冒充干净文本」且**自称有 1 处替换**的常量桩 ⇒ 生产渲染路径**立刻**被观测到（干净输入不再逐字节原样、带毒输入的占位符消失）——证明这套对照真的能咬，不是恒真（走**工具渲染路径**，而非绕开缝直调 `stripFramingTokens`）",
+	(() => {
+		const before = __testing.stripImplIsDefault();
+		const renderOf = (value) => {
+			const roster = u2BeEnv.tool("team_link_roster");
+			if (roster === undefined || typeof roster.output?.render !== "function") return "【render 面缺席】";
+			return String((roster.output.render({}, value) ?? [])[0]?.text ?? "");
+		};
+		const baselineClean = renderOf(u6Clean);
+		const baselinePoison = renderOf(FRAME_POISON2);
+		try {
+			__testing.setStripImpl(() => ({ text: "[SCRUBBED]", removed: 1 }));
+			const mutatedClean = renderOf(u6Clean);
+			const mutatedPoison = renderOf(FRAME_POISON2);
+			return before === true
+				&& baselineClean === u6Clean
+				&& frameClean(baselinePoison) && framePhSeen(baselinePoison)
+				&& mutatedClean === "[SCRUBBED]"
+				&& mutatedPoison === "[SCRUBBED]"
+				&& __testing.stripImplIsDefault() === false;
+		} finally {
+			__testing.setStripImpl(undefined);
+		}
+	})());
+check("批 E · U7 前置锚：跑完上面那次变异注入，消毒缝**已还原**成真实现（后续判据不许在一片坏掉的消毒上跑出假绿）",
+	__testing.stripImplIsDefault() === true);
+
+const u2ExecOut = await u2BeEnv.tool("team_link_roster").execute({ action: "get", team: FRAME_POISON2 }, execFor(u2BeEnv.senderAgent));
+check("批 E · U2 ② 端到端覆盖 `team_link_roster`（真 execute 路径：带毒 team 参数进拒绝文案 ⇒ 返回值干净，且两处占位符各带编号）",
+	frameClean(u2ExecOut) && String(u2ExecOut).includes(framePh(1, 2)) && String(u2ExecOut).includes(framePh(2, 2)));
+
+// --- U3 投递正文（FR-3） -------------------------------------------------------------
+const u3BeEnv = setup({ sessions: [{ header: { id: "session-target", createdAt: 1000, cwd: CWD }, live: true, persisted: true }], useSettings: true, askScript: ["发送", "接收"] });
+// ★ 同一份**实参对象**：`output.presentationMeta` 的键是注册表复用的那个冻结实参
+//   （`SEND_CARD_BY_ARGS` 是 WeakMap，按**对象身份**取），所以这里必须把同一个 `u3Args`
+//   交给 `execute` 与 `presentationMeta` —— 另造一个 `{}` 只会得到空卡片（U13 的既有夹具
+//   就是这么写的，见 `receipt()`）。
+const u3Args = { targetSessionId: "session-target", message: FRAME_POISON2 };
+await u3BeEnv.tool("team_link_send").execute(u3Args, execFor(u3BeEnv.senderAgent));
+const u3Delivered = at(u3BeEnv.targetCalls.followedup, 0, undefined);
+const u3Banner = u3Delivered === undefined ? "" : String(u3Delivered.content?.[0]?.text ?? "");
+check("批 E · U3 ① 投递 banner（写进**目标会话日志**的那一份）零命中，且两处都换成占位符（带编号 —— 处数由文本自证）",
+	u3Banner !== "" && frameClean(u3Banner) && u3Banner.includes(framePh(1, 2)) && u3Banner.includes(framePh(2, 2)));
+check("批 E · U3 ② banner **保留了正文的其余字节**（消毒只动那一类字符，NFR-2 的投递面口径；两个探针词整词坐在两处包裹**之外** ⇒ 替换不会把它们隔开）",
+	u3Banner.includes(FRAME_PROBE_A) && u3Banner.includes(FRAME_PROBE_B) && u3Banner.includes("📨 [跨会话消息"));
+check("批 E · U3 ③ 同一发的**结构化卡片**（`presentationMeta`，随 tool/result 入库、也是模型可见面）零命中，且两处占位符各带编号",
+	(() => {
+		const card = u3BeEnv.tool("team_link_send").output.presentationMeta(u3Args, "回执文本") ?? {};
+		const blob = JSON.stringify(card);
+		return blob.length > 2 && frameClean(blob) && blob.includes(framePh(1, 2)) && blob.includes(framePh(2, 2));
+	})());
+check("批 E · U3 ④ 发送方**确认框正文**（同一份正文的第三个可见面）零命中，且两处占位符各带编号",
+	(() => {
+		const question = String(at(u3BeEnv.uq.requests, 0, { questions: [] }).questions?.[0]?.question ?? "");
+		return question !== "" && frameClean(question) && question.includes(framePh(1, 2)) && question.includes(framePh(2, 2));
+	})());
+
+// --- U4 六个渲染面（FR-4） -----------------------------------------------------------
+const u4CtxPoison = `投影读取抛错：${FRAME_POISON2}`;
+const u4ResourceLine = __testing.renderResourceLine({ get: () => ({ stateOf() { throw new Error(u4CtxPoison); } }) }, { session: { header: { id: "s" } } });
+const u4ResourceContext = __testing.renderResourceContext({ get: () => ({ stateOf() { throw new Error(u4CtxPoison); } }) }, { session: { header: { id: "s" } } });
+const u4RoleCoord = __testing.renderRoleText({ team: FRAME_POISON2, sessionId: "session-self", role: "coordinator", kind: "coordinator" });
+const u4RoleWorker = __testing.renderRoleText({ team: FRAME_POISON2, sessionId: "session-self", role: "worker-a", kind: "worker" });
+const u4Tick = __testing.tickMessage("session-self", FRAME_POISON2, { verdict: "silent-idle", silenceMs: 60_000 }, batchENow).content[0].text;
+const u4TickAuto = __testing.tickMessage("session-self", FRAME_POISON2, { verdict: "goal-disarmed", silenceMs: 60_000 }, batchENow, __testing.WATCHDOG_ORIGIN_AUTO).content[0].text;
+const u4Digest = __testing.renderWatchdogDigest({ id: "wd-e", team: FRAME_POISON2, watcherSession: "session-self", targets: [] }, { running: [], justFinished: [], idleAwait: [{ target: FRAME_POISON2, signal: { agent: "idle", verdict: "ok", silenceMs: 60_000, lastAssistantAt: 1, lastInboundAt: null, goal: null }, previous: undefined }], alarm: [] }, batchENow);
+const u4WatchEnv = setup({ sessions: [], useSettings: true, selfCwd: BE_WS, extraAgents: [{ id: "session-e-watcher", status: "idle", cwd: BE_WS }] });
+const u4WatchLines = __testing.watchdogLines(u4WatchEnv.ctx, [{ id: "wd-e", team: FRAME_POISON2, watcherSession: "session-e-watcher", targets: [FRAME_POISON2], silentMinutes: 10, intervalMinutes: 5, expiresAt: batchENow + 3_600_000, origin: "manual" }]);
+const u4Faces = [
+	["renderResourceLine", u4ResourceLine],
+	["renderResourceContext", u4ResourceContext],
+	["renderRoleText（协调者支）", u4RoleCoord],
+	["renderRoleText（worker 支）", u4RoleWorker],
+	["tickMessage（手工档）", u4Tick],
+	["tickMessage（goal-disarmed 档）", u4TickAuto],
+	["renderWatchdogDigest", u4Digest],
+	["watchdogLines", u4WatchLines.join("\n")],
+];
+// ★ 本轮更正（父侧 2026-10-11 的第 6 条红 —— 三张脏面）：判据的**「看得见占位符」那一半走词干**
+//   （`framePhSeen`），不是 `includes(FRAME_PH)`。原因不是实现缺消毒（六个出口**各自**都过了
+//   `wellFormed` → `sanitizeFraming`，见实现注释），而是**命中处数**：`renderRoleText` 的 worker 支
+//   把 team 插值**两次**（`你是团队 X … team:X/…`）、`renderWatchdogDigest` / `watchdogLines` 各把
+//   带毒值插值**两次**（team ＋ target）⇒ 每处都是**多命中** ⇒ 实产带编号形态，
+//   而 `FRAME_PH` 带收尾方括号、**不是**它们的前缀 ⇒ 旧谓词在那三面上**恒假**（脏面名单就是这么来的）。
+const u4Dirty = u4Faces.filter(([, text]) => !frameClean(text) || !framePhSeen(text)).map(([name]) => name);
+// ★ 阶段 2（静态自检）的半边：把**消毒后逐面的命中数**打进断言消息里 —— 宿主跑一次就能把
+//   「哪个面还剩几处」和静态推导（2 / 2 / 2 / 4 / 2 / 2 / 4 / 4）对账，不必再回来翻源码。
+const u4HitCounts = u4Faces.map(([name, text]) => `${name}=${frameHit(text)}`).join(" ");
+check(`批 E · U4 六个渲染函数（含两支实现）各带毒输入 ⇒ 输出零命中**且**看得见占位符（呈现实测：${u4Faces.length - u4Dirty.length}/${u4Faces.length} 面干净；脏面：${u4Dirty.join("、") || "（无）"}；消毒后逐面命中数：${u4HitCounts}）`,
+	u4Dirty.length === 0
+		// ★ 编号机制在**真实渲染面**上另钉一次（不等同于「词干在场」）：tickMessage 把目标插值
+		//   **恰一次** ⇒ 这条夹具在它里面恰好 2 处命中 ⇒ 两处占位符必须逐字带编号。
+		&& u4Tick.includes(framePh(1, 2)) && u4Tick.includes(framePh(2, 2))
+		&& u4TickAuto.includes(framePh(1, 2)) && u4TickAuto.includes(framePh(2, 2)));
+check("批 E · U4 ② `watchdogLines` 的返回**形状不变**（仍是 string[]，逐行替而不是拼接后替 —— 调用方那两处 `lines.push(...)` 逐字未动）",
+	Array.isArray(u4WatchLines) && u4WatchLines.length === 1 && typeof u4WatchLines[0] === "string");
+
+// --- U1 黑板**盘上**零 token（FR-5）＋ U5 的「干净一行逐字不变」控制 -------------------
+const u1BeEnv = setup({ sessions: [], useSettings: true, selfCwd: BE_WS, settingsSeed: { "team-link": { teams: [teamRow({ name: BE_TEAM, workspace: BE_WS })] } } });
+const u1Paths = { decisions: path.join(BE_WS, "team", BE_TEAM, "decisions.md"), tasks: path.join(BE_WS, "team", BE_TEAM, "tasks.md"), discipline: path.join(BE_WS, "team", BE_TEAM, "discipline.md") };
+const u1Exec = () => execFor(u1BeEnv.senderAgent);
+const u1Append = (args) => u1BeEnv.tool("team_link_team_append").execute(args, u1Exec());
+const u1ControlLine = "控制行：ASCII 竖线 a|b 与单枚 " + FRAME_BAR + " 都原样";
+// ★ U5⑥ 的两条读数常量（**同源**：干净正文由 `framePh` 拼出，不手打占位符）—— 见下面 U5⑥ 的更正说明。
+const u1DecisionRaw = `带毒的裁决 ${frameTok("DSML", "</")} 收尾`;
+const u1DecisionCleanText = `带毒的裁决 ${framePh(1, 1)} 收尾`;
+const u1DecisionEcho = await u1Append({ team: BE_TEAM, file: "decisions", line: u1DecisionRaw });
+const u1ControlOut = await u1Append({ team: BE_TEAM, file: "decisions", line: u1ControlLine });
+const u1PlanOut = await u1Append({ team: BE_TEAM, file: "tasks", kind: "plan", line: `带毒的派活 ${frameTok("parameter")}` });
+const u1Read = await u1BeEnv.tool("team_link_team_read").execute({ team: BE_TEAM }, u1Exec());
+const u1DisciplineHash = (() => {
+	// ★ 分歧修复轮（审计 ⑤）：探针按**实现的真实行形**取。实现是**两行**（`lib/index.js:6039`/`:6040`）：
+	//   段头 `--- discipline.md（整文件替换，带 baseHash 乐观锁）---`（有 discipline.md、**无** `baseHash=`），
+	//   紧接一行 `baseHash=<hash>（乐观锁：整文件替换必须携带此值）`（反之）。旧探针要求**同一行**同时含
+	//   `baseHash=` 与 `discipline.md` ⇒ 取到空串 ⇒ 写入被乐观锁拒绝、discipline.md 根本不落盘 ⇒
+	//   随后那句 `readFile(discipline)` 抛 ENOENT，把整块判据二次崩掉（顶层 await 无 try）。
+	//   取法：定位**段头**（它点名 discipline.md），再取其**下一行**里的 hash。
+	const lines = String(u1Read).split("\n");
+	const head = lines.findIndex((row) => row.includes("discipline.md") && row.startsWith("---"));
+	const row = head === -1 ? undefined : lines[head + 1] ?? "";
+	return (row.match(/baseHash=([0-9a-f]+)/u) ?? [])[1] ?? "";
+})();
+const u1DisciplineOut = await u1Append({ team: BE_TEAM, file: "discipline", baseHash: u1DisciplineHash, line: `条款一：${frameTok("DSML")}\n条款二：干净的一行` });
+const u1DecisionsDisk = await readFile(u1Paths.decisions, "utf8");
+const u1TasksDisk = await readFile(u1Paths.tasks, "utf8");
+const u1DisciplineDisk = await readFile(u1Paths.discipline, "utf8");
+check("批 E · U1 ① **盘上零 token**：decisions.md 逐字读回 ⇒ 零命中，且占位符在盘上（处数由文本自证）—— 夹具的那一处是**裸包裹**形态（U11 同款）",
+	frameClean(u1DecisionsDisk) && u1DecisionsDisk.includes(framePh(1, 1)) && u1DecisionsDisk.includes("带毒的裁决"));
+check("批 E · U1 ② tasks.md 逐字读回 ⇒ 零命中（tasks 的 kind=plan 分配与行格式一字未动）",
+	frameClean(u1TasksDisk) && u1TasksDisk.includes(framePh(1, 1)) && u1TasksDisk.includes("| plan | t-1 |"));
+check("批 E · U1 ③ discipline.md 逐字读回 ⇒ 零命中，且**写下去的那一份**与回执里的新 baseHash 指的是同一份内容",
+	frameClean(u1DisciplineDisk) && u1DisciplineDisk.includes(framePh(1, 1)) && u1DisciplineDisk.includes("条款二：干净的一行")
+		&& String(u1DisciplineOut).includes(`baseHash ${u1DisciplineHash} → ${hashOf(u1DisciplineDisk)}`));
+check("批 E · U1 ④ 三条写面都照常成功（消毒不改既有校验语义：长度上限 / kind / task / 乐观锁逐字不动）—— tasks.md 在本夹具里是**新建**的（本夹具此前只写过 decisions）⇒ seq 每文件独立、本条**必须是 `#1`**（与 `:2543` 的既有断言同口径）",
+	String(u1DecisionEcho).includes("已追加 decisions #1") && String(u1PlanOut).includes("已追加 tasks #1")
+		&& String(u1DisciplineOut).includes("已替换 discipline.md"));
+check("批 E · U5 ⑤ 「无替换 ⇒ 逐字不变」在**写面**上成立：一行干净正文（含 ASCII 竖线 `|` 与单枚全角竖线）落盘后**逐字**就是它自己",
+	u1DecisionsDisk.includes(`| session-self | ${u1ControlLine}\n`));
+// ★ 本轮更正（父侧 2026-10-11 的第 7 条红）：旧断言的**前提不成立** —— `team_link_team_append` 的
+//   回执**从不回显正文**（decisions 分支给的是 `已追加 decisions #N（author=…）→ <路径>` ＋ 行格式
+//   说明 ＋ `单行上限 500 字符（本次 N 字符，§4.1）。`），所以「回执里看得见占位符」结构性地不可能
+//   为真（与消毒无关）。本轮把它改成**真能观测、且不是恒真**的两半：
+//     ① 回执零命中 —— 回执本身是模型可见文本，它也不许带毒；
+//     ② 回执里的 `本次 N 字符` 取自**消毒后**的正文（实现按 `[...clean.text].length` 计）——
+//        它必须等于干净正文的码点数、且**大于**原文的码点数（占位符比原 token 长）。
+//        「按原文计数」就是这条的红相：那样 ② 立刻红。处数本身由文本自证（§6.5 v1.1：回执不另加读数行）。
+check("批 E · U5 ⑥ **不静默**在**真实回执**上成立（本轮更正口径：回执不回显正文 ⇒ 改读它自己给出的字符数）：回执零命中，且 `本次 N 字符` 取自**消毒后**的正文 —— 等于干净正文的码点数、且**大于**原文（按原文计数 ⇒ 本条红）",
+	(() => {
+		const echoed = String(u1DecisionEcho);
+		const cleanChars = [...u1DecisionCleanText].length;
+		return echoed.includes("已追加 decisions #1") && frameClean(echoed)
+			&& echoed.includes(`本次 ${cleanChars} 字符`)
+			&& cleanChars > [...u1DecisionRaw].length;
+	})());
+check("批 E · U1 ⑤ 读面（`team_read`）把盘上那一行带回来时同样零命中（U1 与 U2 在这一条上会合）",
+	frameClean(u1Read) && framePhSeen(u1Read));
+
+// --- U1 ⑥–⑨ 交付评审 #2：长度上界必须在**消毒后**复检（decisions / tasks 两分支） ----------
+// 评审原文（🟡）：decisions 分支的注释声称「长度上限按消毒后判」，而代码只在 `readBlackboardLine`
+// 里对**原文**判一次 ⇒ 一条「原文 ≤500、含 1 处 token」的行落盘可达 513 字符，回执还会打出
+// 「单行上限 500 字符（本次 513 字符）」这种自相矛盾的读数；而 discipline 分支**有**消毒后复检
+// （`lib/index.js` 的 `cleanContent` / `[...contentLines[tooLong]].length`）⇒ 两分支口径不一致。
+// 本轮把 decisions / tasks 都改成「原文判一次（`readBlackboardLine`）＋ 消毒后复检一次」，三处同口径。
+//
+// 红相：删掉 `lib/index.js` 里那两处 `cleanLength` 复检 ⇒ ⑦⑧ 立刻红（回执不再以「写入失败」开头、
+//   盘上多出一行、回执里的 `本次 N 字符` 还会大于上限）；把复检写成 `>=`（或把上限抄错一位）⇒ ⑨ 红。
+// ★ 上限**不抄一份进测试**：由导出的 `readBlackboardLine` 二分读出来（单一事实源），
+//   否则「夹具恰在上限上」这件事就锁在测试自己的复制品上（AGENTS.md §一.1）。
+const beLineLimit = (() => {
+	let lo = 1;
+	let hi = 5000;
+	while (lo < hi) {
+		const mid = Math.ceil((lo + hi) / 2);
+		if (__testing.readBlackboardLine("x".repeat(mid), "探针").error === undefined) lo = mid;
+		else hi = mid - 1;
+	}
+	return lo;
+})();
+const beTok = frameTok("DSML", "</");
+/** 原文**恰**在上限上、且只含 1 处包裹结构的那一行。 */
+const beRawAtLimit = "败".repeat(beLineLimit - [...beTok].length) + beTok;
+/** 同一行的**消毒后**那一份（占位符比原 token 长 ⇒ 超限）。 */
+const beCleanAtLimit = "败".repeat(beLineLimit - [...beTok].length) + framePh(1, 1);
+check("批 E · U1 ⑥ 前置自证（★ 负相：夹具真的推得动）: 原文码点数**恰**等于 §4.1 上限（`readBlackboardLine` 放行）且**只含 1 处**包裹结构 ⇒ 消毒后码点数**大于**上限（且二分读到的上限没有撞到搜索上界）—— 下面三条判据因此不是空转/恒真",
+	beLineLimit > 0 && beLineLimit < 5000
+		&& [...beRawAtLimit].length === beLineLimit && frameHit(beRawAtLimit) === 1
+		&& __testing.readBlackboardLine(beRawAtLimit, "探针").error === undefined
+		&& [...beCleanAtLimit].length > beLineLimit);
+const beDecisionsBefore = await readFile(u1Paths.decisions, "utf8");
+const beTasksBefore = await readFile(u1Paths.tasks, "utf8");
+const beOverLongDecisions = await u1Append({ team: BE_TEAM, file: "decisions", line: beRawAtLimit });
+const beDecisionsAfter = await readFile(u1Paths.decisions, "utf8");
+check("批 E · U1 ⑦ 【评审 #2 红相】**原文 ≤500、消毒后 >500** 的 decisions 正文**被拒**，且**盘上什么都没写**；回执点名「消毒后 N 字符」而不是打出「上限 500（本次 513）」那种自相矛盾的读数",
+	String(beOverLongDecisions).includes("写入失败") && String(beOverLongDecisions).includes(`超过单行上限 ${beLineLimit}`)
+		&& String(beOverLongDecisions).includes(`消毒后 ${[...beCleanAtLimit].length} 字符`)
+		&& !String(beOverLongDecisions).includes("已追加")
+		&& beDecisionsAfter === beDecisionsBefore);
+const beOverLongTasks = await u1Append({ team: BE_TEAM, file: "tasks", kind: "plan", line: beRawAtLimit });
+const beTasksAfter = await readFile(u1Paths.tasks, "utf8");
+check("批 E · U1 ⑧ 同一条复检在 **tasks** 分支上成立（两个写入分支口径一致）：拒绝发生在任何写之前 ⇒ tasks.md 逐字节不变（连任务号都没被占用）",
+	String(beOverLongTasks).includes("写入失败") && String(beOverLongTasks).includes(`超过单行上限 ${beLineLimit}`)
+		&& String(beOverLongTasks).includes(`消毒后 ${[...beCleanAtLimit].length} 字符`)
+		&& beTasksAfter === beTasksBefore);
+const beAtLimitOut = await u1Append({ team: BE_TEAM, file: "decisions", line: "边".repeat(beLineLimit) });
+const beAtLimitDisk = await readFile(u1Paths.decisions, "utf8");
+check("批 E · U1 ⑨ 对照（★ 复检不误伤干净行）：干净且**恰好**等于上限的正文照常接受（上限是「>」不是「≥」），落盘逐字是它自己，回执的 `本次 N 字符` 就是上限本身",
+	String(beAtLimitOut).includes("已追加 decisions") && String(beAtLimitOut).includes(`本次 ${beLineLimit} 字符`)
+		&& beAtLimitDisk.startsWith(beDecisionsAfter)
+		&& beAtLimitDisk.includes(`| session-self | ${"边".repeat(beLineLimit)}\n`));
+
+// --- U10 deep-link 快照出口（FR-7） ---------------------------------------------------
+const u10BeEnv = setup({ contextText: FRAME_POISON2 });
+const u10Decision = await ctx_waterfall(u10BeEnv.ctx, { messages: [{ id: "be-link", role: "user", source: { kind: "user" }, content: [{ type: "text", text: "参考 dsh://session/session-abc123 继续" }] }], turn: 40, step: 1 });
+const u10Snapshot = at(u10Decision.messages, 0, {}).content?.[0]?.text ?? "";
+check("批 E · U10 deep-link 注入的**快照文本**零命中（本插件把用户粘贴的会话内容搬进收件人上下文 —— 源会话被污染时，这条出口会把 token 搬运过来）",
+	u10Decision.messages.length === 2 && frameClean(u10Snapshot) && u10Snapshot.includes(framePh(1, 2)) && u10Snapshot.includes(framePh(2, 2)));
+check("批 E · U10 ② 快照的其余字节逐字保留（消毒只动那一类字符）—— 两个探针词（`标记` / `参数`）整词坐在两处包裹**之外**，替换不会把它们隔开（旧写法把探针夹在 `<` 与 token 之间 ⇒ 恒假）",
+	u10Snapshot.includes(FRAME_PROBE_A) && u10Snapshot.includes(FRAME_PROBE_B));
+
+// --- U8 静态零残留（本套件半边：源码与套件自己；文档与取证目录由交付报告贴扫描命令） -----
+const beFiles = [["lib/index.js", hostSource], ["host-half.test.mjs", await readFile(fileURLToPath(import.meta.url), "utf8")]];
+const beHits = beFiles.map(([name, text]) => [name, frameHit(text)]).filter(([, count]) => count > 0);
+check(`批 E · U8 ① 源码与两个套件里**零命中**（用码点拼出的匹配式逐文件扫；呈现实测：${beFiles.map(([name, count]) => `${name}=${count}`).join(" ")}）`,
+	beHits.length === 0);
+check("批 E · U8 ② **变异自证**：同一扫描器对一条**由码点拼出**的带毒样本文本报 ≥1（证明这个扫描器真的能看见，而不是恒 0）",
+	frameHit("样本 " + FRAME_POISON2) === 2);
+check("批 E · U8 ③ 扫描器本身**不是**恒真：对干净文本报 0（与 ② 同一函数、同一轮）",
+	frameHit(u6Clean) === 0);
+
+rmSync(BE_WS, { recursive: true, force: true });
+
 rmSync(escDir, { recursive: true, force: true });
 rmSync(tmpDir, { recursive: true, force: true });
 rmSync(TEAM_TMP, { recursive: true, force: true });

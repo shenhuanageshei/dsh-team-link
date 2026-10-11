@@ -69,6 +69,8 @@
 
 **宿主换代还必复核 `agent/pre-step` 事件面（2026-10-11 批 D 补立，与上面三条并列）**：批 D 起，段/上下文注册的可达性依赖 `ctx.on("agent/pre-step", …)`（本插件用它做「名册想要、但还没挂上」的自愈）。⇒ 换代复核时**静态检索宿主 app.asar 里的 `agent/pre-step`**，确认事件名与载荷形状（`{ agent, turn, step, signal }`）仍在；若宿主改名或改形状，自愈会**静默失效**（退回「重启后不自动补挂」的旧行为，不是更差），判据见 docs/verification-log.md 的批 D 各节。
 
+**本仓文本产物的零残留纪律（2026-10-11 批 E 补立，与上面四条并列）**：DeepSeek 的框定 token（全角竖线 U+FF5C 包夹的包裹结构）是**特殊 token** —— 把它**逐字**写进源码 / 测试 / 文档 / 脚本 / 工具参数，会提高「写这一动作本身」被判 `MALFORMED_RESPONSE` 的概率（2026-10-11 父侧因此自伤三次）。⇒ **构造它必须用码点**（`String.fromCharCode(0xFF5C)`），**体检/消毒工具的输出也必须遮蔽**（打印时替换成 `[BARS]`）。工具：`node .investigations/token-sanitize-2026-10-11/scripts/scrub-sources.mjs . [--write]`（默认体检、零写入）。**`--write` 的拒写口径（交付评审 #5 修复）**：同一个**代码**文件里 ≥2 处命中、或**任何 `.md` 文档 / 非代码文件**命中，一律**拒绝写入**（旧实现在同文件里插两遍 `const BAR` ⇒ 被改文件 `SyntaxError`；`.md` 则会被注进 JS 代码行）—— 拒写时退出码 1、逐处遮蔽打印请人工处理；`--selftest` 就地自检这两条（夹具只写系统临时目录，仓库零落盘）。判据：全仓用码点拼的匹配式扫描 **0 命中**（＋ `--selftest` PASS）。
+
 ## 五、网络与推送
 
 - GitHub 直连常报 Recv failure: Connection was reset；本机代理可用时按命令临时指定（**不改全局配置**）：
