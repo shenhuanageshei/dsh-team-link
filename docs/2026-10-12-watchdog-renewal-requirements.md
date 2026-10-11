@@ -32,7 +32,8 @@
 | **NF-G2** | **零新依赖**：不得新增 import（`host-half.test.mjs` 的**八模块白名单**是硬闸门） | 静态扫描 `^import` 仍 8 条 |
 | **NF-G3** | **可机械验证**：判据必须能红 —— 构造「注册临近到期」的夹具，断言续期后 `expiresAt` **前移**；另配一条负相（不临近到期时**不**动它） | 红相夹具 + 变异自证 |
 | **NF-G4** | **不做双写**：状态落点仍单写（`policy.update`），不碰 `policy.json` 的其它字段 | 盘上 diff 只动目标条目 |
-| **NF-G5** | **幂等**：续期不产生重复条目、不改 `id` / `targets` / `silentMinutes` / `intervalMinutes`，只动 `expiresAt`（必要时 `createdAt` 不动） | 续期前后的条目逐字段比对 |
+| **NF-G5** | **幂等**：续期不产生重复条目、不改 `id` / `createdAt` / `silentMinutes` / `intervalMinutes`；**`targets` 按名册重导出**（这是会诊采纳的顺带修复：成员中途入队今天永不被盯上）；只动 `expiresAt` 并写 `renewedAt` | 续期前后**逐字段**比对（`targets` **例外**：按名册重算，见 NF-G5 修订注） |
+| | | ★ **评审 🔴#1 修订**：本行原写「不改 `id` / `targets` / `silentMinutes` / `intervalMinutes`，只动 `expiresAt`」——与设计档伪代码（走 `planAutoWatchdog` 的 refresh 分支、以名册现算的 members 覆写 targets）**正面矛盾**，也与会诊裁定（纪要 §2「续期顺带重算 `targets` ✅ 采纳」）矛盾。已按裁定改准：**保留身份字段，重算 targets**。 |
 
 ## 四、明确的非目标（本批不做）
 
