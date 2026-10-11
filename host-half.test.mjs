@@ -2398,7 +2398,8 @@ const boardDir = path.join(TEAM_WS, "team", "night-shift");
 const decisionsPath = path.join(boardDir, "decisions.md");
 const disciplinePath = path.join(boardDir, "discipline.md");
 /** §9 第一批的第三个黑板文件（只追加台账）。夹具与 decisions / discipline 同构：同一
- * 个黑板目录、同一条 500 码点上限、各自独立的 seq。 */
+ * 个黑板目录、同一条单行码点上限（**批 F·甲**：由 500 提到 2000，见下面两条 U4 原名锚）、
+ * 各自独立的 seq。 */
 const tasksPath = path.join(boardDir, "tasks.md");
 /** Independent re-implementation of the plugin hash, so the tests check the
  * discipline lock against the file content rather than against itself. */
@@ -2459,10 +2460,17 @@ const ledger2 = (await readFile(decisionsPath, "utf8")).trim().split("\n");
 check("decisions seq is monotonic and plugin-assigned, and any session may write it", ledger2.length === 2 && ledger2[1].startsWith("2 | ") && ledger2[1].includes("| session-target | 冲突升级给协调者") && dec2.includes("已追加 decisions #2"));
 check("the ledger is append-only — the earlier row is byte-identical", ledger2[0] === ledger1[0]);
 
-const tooLongDecision = await boardAppend.execute({ team: "night-shift", file: "decisions", line: "长".repeat(501) }, execFor(boardEnv.senderAgent));
-check("a decisions line past the 500-character cap is refused and nothing is written (§4.1)", tooLongDecision.includes("超过单行上限 500") && tooLongDecision.includes("§4.1") && (await readFile(decisionsPath, "utf8")).trim().split("\n").length === 2);
-const atCap = await boardAppend.execute({ team: "night-shift", file: "decisions", line: "长".repeat(500) }, execFor(boardEnv.senderAgent));
-check("exactly 500 characters is accepted — the cap is inclusive", atCap.includes("已追加 decisions #3"));
+// ★ 批 F · U4 原名锚（M2 块；本仓批 D §5.2 纪律：改判据是**改写**不是删除）——
+//   下面两条断言（decisions 上限）与 `:2494` 那条（discipline 逐行上限）的**原名**逐字为：
+//     "a decisions line past the 500-character cap is refused and nothing is written (§4.1)"
+//     "exactly 500 characters is accepted — the cap is inclusive"
+//     "discipline content carries the same per-line 500-character cap"
+//   批 F·甲把这三条钉的数字从 500 改成 2000，**意图一字不改**（越界拒绝 + 上限含端点 +
+//   三个写入分支同口径）。上面那三行原名里的 500 是**历史锚**（逐字留痕），不是活上限。
+const tooLongDecision = await boardAppend.execute({ team: "night-shift", file: "decisions", line: "长".repeat(2001) }, execFor(boardEnv.senderAgent));
+check("a decisions line past the 2000-character cap is refused and nothing is written (§4.1)", tooLongDecision.includes("超过单行上限 2000") && tooLongDecision.includes("§4.1") && (await readFile(decisionsPath, "utf8")).trim().split("\n").length === 2);
+const atCap = await boardAppend.execute({ team: "night-shift", file: "decisions", line: "长".repeat(2000) }, execFor(boardEnv.senderAgent));
+check("exactly 2000 characters is accepted — the cap is inclusive", atCap.includes("已追加 decisions #3"));
 const multiLine = await boardAppend.execute({ team: "night-shift", file: "decisions", line: "第一行\n第二行" }, execFor(boardEnv.senderAgent));
 check("a multi-line decision is refused — the ledger is one row per line", multiLine.includes("必须单行") && (await readFile(decisionsPath, "utf8")).trim().split("\n").length === 3);
 const emojiDecision = await boardAppend.execute({ team: "night-shift", file: "decisions", line: "🔵".repeat(400) }, execFor(boardEnv.senderAgent));
@@ -2490,8 +2498,8 @@ check("team_read hands back the hash of the current content after a change", has
 check("R4: with content present the decisions hash still says reference/audit, the discipline hash still says lock", reread.includes("（仅供参考/审计：decisions 只追加、不接受 baseHash 参数）") && reread.includes("baseHash=") && /baseHash=\w+（乐观锁：整文件替换必须携带此值）/u.test(reread));
 const disc2 = await boardAppend.execute({ team: "night-shift", file: "discipline", line: "第二版：改由 reviewer 汇总", baseHash: hashB }, execFor(boardEnv.targetAgent));
 check("a re-read followed by the fresh baseHash succeeds (the two-worker flow §3.3.3 exists for)", disc2.includes("已替换 discipline.md") && (await readFile(disciplinePath, "utf8")) === "第二版：改由 reviewer 汇总");
-const longDiscipline = await boardAppend.execute({ team: "night-shift", file: "discipline", line: `短行\n${"长".repeat(501)}`, baseHash: hashOf("第二版：改由 reviewer 汇总") }, execFor(boardEnv.senderAgent));
-check("discipline content carries the same per-line 500-character cap", longDiscipline.includes("第 2 行超过单行上限 500") && (await readFile(disciplinePath, "utf8")) === "第二版：改由 reviewer 汇总");
+const longDiscipline = await boardAppend.execute({ team: "night-shift", file: "discipline", line: `短行\n${"长".repeat(2001)}`, baseHash: hashOf("第二版：改由 reviewer 汇总") }, execFor(boardEnv.senderAgent));
+check("discipline content carries the same per-line 2000-character cap", longDiscipline.includes("第 2 行超过单行上限 2000") && (await readFile(disciplinePath, "utf8")) === "第二版：改由 reviewer 汇总");
 const clearDiscipline = await boardAppend.execute({ team: "night-shift", file: "discipline", line: "", baseHash: hashOf("第二版：改由 reviewer 汇总") }, execFor(boardEnv.senderAgent));
 check("an empty replacement is accepted — discipline is a whole-file replace", clearDiscipline.includes("已替换 discipline.md") && (await readFile(disciplinePath, "utf8")) === "");
 
@@ -2557,13 +2565,17 @@ check("team_append refuses the same way without a workspace root", noWsAppend.in
 	const doneOne = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "done", task: "t-1", line: "核出 3 处错（依据 lib/index.js:3548）" }, execFor(boardEnv.targetAgent));
 	check("§9 U3: an unparsable line is ignored instead of being allowed to reset the counter", doneOne.includes("已追加 tasks #3") && (await tasksLines()).length === 4);
 
-// --- U4: the 500-code-point line cap ----------------------------------------
-	const tooLongTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "长".repeat(501) }, execFor(boardEnv.senderAgent));
-	check("§9 U4: a body past 500 code points is refused and nothing is written", tooLongTask.includes("超过单行上限 500") && tooLongTask.includes("§4.1") && (await tasksLines()).length === 4);
+// --- U4: the code-point line cap（批 F·甲：2000。原名锚逐字保留在断言名的 `§9 U4:` 前缀
+//     与下面这行块注释所记的历史数字上 —— 原为 500，见交付报告的「原名 ⇒ 新名 ⇒ 保留意图」表）
+//     与 §9 U4 同族的另两条原名锚：'§9 U4: a body past 500 code points is refused and nothing
+//     is written' / '§9 U4: a body of exactly 500 code points is ACCEPTED — the bound is
+//     inclusive, not exclusive'（同一条断言的改前名，逐字留痕）。
+	const tooLongTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "长".repeat(2001) }, execFor(boardEnv.senderAgent));
+	check("§9 U4: a body past 2000 code points is refused and nothing is written", tooLongTask.includes("超过单行上限 2000") && tooLongTask.includes("§4.1") && (await tasksLines()).length === 4);
 	const astralTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "dispute", task: "t-1", line: "🔵".repeat(400) }, execFor(boardEnv.senderAgent));
 	check("§9 U4: the cap counts code points — 400 astral characters (800 UTF-16 units) are accepted", astralTask.includes("已追加 tasks #4") && (await tasksLines()).length === 5);
-	const exactCapTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "码".repeat(500) }, execFor(boardEnv.senderAgent));
-	check("§9 U4: a body of exactly 500 code points is ACCEPTED — the bound is inclusive, not exclusive", exactCapTask.includes("已追加 tasks #5") && exactCapTask.includes("本次 500 字符") && (await tasksLines()).length === 6);
+	const exactCapTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "码".repeat(2000) }, execFor(boardEnv.senderAgent));
+	check("§9 U4: a body of exactly 2000 code points is ACCEPTED — the bound is inclusive, not exclusive", exactCapTask.includes("已追加 tasks #5") && exactCapTask.includes("本次 2000 字符") && (await tasksLines()).length === 6);
 
 // --- U5: one row per line ---------------------------------------------------
 	const newlineTask = await boardAppend.execute({ team: "night-shift", file: "tasks", kind: "claim", task: "t-1", line: "第一行\n第二行" }, execFor(boardEnv.senderAgent));
@@ -2768,6 +2780,12 @@ check("team_append refuses the same way without a workspace root", noWsAppend.in
 // 拒绝由两值改三值，§9.6⑤）在下面用源码级断言单独锁住 —— 它在运行期不可达（枚举
 // 先拒），所以只能这么锁，而那正是 file 这一直以来的纵深防御。
 	const u14Env = teamEnv({ teams: [teamRow({ writer: "any" })] });
+	// ★ 批 F · U4 原名锚（§9 U14 家族）：下面两条「成功文案逐字相同」的期望串里，
+	//   唯一被本批改动的字节是那个**上限数字** —— 原名逐字为
+	//   '§9 U14: the decisions success text is BYTE-IDENTICAL to the pre-batch copy' 与
+	//   '§9 U14: the discipline success text is BYTE-IDENTICAL to the pre-batch copy'
+	//   （断言名一字未改，改的只是它里面 `单行上限 500 字符` → `单行上限 2000 字符`）。
+	//   保留的意图：**回执文案的形状**（行格式说明 / 本次 N 字符 / 共 M 行）本批一个字节都没动。
 	const u14Append = u14Env.tool("team_link_team_append");
 	rmSync(decisionsPath, { force: true });
 	const u14DecisionBody = "统一用 team_link_send 汇报";
@@ -2775,7 +2793,7 @@ check("team_append refuses the same way without a workspace root", noWsAppend.in
 	check("§9 U14: the decisions success text is BYTE-IDENTICAL to the pre-batch copy", u14Decisions === [
 		`已追加 decisions #1（author=session-target）→ ${decisionsPath}`,
 		"行格式：seq | ISO 时间 | author-session-id | 正文（seq 由插件分配、单调递增；只追加不删除）。",
-		`单行上限 500 字符（本次 ${[...u14DecisionBody].length} 字符，§4.1）。`,
+		`单行上限 2000 字符（本次 ${[...u14DecisionBody].length} 字符，§4.1）。`,
 		].join("\n"));
 	const u14DisciplineBefore = await readFile(disciplinePath, "utf8");
 	const u14DisciplineBody = "第一版：汇报走 team_link_send";
@@ -2783,7 +2801,7 @@ check("team_append refuses the same way without a workspace root", noWsAppend.in
 	check("§9 U14: the discipline success text is BYTE-IDENTICAL to the pre-batch copy", u14Discipline === [
 		`已替换 discipline.md（author=session-self）→ ${disciplinePath}`,
 		`baseHash ${hashOf(u14DisciplineBefore)} → ${hashOf(u14DisciplineBody)}（下次替换必须携带新值）。`,
-		"共 1 行；单行上限 500 字符（§4.1）。",
+		"共 1 行；单行上限 2000 字符（§4.1）。",
 		].join("\n"));
 	const tasksSource = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
 	check("§9 U14 §9.6⑤: the whitelist refusal names all three files (the ONE copy change this batch may make)", tasksSource.includes("写入失败：file 必须是 decisions 或 discipline 或 tasks（白名单，不接受任何路径）。"));
@@ -4343,7 +4361,7 @@ const handoffWrite = await __testing.writeHandoffDocument(handoffEnv.team(), {
 	report: __testing.handoffBodyReport(handoffAll),
 	facts: handoffFacts,
 });
-check("§11.9.6 写入: 交接文档落盘（整文件写；黑板单行 500 码点上限不适用于契约文档）", handoffWrite.ok === true && handoffWrite.path === handoffDocPath && existsSync(handoffDocPath));
+check("§11.9.6 写入: 交接文档落盘（整文件写；黑板单行 2000 码点上限 —— 批 F·甲前为 500 —— 不适用于契约文档）", handoffWrite.ok === true && handoffWrite.path === handoffDocPath && existsSync(handoffDocPath));
 const handoffText = await readFile(handoffDocPath, "utf8");
 const HANDOFF_HEADER_NEEDLES = ["schema: team-link/handoff/1", "team: night-shift", "role: coordinator", `previous: ${ROT_SELF}`, `successor: ${SUCCESSOR}`, "preparedAt: ", "claimedAt: ", `tokenMask: tok-${HANDOFF_TOKEN.slice(0, 4)}…${HANDOFF_TOKEN.slice(-4)}`, "rotationStatus: ", "integrity: 结构完整：硬节 5/5"];
 const handoffHeaderMissing = HANDOFF_HEADER_NEEDLES.filter((line) => !handoffText.includes(line));
@@ -11862,7 +11880,7 @@ check("批 E · U5 ⑤ 「无替换 ⇒ 逐字不变」在**写面**上成立：
 	u1DecisionsDisk.includes(`| session-self | ${u1ControlLine}\n`));
 // ★ 本轮更正（父侧 2026-10-11 的第 7 条红）：旧断言的**前提不成立** —— `team_link_team_append` 的
 //   回执**从不回显正文**（decisions 分支给的是 `已追加 decisions #N（author=…）→ <路径>` ＋ 行格式
-//   说明 ＋ `单行上限 500 字符（本次 N 字符，§4.1）。`），所以「回执里看得见占位符」结构性地不可能
+//   说明 ＋ `单行上限 2000 字符（本次 N 字符，§4.1）。`，批 F·甲前为 500），所以「回执里看得见占位符」结构性地不可能
 //   为真（与消毒无关）。本轮把它改成**真能观测、且不是恒真**的两半：
 //     ① 回执零命中 —— 回执本身是模型可见文本，它也不许带毒；
 //     ② 回执里的 `本次 N 字符` 取自**消毒后**的正文（实现按 `[...clean.text].length` 计）——
@@ -11881,10 +11899,19 @@ check("批 E · U1 ⑤ 读面（`team_read`）把盘上那一行带回来时同�
 
 // --- U1 ⑥–⑨ 交付评审 #2：长度上界必须在**消毒后**复检（decisions / tasks 两分支） ----------
 // 评审原文（🟡）：decisions 分支的注释声称「长度上限按消毒后判」，而代码只在 `readBlackboardLine`
-// 里对**原文**判一次 ⇒ 一条「原文 ≤500、含 1 处 token」的行落盘可达 513 字符，回执还会打出
-// 「单行上限 500 字符（本次 513 字符）」这种自相矛盾的读数；而 discipline 分支**有**消毒后复检
+// 里对**原文**判一次 ⇒ 一条「原文 ≤上限、含 1 处 token」的行落盘可达「上限 ＋13」字符，回执还会打出
+// 「单行上限 N 字符（本次 N+13 字符）」这种自相矛盾的读数；而 discipline 分支**有**消毒后复检
 // （`lib/index.js` 的 `cleanContent` / `[...contentLines[tooLong]].length`）⇒ 两分支口径不一致。
 // 本轮把 decisions / tasks 都改成「原文判一次（`readBlackboardLine`）＋ 消毒后复检一次」，三处同口径。
+//
+// ★ 批 F · U4 原名锚（本块）：这一段的三条断言原名逐字为
+//   '批 E · U1 ⑥ 前置自证…' / '批 E · U1 ⑦ 【评审 #2 红相】**原文 ≤500、消毒后 >500** 的 decisions
+//   正文**被拒**…' / '批 E · U1 ⑧ …' / '批 E · U1 ⑨ …' —— 批 F·甲只改了 ⑦ 里那句「≤500、>500」
+//   的**措辞**（改成不写死数字的说法），断言名与意图一字未改。
+// ★ 批 F · U4 关键一条（设计档 FR-3 ③）：本块的夹具**本来就不写死 500** —— 上限由导出的
+//   `__testing.readBlackboardLine` **二分读出来**（`beLineLimit`，单一事实源），夹具按「恰在上限上」
+//   现造。⇒ 上限从 500 变成 2000 之后，本块**自动改瞄 2000**，不需要（也不允许）把夹具改成写死 2000；
+//   真正要改的只是上面那句提到 500 的措辞（改了，见 ⑥/⑦ 的注释与断言名）。
 //
 // 红相：删掉 `lib/index.js` 里那两处 `cleanLength` 复检 ⇒ ⑦⑧ 立刻红（回执不再以「写入失败」开头、
 //   盘上多出一行、回执里的 `本次 N 字符` 还会大于上限）；把复检写成 `>=`（或把上限抄错一位）⇒ ⑨ 红。
@@ -11914,7 +11941,7 @@ const beDecisionsBefore = await readFile(u1Paths.decisions, "utf8");
 const beTasksBefore = await readFile(u1Paths.tasks, "utf8");
 const beOverLongDecisions = await u1Append({ team: BE_TEAM, file: "decisions", line: beRawAtLimit });
 const beDecisionsAfter = await readFile(u1Paths.decisions, "utf8");
-check("批 E · U1 ⑦ 【评审 #2 红相】**原文 ≤500、消毒后 >500** 的 decisions 正文**被拒**，且**盘上什么都没写**；回执点名「消毒后 N 字符」而不是打出「上限 500（本次 513）」那种自相矛盾的读数",
+check("批 E · U1 ⑦ 【评审 #2 红相】**原文恰在单行上限上、消毒后越过上限**的 decisions 正文**被拒**，且**盘上什么都没写**；回执点名「消毒后 N 字符」而不是打出「上限 N（本次 N+13）」那种自相矛盾的读数",
 	String(beOverLongDecisions).includes("写入失败") && String(beOverLongDecisions).includes(`超过单行上限 ${beLineLimit}`)
 		&& String(beOverLongDecisions).includes(`消毒后 ${[...beCleanAtLimit].length} 字符`)
 		&& !String(beOverLongDecisions).includes("已追加")
@@ -11950,6 +11977,201 @@ check("批 E · U8 ② **变异自证**：同一扫描器对一条**由码点拼
 	frameHit("样本 " + FRAME_POISON2) === 2);
 check("批 E · U8 ③ 扫描器本身**不是**恒真：对干净文本报 0（与 ② 同一函数、同一轮）",
 	frameHit(u6Clean) === 0);
+
+// ===========================================================================
+// 批 F（`team_link_team_append` 的长文本压力）—— 设计档
+// docs/2026-10-11-append-longtext-design.md §5 的 FR-1…FR-4 与 §8 的判据 U1…U5 / U7。
+// ★ **U6 不在本块**：它是**真机复测**（观测窗口 ≥7 天或该工具 ≥20 次调用，目标 ≤2 次），
+//   属父侧，套件结构上覆盖不到 —— 本块不冒充它。
+//
+// ★ 本块的标识符一律带 `Bf` 中缀（`bfEnv` / `bfAtCapOut` / …）：批 E 曾因顶格重名整档解析
+//   失败（`SyntaxError: Identifier 'u2Env' has already been declared`），本条是那次事故立的纪律。
+// ★ 上限**不抄一份进测试**：由导出的 `__testing.readBlackboardLine` 二分读出（复用批 E 已经
+//   建立的 `beLineLimit`，单一事实源），本块再**另钉一次**它等于 2000 —— 只靠二分的话，
+//   常量被改成 2500 也一样全绿。
+// ===========================================================================
+const BF_TEAM = "bf-team";
+const BF_WS = path.join(TEST_ROOT, "batch-f-ws");
+rmSync(BF_WS, { recursive: true, force: true });
+const bfEnv = setup({
+	sessions: [],
+	useSettings: true,
+	selfCwd: BF_WS,
+	settingsSeed: { "team-link": { teams: [teamRow({ name: BF_TEAM, workspace: BF_WS })] } },
+});
+const bfPaths = {
+	decisions: path.join(BF_WS, "team", BF_TEAM, "decisions.md"),
+	tasks: path.join(BF_WS, "team", BF_TEAM, "tasks.md"),
+};
+const bfAppend = (args) => bfEnv.tool("team_link_team_append").execute(args, execFor(bfEnv.senderAgent));
+const bfTeamRead = () => bfEnv.tool("team_link_team_read").execute({ team: BF_TEAM }, execFor(bfEnv.senderAgent));
+const bfDecisionsDisk = () => readFile(bfPaths.decisions, "utf8");
+const bfTasksDisk = () => readFile(bfPaths.tasks, "utf8");
+
+// --- U1（FR-1）：上限就是 2000；干净输入「恰在上限收、越一位拒」 ----------------------
+check(`批 F · U1 ① 【FR-1 常量】黑板单行的码点上限 = **2000**（由导出的 \`readBlackboardLine\` 二分读出，测试不抄一份；呈现实测：${beLineLimit}）`,
+	beLineLimit === 2000);
+const bfSeedOut = await bfAppend({ team: BF_TEAM, file: "decisions", line: "批 F 的种子行" });
+check("批 F · U1 ② 夹具自证（★ 负相，不空转）：种子行真的落盘了 —— 回执 `已追加 decisions #1`、盘上那一行逐字是它自己；下面「恰在上限」的两条因此量的是**真写入路径**",
+	String(bfSeedOut).includes("已追加 decisions #1") && (await bfDecisionsDisk()).includes("| session-self | 批 F 的种子行\n"));
+const bfCleanAtCap = "甲".repeat(beLineLimit);
+const bfSeedDisk = await bfDecisionsDisk();
+const bfAtCapOut = await bfAppend({ team: BF_TEAM, file: "decisions", line: bfCleanAtCap });
+const bfAtCapDisk = await bfDecisionsDisk();
+check("批 F · U1 ③ **干净输入恰在上限（2000 码点）⇒ 收**（上限是「>」不是「≥」）：落盘那一行逐字是它自己，回执里 `单行上限 N 字符` 与 `本次 N 字符` 两个数字都是上限本身",
+	String(bfAtCapOut).includes("已追加 decisions #2") && String(bfAtCapOut).includes(`单行上限 ${beLineLimit} 字符`)
+		&& String(bfAtCapOut).includes(`本次 ${beLineLimit} 字符`)
+		&& bfAtCapDisk.startsWith(bfSeedDisk) && bfAtCapDisk.includes(`| session-self | ${bfCleanAtCap}\n`));
+const bfOverCapOut = await bfAppend({ team: BF_TEAM, file: "decisions", line: "甲".repeat(beLineLimit + 1) });
+const bfOverCapDisk = await bfDecisionsDisk();
+check("批 F · U1 ④ **上限 +1（2001 码点）⇒ 拒**，且**盘上什么都没写**（fail-closed 于写入面，§9）；拒绝文案里的数字是 2000 而不是别的",
+	String(bfOverCapOut).includes("写入失败") && String(bfOverCapOut).includes(`超过单行上限 ${beLineLimit}`)
+		&& String(bfOverCapOut).includes(`当前 ${beLineLimit + 1} 字符`)
+		&& !String(bfOverCapOut).includes("已追加")
+		&& bfOverCapDisk === bfAtCapDisk);
+
+// --- U2（FR-3 ④）：**曾经的失败样本**（639 码点）现在必须被接受，且读回来逐字相同 --------
+/** 取证里那条失败样本的长度是 **639 码点**（设计档 §2.1 的长度表：402 / 429 / 500 / 501 /
+ *  542 / 576 / 592 / 637 / **639**）。取证的**原文**不在本仓（那是父侧的会话日志），所以这里
+ *  逐字重建的是**长度**与「末尾可辨识」两件事：样本由字符拼出，不读任何外部文件、不借工具。 */
+const bfForensicLen = 639;
+const bfForensicTail = "★S8 第 1 步失败：收尾（历史失败样本的长度锚）";
+const bfForensicSample = "决".repeat(bfForensicLen - [...bfForensicTail].length) + bfForensicTail;
+const bfSampleBefore = await bfDecisionsDisk();
+const bfSampleOut = await bfAppend({ team: BF_TEAM, file: "decisions", line: bfForensicSample });
+const bfSampleDisk = await bfDecisionsDisk();
+const bfSampleRead = String(await bfTeamRead());
+check("批 F · U2 ①（★ 前置自证：样本长度确实是 639 码点、且确实**超过旧上限 500**）失败样本现在**被接受**：`已追加 decisions #3`，且该行**逐字节**落在盘上（含末尾那一整段 —— 不是「截到哪里算哪里」）",
+	[...bfForensicSample].length === bfForensicLen && bfForensicLen > 500
+		&& String(bfSampleOut).includes("已追加 decisions #3")
+		&& bfSampleDisk.startsWith(bfSampleBefore)
+		&& bfSampleDisk.includes(`| session-self | ${bfForensicSample}\n`));
+check("批 F · U2 ② 读面（`team_link_team_read`）把它**逐字**带回来（含末尾）：样本 == 盘上那一行 == 读面那一行（本批只动上限，**没有**动读面保真度）",
+	bfSampleRead.includes(`| ${bfForensicSample}`) && bfSampleDisk.includes(bfForensicSample) && bfForensicSample.endsWith(bfForensicTail));
+
+// --- U3（FR-2）：模型可见描述面与实现同批改准（不含「500」、含「2000」）----------------
+const bfAppendTool = bfEnv.tool("team_link_team_append");
+const bfAppendDesc = String(bfAppendTool?.description ?? "");
+const bfLineParamDesc = String(bfAppendTool?.parameters?.properties?.line?.description ?? "");
+const bfFileParamDesc = String(bfAppendTool?.parameters?.properties?.file?.description ?? "");
+check("批 F · U3 ① 工具 `description` 里**不含「500」**、**含「2000」**（模型读的正是这一份 ⇒ 只改常量不改描述就是「描述与实现不一致」）",
+	bfAppendDesc !== "" && !bfAppendDesc.includes("500") && bfAppendDesc.includes("2000"));
+check("批 F · U3 ② `line` 参数说明里**不含「500」**、**含「2000」**（模型照着写参数的就是这一句）",
+	bfLineParamDesc !== "" && !bfLineParamDesc.includes("500") && bfLineParamDesc.includes("2000"));
+check("批 F · U3 ③ `discipline` 的说明同批发准（描述里那一段 ＋ `file` 枚举说明都不含「500」，且三件套共用一条上限的说法在场）：整文件替换的**每一行**也是同一条上限",
+	!bfFileParamDesc.includes("500") && bfAppendDesc.includes("discipline") && bfAppendDesc.includes("三者都受单行 2000 字符上限"));
+check("批 F · U3 ④ 用户面文档同批改准：`README.md` 里**不再**出现黑板「单行 500 字符」/「≤ **500 码点**」这两种旧说法，而新的 2000 说法在场",
+	!readmeSource.includes("单行 500 字符") && !readmeSource.includes("≤ **500 码点**")
+		&& readmeSource.includes("单行 2000 字符") && readmeSource.includes("≤ **2000 码点**"));
+
+// --- U4（FR-3 ②）：判据改写留痕 —— 原 500 断言的**原名锚仍在文件里** ---------------------
+/** ★ 探针**由两半拼出**、不逐字写一遍：否则这一块自己就含探针串，`filter(...)` 变成恒真 ——
+ *  删掉真断言也照样绿（本仓 AGENTS.md §一.3：「0 命中」这类结论必须用真能区分的检查得出）。
+ *  ★ 分歧审计 D2（2026-10-11）修掉的缺口：旧清单前两条拼的是**改后的新名**（`…a body past 2000
+ *  code points is refused…`），而新名由**活断言自己**满足 ⇒ 探针恒真 —— 把 §9 U4 那段记着 500
+ *  原名的锚注释整段删掉，这一条照样绿。⇒ 本清单只收**逐字原名锚**（改前的 500 名 / 名一字未改
+ *  的原文名），**一条改后的新名都不收**；改后的新名另走 `bfRenamedNeedles`（要求逐字钉 2000 ——
+ *  那是「改写确实发生过」的正面证据，与「旧名留痕」互补，两者都不许由对方代劳）。 */
+const bfSuiteSource = await readFile(fileURLToPath(import.meta.url), "utf8");
+/** ① 逐字**原名锚**（8 处，全部只落在注释或旧名痕迹里）：改前的 500 名 6 处 —— §9 U4 块注释两条 ·
+ *  批 E · U1 块注释里 ⑦ 的原措辞 · M2 块注释三条；＋ 名一字未改的原文名 2 处 —— §9 U14 块注释两条。
+ *  ★ 其中三条原名（§9 U4 两条 ＋ 批 E · U1 ⑦）在注释里是**跨行折行**的 —— 后半句折在下一行，
+ *  故探针取**同一行内的最长前缀**：逐字 `includes` 打在原文上只能匹配到折行处。要连后半句一起
+ *  匹配就得加一层「注释折行拼接」的视图，本块刻意不加那层机械：前缀已含 `500` 与判别性措辞，
+ *  「把那段锚注释删掉 ⇒ 本清单缺项 ⇒ 红」这条性质完整成立。 */
+const bfAnchorNeedles = [
+	["§9 U4: a body past ", "500 code points is refused and nothing"].join(""),
+	["§9 U4: a body of exactly ", "500 code points is ACCEPTED — the bound is"].join(""),
+	["§9 U14: the decisions success text is BYTE-", "IDENTICAL to the pre-batch copy"].join(""),
+	["§9 U14: the discipline success text is BYTE-", "IDENTICAL to the pre-batch copy"].join(""),
+	["批 E · U1 ⑦ 【评审 #2 红相】**原文 ", "≤500、消毒后 >500** 的 decisions"].join(""),
+	["a decisions line past the ", "500-character cap is refused and nothing is written (§4.1)"].join(""),
+	["exactly ", "500 characters is accepted — the cap is inclusive"].join(""),
+	["discipline content carries the same per-line ", "500-character cap"].join(""),
+];
+/** ② 改后的断言名（5 条）—— 探针串本身就带着 `2000`，所以「命中」即证明那几条断言名逐字钉的是
+ *  **2000**（谁把它们改回 500，本清单当场缺项 ⇒ 红）。 */
+const bfRenamedNeedles = [
+	["§9 U4: a body past ", "2000 code points is refused and nothing is written"].join(""),
+	["§9 U4: a body of exactly ", "2000 code points is ACCEPTED — the bound is inclusive, not exclusive"].join(""),
+	["a decisions line past the ", "2000-character cap is refused and nothing is written (§4.1)"].join(""),
+	["exactly ", "2000 characters is accepted — the cap is inclusive"].join(""),
+	["discipline content carries the same per-line ", "2000-character cap"].join(""),
+];
+/** ③ 锚标记（三处锚注释的抬头 `★ 批 F · U4 ` ＋「原名锚」）：**不算**原名锚，单独作一条在场性
+ *  检查 —— 本行自己**不写**那串连起来的标记（写了这条就变成自制自答，与 ①② 同一条纪律）。 */
+const bfAnchorMarker = ["批 F · U4 ", "原名锚"].join("");
+const bfAnchorMissing = bfAnchorNeedles.filter((needle) => !bfSuiteSource.includes(needle));
+const bfRenamedMissing = bfRenamedNeedles.filter((needle) => !bfSuiteSource.includes(needle));
+const bfMarkerMissing = !bfSuiteSource.includes(bfAnchorMarker);
+const bfAnchorGaps = [...bfAnchorMissing, ...bfRenamedMissing, ...(bfMarkerMissing ? [bfAnchorMarker] : [])];
+check(`批 F · U4 判据改写留痕（U4 里**可机械化的那半**）：${bfAnchorNeedles.length} 处**逐字原名锚**仍在文件里（§9 U4 两条 + M2 块三条【改前的 500 名】· 批 E · U1 ⑦【改前措辞】· §9 U14 两条【名一字未改】），锚标记在场，且 ${bfRenamedNeedles.length} 条**改后**的断言名逐字钉的是 2000（缺：${bfAnchorGaps.length === 0 ? "（无）" : bfAnchorGaps.join("、")}）—— 删掉任一段原名锚注释即红`,
+	bfAnchorMissing.length === 0 && bfRenamedMissing.length === 0 && !bfMarkerMissing);
+
+// --- U7（§8）：零污染对照 —— 上限以内的干净短行，写入路径逐字节未变 --------------------
+const bfShortLine = "旧上限以内的干净短行：ASCII 竖线 a|b 与单枚全角竖线 " + FRAME_BAR + " 都原样";
+const bfShortBefore = await bfDecisionsDisk();
+const bfShortOut = await bfAppend({ team: BF_TEAM, file: "decisions", line: bfShortLine });
+const bfShortAfter = await bfDecisionsDisk();
+check("批 F · U7 零污染对照：**上限以内**（≤ 旧上限 500 码点、零处包裹结构）的干净短行 ⇒ 写入路径**逐字节未变** —— 新增的字节恰是一行 `seq | ISO | author | 正文` 加一个换行，回执的 `本次 N 字符` 等于该行自身的码点数（本批只动上限与显示面，没有顺带改别的行为；回执**文案形状**逐字不变由 §9 U14 那两条钉住）",
+	[...bfShortLine].length <= 500 && frameClean(bfShortLine)
+		&& bfShortAfter.startsWith(bfShortBefore)
+		&& /^\d+ \| \d{4}-\d{2}-\d{2}T[\d:.]+Z \| session-self \| 旧上限以内的干净短行：ASCII 竖线 a\|b 与单枚全角竖线 . 都原样\n$/u.test(bfShortAfter.slice(bfShortBefore.length))
+		&& !String(bfShortOut).includes("写入失败")
+		&& String(bfShortOut).includes(`本次 ${[...bfShortLine].length} 字符`));
+
+// --- U5（FR-4）：**显示**截断只影响显示 —— 两处显示面共用同一个按码点的截断 ---------------
+// 夹具要点：截断量的是**整条台账行**（`seq | ISO | author | kind | task | 正文`），所以
+// 星界字符必须落在**行**的第 300 码点上，才算「按码元切会切半代理对」的真夹具。行长前缀
+// （`<seq> | <ISO> | session-self | plan | t-<n> | `）不写死，先用一条探针行**量出来**。
+const bfCap = __testing.TASKS_TAIL_DISPLAY_CHARS;
+const bfProbeLine = "探针行";
+const bfProbeOut = await bfAppend({ team: BF_TEAM, file: "tasks", kind: "plan", line: bfProbeLine });
+const bfProbeDisk = await bfTasksDisk();
+const bfProbeRow = bfProbeDisk.trim().split("\n")[bfProbeDisk.trim().split("\n").length - 1] ?? "";
+/** 行前缀的**码元数**（前缀全是 BMP ⇒ 也等于码点数：`<seq> | <ISO> | session-self | plan | t-<n> | `）。 */
+const bfRowPrefixUnits = bfProbeRow.length - [...bfProbeLine].length;
+const bfRowTail = "★行尾标记：这一段必须只在盘上与 team_read 里出现，显示面不许有它";
+/** 正文 = (BMP 字 × N) + 星界字符 ×30 + 行尾标记，N 使**行**的第 `bfCap` 个码点**正好是**那个
+ *  星界字符 ⇒ `row.slice(0, bfCap)` 会停在它的高代理项上（= 半截代理对），而按码点切不会。 */
+const bfLongRow = "汉".repeat(bfCap - bfRowPrefixUnits - 1) + "🔵".repeat(30) + bfRowTail;
+const bfLongPlanOut = await bfAppend({ team: BF_TEAM, file: "tasks", kind: "plan", line: bfLongRow });
+const bfTasksOnDisk = await bfTasksDisk();
+const bfDiskRows = bfTasksOnDisk.trim().split("\n");
+const bfLongRowOnDisk = bfDiskRows[bfDiskRows.length - 1] ?? "";
+const bfTeamReadText = String(await bfTeamRead());
+const bfStatusText = String(await bfEnv.tool("team_link_status").execute({ team: BF_TEAM }, execFor(bfEnv.senderAgent)));
+const bfPanelPayload = await __testing.buildPanelPayload(bfEnv.ctx, __testing.policyFor(bfEnv.ctx), { sessionId: "" });
+const bfPanelTailRows = (bfPanelPayload?.tasksTail?.lines ?? []).filter((line) => line.startsWith("    "));
+const bfShownRow = __testing.forDisplay(bfLongRowOnDisk);
+check("批 F · U5 ① 【FR-4 常量】台账行的**显示**宽度 = **300 码点**（由 `__testing` 读出，套件不抄 300）",
+	bfCap === 300);
+check("批 F · U5 ② 前置自证（★ 负相，不空转）：探针行真的落盘（前缀量得出来）、这条长行**本来就超过**显示宽度、截断后**确实与原文不同**，且**按 UTF-16 码元切会切出半截代理对**（`row.slice(0, 300)` ⇒ `hasLone` 为真）—— 下面几条因此真能区分「按码点切」与「按码元切」",
+	[...bfProbeLine].length === 3 && bfRowPrefixUnits > 0 && String(bfProbeOut).includes("已追加 tasks #1")
+		&& [...bfLongRowOnDisk].length > bfCap && bfShownRow !== bfLongRowOnDisk
+		&& hasLone(bfLongRowOnDisk.slice(0, bfCap)) && !hasLone(bfShownRow) && [...bfShownRow].length > bfCap
+		&& bfShownRow.startsWith([...bfLongRowOnDisk].slice(0, bfCap).join("")));
+check("批 F · U5 ③ 【盘上一字不动】那条长行在 `tasks.md` 上**逐字节**就是写入内容（含行尾那一整段），盘上**没有**省略标记 —— 截断不在写入路径上（写入路径上截断 ⇒ 本条红）",
+	String(bfLongPlanOut).includes("已追加 tasks #2") && bfTasksOnDisk.includes("| " + bfLongRow + "\n")
+		&& bfTasksOnDisk.includes(bfRowTail) && !bfTasksOnDisk.includes("…（已截断"));
+check("批 F · U5 ④ 【读面一字不动】`team_link_team_read` 把全文**逐字**带回来（含行尾那一整段）：读面保真度不受显示截断影响",
+	bfTeamReadText.includes(bfLongRowOnDisk) && bfTeamReadText.includes(bfRowTail));
+check("批 F · U5 ⑤ 【显示面①：状态卡第 ⑥ 段】原文换成截断形态（四空格缩进 + `forDisplay(原文行)`，结尾是点名出处的省略标记），且**行尾那一整段不出现在状态卡里**",
+	bfStatusText.includes("--- 台账尾") && bfStatusText.split("\n").some((line) => line === "    " + bfShownRow)
+		&& !bfStatusText.includes(bfRowTail));
+check("批 F · U5 ⑥ 【显示面②：客户端面板 payload】`tasksTail.lines` 里那一行与状态卡**同一形态**（同一常量、同一函数 —— 客户端只显示不重算），面板也不给未截断的原文",
+	bfPanelPayload?.tasksTail?.present === true && bfPanelTailRows.includes("    " + bfShownRow)
+		&& !bfPanelTailRows.some((line) => line.includes(bfRowTail)));
+check("批 F · U5 ⑦ 【两处共用一处实现】同一行在两个显示面上**逐字同一串**（不是各写一份截断逻辑），且各自**恰一行**；盘上那一条（③）与读面那一段（④）是这条判据的**对照半**（同一时刻、同一行：显示面截断 vs 盘上/读面完整）",
+	bfStatusText.split("\n").filter((line) => line === "    " + bfShownRow).length === 1
+		&& bfPanelTailRows.filter((line) => line === "    " + bfShownRow).length === 1
+		&& bfTasksOnDisk.includes(bfRowTail) && bfTeamReadText.includes(bfRowTail));
+check("批 F · U5 ⑧ 未超宽的台账行**逐字节**原样显示（截断只咬超宽行）：探针行在状态卡与面板上都是它自己（无省略标记）",
+	bfStatusText.split("\n").some((line) => line === "    " + bfProbeRow)
+		&& bfPanelTailRows.includes("    " + bfProbeRow)
+		&& !__testing.forDisplay(bfProbeRow).includes("…（已截断"));
+
+rmSync(BF_WS, { recursive: true, force: true });
 
 rmSync(BE_WS, { recursive: true, force: true });
 
