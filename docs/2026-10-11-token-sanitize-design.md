@@ -126,7 +126,7 @@ flowchart LR
 | FR | 交付单元 | 落点 | 验收 |
 | --- | --- | --- | --- |
 | **FR-1** | **一个消毒函数** `stripFramingTokens(text) -> { text, removed }`：匹配式由**码点拼出**（源码里没有原串）；失败时**原样返回** | `lib/index.js` 新增，紧邻既有的 `wellFormed*` | U5 / U6 / U7 / U8 |
-| **FR-2** | **工具结果收口**：`wellFormed` / `wellFormedContent` / `wellFormedText` 三处调用消毒；替换处数**并入现有回执的读数行**（不新造格式） | `lib/index.js:476` / `:483` / `:7434` | U2 / U5 |
+| **FR-2** | **工具结果收口**：`wellFormed` / `wellFormedContent` / `wellFormedText` 三处调用消毒；**处数由文本自身呈现**（v1.1：占位符带编号 `[framing-token-removed 1/N]`，见 §6.5 —— **不改回执、不加累加器、不新增 import**） | `lib/index.js:476` / `:483` / `:7434` | U2 / U5 |
 | **FR-3** | **跨会话投递正文**：`team_link_send` 组装的 banner 与正文过消毒 | `lib/index.js` 的 send 组装点 | U3 |
 | **FR-4** | **提示词与摘要面**：`renderRoleText`（`:3294`）· `renderResourceContext`（`:3347`）· `renderResourceLine`（`:3210`）· `tickMessage`（`:2642`）· `renderWatchdogDigest`（`:2726`）· `watchdogLines`（`:4393`）六个渲染函数出口过消毒 | 同上 | U4 |
 | **FR-5** | **黑板落盘前消毒**：`team_link_team_append` 写入 decisions / tasks / discipline 之前过消毒 ⇒ **盘上永不出现** | `lib/index.js:5967` 起的 append 路径 | U1 |
@@ -169,17 +169,33 @@ function wellFormed(value) { … const s = stripFramingTokens(value); … }   //
 
 /** §6.4 黑板落盘（FR-5）。前置：line 已过既有校验。后置：**写盘的那一份**已消毒。 */
 const clean = stripFramingTokens(line);
-await appendLine(file, clean.text);            // 注意：写干净的那份；回执里如实报 clean.removed
+await appendLine(file, clean.text);            // 注意：写干净的那份（处数由文本里的占位符自证，见 §6.5 v1.1；回执**不**额外加行）
 
-/** §6.5 ★ 替换处数的**通道**与**注入缝**（评审 🟡#2 修订）。
- *  · 通道：一个**每次工具调用重置**的累加器（挂在工具执行上下文上，不是模块级全局 —— 并发安全）。
- *    `wellFormed*` 深度调用点的签名保持不变，它们只把 `removed` 交给**同一个执行上下文**；
- *    工具回执组装时读一次累加器：**> 0 才**追加一句读数（= 0 时回执逐字与改前相同，U5）。
- *    `wellFormed*` 在一次结果里可能跑多次 ⇒ 累加器**累加**，不是覆盖。
- *  · 注入缝：模块内保留一个可替换引用 `let stripImpl = stripFramingTokens;`，
- *    `__testing.setStripImpl(fn)` 供 U7 塞入"必抛"的桩；生产路径不暴露这个开关。 */
-const removedCounter = ctx.execution?.removedCounter ?? { n: 0 };   // 每次工具调用重置
-function noteRemoved(removed) { removedCounter.n += removed; }
+/** §6.5 v1.1 ★ 替换处数的**通道**与**注入缝** —— 因**硬约束**改写（2026-10-11 实施中断后发现）。
+ *  ★ 硬约束原文：`host-half.test.mjs:7221` 把 `lib/index.js` 的导入面钉成「**八个已审计模块**」的白名单
+ *    （`sameJson(importList, HOST_IMPORTS) && importList.every(…)`）⇒ **任何新增 import 都判红**。
+ *    （实证：半成品因加 `node:async_hooks` 而挂出 1 条红。）
+ *  ⇒ **通道改成「写进文本本身」**：占位符**带编号** —— 命中 1 处仍是 `[framing-token-removed]`，
+ *    多于 1 处则 `[framing-token-removed 1/N]`、`[… 2/N]`…
+ *    ⇒ **不需要累加器、不需要执行上下文、不需要回执多写一行**；
+ *      U5 的「无替换 ⇒ 回执逐字与改前相同」因此**结构性成立**，而不是靠判断。
+ *  · 注入缝**保留**（零导入成本）：`let stripImpl = stripFramingTokens;` ＋ `__testing.setStripImpl(fn)`，供 U7 塞「必抛」的桩。
+ *  · **删除** AsyncLocalStorage / 执行上下文累加器那条路（它需要新 import）。 */
+function stripFramingTokens(text) {
+  if (typeof text !== "string" || text === "") return { text, removed: 0 };
+  try {
+    const hits = [...text.matchAll(FRAMING_RE)];
+    if (hits.length === 0) return { text, removed: 0 };        // ★ removed=0 ⇒ text 逐字节等于入参
+    let i = 0;
+    const out = text.replace(FRAMING_RE, () => {
+      i += 1;
+      return hits.length === 1 ? PLACEHOLDER : `${PLACEHOLDER.slice(0, -1)} ${i}/${hits.length}]`;
+    });
+    return { text: out, removed: hits.length };
+  } catch {
+    return { text, removed: 0 };                               // fail-open（NFR-3 / U7）
+  }
+}
 ```
 
 ## §7 状态与 schema
@@ -198,7 +214,7 @@ function noteRemoved(removed) { removedCounter.n += removed; }
 | **U2** | **10 个工具全覆盖**：对 `team_link_recover / list_sessions / status / export / send / watch / roster / team_read / team_append / rotate` **逐个**注入带毒夹具（能让注入影响返回文本的那条路径），断言返回串不含匹配式 | 只挂其中一个 `wellFormed` ⇒ 至少一个工具红 | `host-half.test.mjs` |
 | **U3** | **投递正文**：`team_link_send` 带毒正文 ⇒ 组装出的 banner 与 body 均不含 | 不挂 FR-3 ⇒ 红 | `host-half.test.mjs` |
 | **U4** | **提示词面**：段渲染 / 资源行上下文 / tick / 摘要 / 状态卡看门狗段 六个函数各带毒输入 ⇒ 输出不含 | 不挂 FR-4 ⇒ 红 | `host-half.test.mjs` |
-| **U5** | **不静默**：有替换 ⇒ 回执含替换处数；**无替换 ⇒ 回执逐字与改前相同**（不刷噪音） | 无条件追加那句话 ⇒ 无替换时也变 ⇒ 红 | `host-half.test.mjs` |
+| **U5** | **不静默（v1.1 口径）**：有替换 ⇒ **文本里出现占位符**，且 **N>1 时带编号**（`… 1/N` / `… 2/N`）；**无替换 ⇒ 输出逐字节与改前相同**（结构性成立，见 §6.5） | 把编号写成固定串（每次都是 1/N）或无条件追加一句读数 ⇒ 红 | `host-half.test.mjs` |
 | **U6** | **零污染对照**：夹具**不含** token 时，所有出口输出与改前**逐字节相同** | 消毒误伤普通文本 ⇒ 红 | `host-half.test.mjs`（改前快照对照） |
 | **U7** | **fail-open**：令消毒内部抛错（桩）⇒ 工具**照常成功**、返回原文本 | rethrow ⇒ 工具失败 ⇒ 红 | `host-half.test.mjs` |
 | **U8** | **静态零残留**（评审 🟡#4 修订：扫描面**放宽**到 FR-6 触及的**每一个**文件 ＋ 两个测试套件 ＋ 取证目录）：用码点拼出的匹配式扫 `lib/`、`host-half.test.mjs`、`client-half.test.mjs`、`docs/*.md`、**根 `README.md` / `CHANGELOG.md` / `AGENTS.md`**、`.investigations/**/*.{mjs,js,md}` ⇒ **0 命中** | 谁把原串写回源码/文档（哪怕是在写 FR-6 的文档时顺手写进去的）⇒ 红 | 交付报告须贴扫描命令与输出 |
