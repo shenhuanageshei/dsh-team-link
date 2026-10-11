@@ -12105,7 +12105,7 @@ const bfAnchorMissing = bfAnchorNeedles.filter((needle) => !bfSuiteSource.includ
 const bfRenamedMissing = bfRenamedNeedles.filter((needle) => !bfSuiteSource.includes(needle));
 const bfMarkerMissing = !bfSuiteSource.includes(bfAnchorMarker);
 const bfAnchorGaps = [...bfAnchorMissing, ...bfRenamedMissing, ...(bfMarkerMissing ? [bfAnchorMarker] : [])];
-check(`批 F · U4 判据改写留痕（U4 里**可机械化的那半**）：${bfAnchorNeedles.length} 处**逐字原名锚**仍在文件里（§9 U4 两条 + M2 块三条【改前的 500 名】· 批 E · U1 ⑦【改前措辞】· §9 U14 两条【名一字未改】），锚标记在场，且 ${bfRenamedNeedles.length} 条**改后**的断言名逐字钉的是 2000（缺：${bfAnchorGaps.length === 0 ? "（无）" : bfAnchorGaps.join("、")}）—— 删掉任一段原名锚注释即红`,
+check(`批 F · U4 判据改写留痕（U4 里**可机械化的那半**）：${bfAnchorNeedles.length} 处**逐字原名锚**仍在文件里（§9 U4 两条 + M2 块三条【改前的 500 名】· 批 E · U1 ⑦【改前措辞】· §9 U14 两条【名一字未改】），锚标记在场，且 ${bfRenamedNeedles.length} 条**改后**的断言名逐字钉的是 2000（缺：${bfAnchorGaps.length === 0 ? "（无）" : bfAnchorGaps.join("、")}）—— 删掉任一段**独占的**原名锚注释（即那 6 处【改前的 500 名 / 改前措辞】：§9 U4 两条 · 批 E · U1 ⑦ · M2 块三条）、或改了名而不留原名锚 ⇒ 红；§9 U14 两条【名一字未改】是**例外** —— 它们由**未改名的活断言**自持，删掉它们的锚注释本条**不红**（判定式不变）`,
 	bfAnchorMissing.length === 0 && bfRenamedMissing.length === 0 && !bfMarkerMissing);
 
 // --- U7（§8）：零污染对照 —— 上限以内的干净短行，写入路径逐字节未变 --------------------

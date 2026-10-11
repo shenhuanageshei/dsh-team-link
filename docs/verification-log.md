@@ -3527,7 +3527,7 @@ $ node .investigations/token-sanitize-2026-10-11/scripts/scrub-sources.mjs .
 | **U1** | `批 F · U1 ①` 常量＝2000（由导出的 `readBlackboardLine` 二分读出 ＋ 显式钉 2000）· `②` 夹具自证（种子行真落盘）· `③` 干净输入**恰 2000 收**（回执两个数字都是上限本身）· `④` **2001 拒**且**盘上什么都没写**、拒绝文案里的数字是 2000 | 新增 4 条 |
 | **U2** | `批 F · U2 ①` 639 码点历史失败样本**被接受**且**逐字节**落在盘上（含前置自证：长度确实是 639、确实超过旧上限 500）· `②` 读面**逐字**带回（含末尾） | 新增 2 条 |
 | **U3** | `批 F · U3 ①` 工具 `description` / `②` `line` 参数说明 / `③` `discipline` 说明（＋ `file` 枚举说明）**不含「500」含「2000」** · `④` `README.md` 不再有旧说法 | 新增 4 条 |
-| **U4** | `批 F · U4` **9 个原名锚仍可 grep 到**（探针由两半 `join` 而成 ⇒ 不自我满足） | 新增 1 条 |
+| **U4** | `批 F · U4` **8 个原名锚仍可 grep 到**（探针由两半 `join` 而成 ⇒ 不自我满足；锚标记另计一条在场性检查，测试自己的注释声明它**不算**原名锚） | 新增 1 条。★ 交付评审 #2 更正：原写「9 个」—— shipped 断言渲染的是 `${bfAnchorNeedles.length}` = **8** |
 | **U7** | `批 F · U7` 零污染对照：≤ 旧上限的干净短行 ⇒ 写入路径**逐字节未变** | 新增 1 条 |
 | **U5** | `批 F · U5 ①` 显示宽度＝300 · `②` 前置自证（**按 UTF-16 码元切会切出半截代理对** ⇒ 真能区分两种切法）· `③` 盘上一字不动 · `④` 读面一字不动 · `⑤` **状态卡第 ⑥ 段**为截断形态 · `⑥` **客户端面板 payload** 同形态 · `⑦` 两处**逐字同一串**且各自恰一行 · `⑧` 未超宽行逐字节原样 | 新增 8 条 |
 | **U6** | 真机复测 | **未做**（属父侧） |
@@ -3541,7 +3541,7 @@ $ node .investigations/token-sanitize-2026-10-11/scripts/scrub-sources.mjs .
 | --- | --- | --- | --- | --- |
 | 1 | `a decisions line past the 500-character cap is refused and nothing is written (§4.1)` | 同句 `500 → 2000` | 越界拒绝 ＋ 盘上零写 | `host-half.test.mjs:2471`（原名锚在 `:2463-2469`） |
 | 2 | `exactly 500 characters is accepted — the cap is inclusive` | 同句 `500 → 2000` | **上限含端点** | `:2473` |
-| 3 | `discipline content carries the same per-line 500-character cap` | 同句 `500 → 2000` | 三个写入分支**同一条**上限 | `:2501` 断言（原名锚在 `:2467`） |
+| 3 | `discipline content carries the same per-line 500-character cap` | 同句 `500 → 2000` | 三个写入分支**同一条**上限 | `:2502` 断言（原名锚在 `:2467`）。★ 交付评审 #5 更正：原写 `:2501`（那是夹具行） |
 | 4 | `§9 U4: a body past 500 code points is refused and nothing is written` | `§9 U4: a body past 2000 code points …`（**块锚 `§9 U4:` 一字未动**） | 同上（tasks 支） | `:2574`（原名锚 `:2568-2572`） |
 | 5 | `§9 U4: a body of exactly 500 code points is ACCEPTED — the bound is inclusive, not exclusive` | 同句 `500 → 2000` | 上限含端点（tasks 支） | `:2578` |
 | 6 | `§9 U14: the {decisions,discipline} success text is BYTE-IDENTICAL to the pre-batch copy`（期望串里的 `单行上限 500 字符`） | 断言名**一字未改**，期望串内那个数字 `500 → 2000` | **回执文案的形状**逐字不变（只换了那个随常量走的数字） | `:2778` / `:2790` 附近（原名锚 `:2779-2788`） |
@@ -3579,8 +3579,25 @@ $ node host-half.test.mjs          # 期望：ALL PASS / assertion total: 1570 (
 $ node client-half.test.mjs        # 期望：ALL PASS / assertion total: 310 (failed: 0)（本批未触碰客户端半边）
 ```
 
-**回填位**：`node host-half.test.mjs` ⇒ ____________（宿主填）；输出原文贴在这里即与 README 徽章 `:7`、
-稳定性行 `:26`、当前读数行 `:1253` 三处（现均为 `1570 + 310`）对账。
+**回填位**（★ 交付评审 #4：已由**宿主实测回填**，2026-10-11）：
+
+```
+$ node host-half.test.mjs
+ALL PASS
+assertion total: 1570 (failed: 0)          (exit 0)
+
+$ node client-half.test.mjs
+ALL PASS
+assertion total: 310 (failed: 0)           (exit 0)
+
+$ node .investigations/token-sanitize-2026-10-11/scripts/scrub-sources.mjs .
+扫了 81 个文件；写死原串的行 0 处；（体检模式，零写入）
+
+$ node .investigations/eng-tooling/scripts/balance-scan.mjs host-half.test.mjs
+✓ 括号与引号全部配平（未发现语法类不平衡）
+```
+
+⇒ 与 README 徽章 `:7`、稳定性行 `:26`、当前读数行 `:1253` 三处（现均为 `1570 + 310`）**对账一致**。
 
 ### 六、交付报告（阶段状态 · 逐条署名 · 全库 `500` 逐处清单 · 纪律声明）
 
@@ -3606,9 +3623,9 @@ $ node client-half.test.mjs        # 期望：ALL PASS / assertion total: 310 (f
 | U1 | `批 F · U1 ①`(`:12012`) · `②`(`:12015`) · `③`(`:12021`) · `④`(`:12027`) | ✅ |
 | U2 | `批 F · U2 ①`(`:12044`) · `②`(`:12049`) | ✅ |
 | U3 | `批 F · U3 ①`(`:12057`) · `②`(`:12059`) · `③`(`:12061`) · `④`(`:12063`) | ✅ |
-| U4 | `批 F · U4`(`:12083`，探针 `:12072-12081`) | ✅ |
-| U5 | `批 F · U5 ①`(`:12122`) · `②`(`:12124`) · `③`(`:12129`) · `④`(`:12132`) · `⑤`(`:12134`) · `⑥`(`:12137`) · `⑦`(`:12140`) · `⑧`(`:12144`) | ✅ |
-| U7 | `批 F · U7`(`:12091`) | ✅ |
+| U4 | `批 F · U4`(`:12108`，探针块 `:12082-12107`) | ✅ |
+| U5 | `批 F · U5 ①`(`:12147`) · `②`(`:12149`) · `③`(`:12154`) · `④`(`:12157`) · `⑤`(`:12159`) · `⑥`(`:12162`) · `⑦`(`:12165`) · `⑧`(`:12169`) | ✅ |
+| U7 | `批 F · U7`(`:12116`) | ✅ |
 
 **全库 `500` 逐处清单**（行号 as-of 本次落码；「改前行号」= 本侧编辑**之前**实测到的命中行）
 
