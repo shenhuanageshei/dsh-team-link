@@ -130,15 +130,23 @@ flowchart LR
 | **FR-3** | **跨会话投递正文**：`team_link_send` 组装的 banner 与正文过消毒 | `lib/index.js` 的 send 组装点 | U3 |
 | **FR-4** | **提示词与摘要面**：`renderRoleText`（`:3294`）· `renderResourceContext`（`:3347`）· `renderResourceLine`（`:3210`）· `tickMessage`（`:2642`）· `renderWatchdogDigest`（`:2726`）· `watchdogLines`（`:4393`）六个渲染函数出口过消毒 | 同上 | U4 |
 | **FR-5** | **黑板落盘前消毒**：`team_link_team_append` 写入 decisions / tasks / discipline 之前过消毒 ⇒ **盘上永不出现** | `lib/index.js:5967` 起的 append 路径 | U1 |
-| **FR-6** | **文档与变更史**：README / CHANGELOG / 本档 + 需求档 / 验证账本；并在 `AGENTS.md` **新增一条纪律**：源码与文档里**不得逐字写出该 token**，构造它必须用码点（父侧 2026-10-11 因逐字写它自伤两次） | 同名五档 | NFR-4 / U8 |
+| **FR-6** | **文档与变更史**（评审 🔵#7 修订：清单**六处**，与「六档」同数）：① README ② CHANGELOG ③ 本档 ④ 需求档 ⑤ 验证账本 ⑥ **`AGENTS.md` 新增一条纪律**（源码与文档里**不得逐字写出该 token**，构造它必须用码点） | 六处（同上） | NFR-4 / U8 |
+| **FR-7** | **deep-link 快照出口**（评审 🟡#3 补入）：本插件把用户粘贴的 `dsh://session/<id>` 内容**注入收件人上下文**（`registerDeepLinks`，`lib/index.js:360` 起）⇒ 源会话被污染时快照会搬运 token。**纳入消毒面** | `registerDeepLinks` 的快照组装点 | U10 |
+
+> ★ **行号 as-of（评审 🔵#9）**：本档引用的 `lib/index.js:NNN` 行号以 **commit `2c76002`**（2026-10-11）为 as-of。
+> 实施前 `eng_coder` 应**按符号名定位**（`wellFormed` / `wellFormedContent` / `wellFormedText` / `renderRoleText` / `renderResourceContext` /
+> `renderResourceLine` / `tickMessage` / `renderWatchdogDigest` / `watchdogLines` / `registerDeepLinks`），**行号只作线索**；
+> 若行号与符号对不上，**以符号为准**并在交付报告里记一句。
 
 ## §6 机制伪代码（签名 + 前置 / 后置）
 
 ```js
 // §6.1 ★ 纪律：原串绝不逐字出现 —— 用码点拼。
+// ★ 评审 🟡#1 修订：**包裹结构本身即可命中**（前导 `<`/`</` 是**可选前缀**，不是必需）——
+//   原写法 `</?…` 把 `<` 写成了必需，会漏掉「无前缀的裸包裹」（§2.3 形态表里那 40 例就是裸包裹）。
 const FULLWIDTH_BAR = "\uFF5C";                    // 全角竖线（不是 ASCII 的 |）
 const WRAP = FULLWIDTH_BAR + FULLWIDTH_BAR;        // 包裹结构的两侧
-const FRAMING_RE = new RegExp(`</?${WRAP}[A-Za-z_]{0,20}${WRAP}`, "gu");
+const FRAMING_RE = new RegExp(`(?:</?)?${WRAP}[A-Za-z_]{0,20}${WRAP}`, "gu");
 const PLACEHOLDER = "[framing-token-removed]";
 
 /** §6.2 消毒。前置：text 可为任意值。后置：返回 { text, removed }。
@@ -162,6 +170,16 @@ function wellFormed(value) { … const s = stripFramingTokens(value); … }   //
 /** §6.4 黑板落盘（FR-5）。前置：line 已过既有校验。后置：**写盘的那一份**已消毒。 */
 const clean = stripFramingTokens(line);
 await appendLine(file, clean.text);            // 注意：写干净的那份；回执里如实报 clean.removed
+
+/** §6.5 ★ 替换处数的**通道**与**注入缝**（评审 🟡#2 修订）。
+ *  · 通道：一个**每次工具调用重置**的累加器（挂在工具执行上下文上，不是模块级全局 —— 并发安全）。
+ *    `wellFormed*` 深度调用点的签名保持不变，它们只把 `removed` 交给**同一个执行上下文**；
+ *    工具回执组装时读一次累加器：**> 0 才**追加一句读数（= 0 时回执逐字与改前相同，U5）。
+ *    `wellFormed*` 在一次结果里可能跑多次 ⇒ 累加器**累加**，不是覆盖。
+ *  · 注入缝：模块内保留一个可替换引用 `let stripImpl = stripFramingTokens;`，
+ *    `__testing.setStripImpl(fn)` 供 U7 塞入"必抛"的桩；生产路径不暴露这个开关。 */
+const removedCounter = ctx.execution?.removedCounter ?? { n: 0 };   // 每次工具调用重置
+function noteRemoved(removed) { removedCounter.n += removed; }
 ```
 
 ## §7 状态与 schema
@@ -172,7 +190,7 @@ await appendLine(file, clean.text);            // 注意：写干净的那份；
 | 新增进程内状态 | — | **无**（纯函数） |
 | 新增导出面 | — | `stripFramingTokens` 挂到 `__testing` 供判据直调 |
 
-## §8 防偏离（怎么被机械验证） | 落点
+## §8 防偏离（怎么被机械验证）
 
 | # | 判据 | 红相构造 | 落点 |
 | --- | --- | --- | --- |
@@ -183,8 +201,10 @@ await appendLine(file, clean.text);            // 注意：写干净的那份；
 | **U5** | **不静默**：有替换 ⇒ 回执含替换处数；**无替换 ⇒ 回执逐字与改前相同**（不刷噪音） | 无条件追加那句话 ⇒ 无替换时也变 ⇒ 红 | `host-half.test.mjs` |
 | **U6** | **零污染对照**：夹具**不含** token 时，所有出口输出与改前**逐字节相同** | 消毒误伤普通文本 ⇒ 红 | `host-half.test.mjs`（改前快照对照） |
 | **U7** | **fail-open**：令消毒内部抛错（桩）⇒ 工具**照常成功**、返回原文本 | rethrow ⇒ 工具失败 ⇒ 红 | `host-half.test.mjs` |
-| **U8** | **静态零残留**：用码点拼出的匹配式扫 `lib/`、`host-half.test.mjs`、`docs/*.md` ⇒ **0 命中** | 谁把原串写回源码/文档 ⇒ 红 | 交付报告须贴扫描命令与输出 |
+| **U8** | **静态零残留**（评审 🟡#4 修订：扫描面**放宽**到 FR-6 触及的**每一个**文件 ＋ 两个测试套件 ＋ 取证目录）：用码点拼出的匹配式扫 `lib/`、`host-half.test.mjs`、`client-half.test.mjs`、`docs/*.md`、**根 `README.md` / `CHANGELOG.md` / `AGENTS.md`**、`.investigations/**/*.{mjs,js,md}` ⇒ **0 命中** | 谁把原串写回源码/文档（哪怕是在写 FR-6 的文档时顺手写进去的）⇒ 红 | 交付报告须贴扫描命令与输出 |
 | **U9** | **真机可证伪**：在真实会话里让一条含毒文本经 `team_link_team_append` 落盘 ⇒ 盘上无 token；再 `team_read` ⇒ 回执报数 | 任一不成立 ⇒ 本方案证伪 | 真机（父侧） |
+| **U10** | **deep-link 快照出口**（评审 🟡#3 补入，覆盖 FR-7）：令源会话内容含毒 ⇒ 粘贴 `dsh://session/<id>` 后注入的**快照文本**不含 token | 不挂 FR-7 ⇒ 红 | `host-half.test.mjs` |
+| **U11** | **裸包裹也命中**（评审 🟡#1 补入）：夹具**必须**含一份**无 `<` 前缀**的裸包裹样本（§2.3 那 40 例的形态），断言被替换 —— 防止夹具全是从 §2.2 那一种形态克隆来的，把 `</?` 这类写法的缺陷**遮蔽掉** | 正则写成 `</?` ⇒ 裸包裹漏过 ⇒ 红 | `host-half.test.mjs` |
 
 ## §9 边界
 
@@ -197,3 +217,5 @@ await appendLine(file, clean.text);            // 注意：写干净的那份；
 | **失败方向** | **fail-open**（NFR-3）：消毒永远不能让工具调用失败 |
 | **历史上已落盘的 token** | **不追溯**（NF-4）：只保证新写入与读出干净；旧账要清需另立一次人工动作 |
 | **占位符本身** | 纯 ASCII、与原 token 无关 ⇒ 不会被解析器二次识别（NF-5） |
+| **★ 入口面的范围（评审 🔵#6）** | **入口消毒只覆盖黑板**（FR-5）。其它**模型可写的持久化字段**（roster 的角色备注、`recoveries` 的 note、团队名）理论上仍可能把 token 落到盘上 —— **本批不拦**，因为它们的**读回路**已被 FR-2 覆盖（读出来时会被消毒）⇒ **传播环仍然断**。⇒ **「盘上永不出现」这句话只是对黑板成立**，不得外推 |
+| **★ 与 deep-link 的边界** | FR-7 覆盖的是「本插件注入他人内容」这一条出口；**宿主自己**把会话内容喂进上下文（如用户手动粘贴文本）不在本插件可及范围 ⇒ 归入给平台侧的观测报告（NF-1） |
