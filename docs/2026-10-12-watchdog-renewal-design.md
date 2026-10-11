@@ -83,7 +83,7 @@ sequenceDiagram
 
 **非目标**（本批明确不做）：
 1. 不改 TTL 常量（丙案已否决）；
-2. 不改 `arm-team` 的既有语义；
+2. 不改 `arm-team` 的**入口语义**（它仍是显式入口、仍幂等）；但 **FR-R2 让 ensure 的「存在」不再包含已过期行** ⇒ 经 ensure 的 `arm-team` 会**重建**过期行 —— 这是本批的**有意行为**（★ 评审第 3 轮 🟡#13 的措辞更正：原写「不改 `arm-team` 的既有语义」，与 FR-R2 对 ensure 谓词的改动相抵）；
 3. 不给 `manual` 注册续期（人工 TTL 是用户的意志）；
 4. 不给 `agent-team` 档的团队设门（与现状同级；设门会让 ensure 与续期两条路径语义分叉）；
 5. 不做「注册熄灭时的主动告警」（US-G2 的完整形态）；
@@ -107,7 +107,7 @@ sequenceDiagram
 | FR | 交付单元 | 落点（as-of 工作树） | 验收 |
 | --- | --- | --- | --- |
 | **FR-R1** | **续期**：`patrolOne` 内、**到期门之前**、窗口内、名册门通过 ⇒ 走 `planAutoWatchdog` 的 refresh 分支（保留 `id` / `createdAt`，**`targets` 按名册重算**，写 `expiresAt = now + WATCHDOG_DEFAULT_TTL_HOURS` 与 `renewedAt = now`）⇒ 单笔 `policy.update` ⇒ **`rearm()`**。判定用**本条目**、返回即止（**不做**外层预扫）。**名册门与 ensure 的谓词抽成同一个共享 helper**（评审 🟡#6：复制版会单边漂移） | `patrolOne`（`:3085` 起）· 到期门 `:3086-3089` 之前 | U1 / U2 / U3 / U4 / U9 |
-| **FR-R2** | **乙′**：`ensureTeamAutoWatchdogs` 的 `existing` 查找加「未过期」谓词 ⇒ 过期行落到 `armTeamWatchdog` ⇒ 命中 refresh 分支（同 id 原地刷新 + 挂表）。★ **该分支同批改成与 FR-R1 同一字段形状**（评审第 2 轮 🔴#1）：`planAutoWatchdog` 的 refresh 分支（`:2573-2575`）今天会把 `createdAt` 重写成 now、且不写 `renewedAt`——而 §7 又声称 R2 是这两者的写者 ⇒ **同一机制两种说法**。裁定：**保留原 `createdAt`、写 `renewedAt`**（与 R1 逐字同形）。**改动零风险**：该分支今天**没有调用方**（ensure 的 `:2614` `continue` 挡住了它，`:2573-2575` 是死代码） | `:2612-2613` + `:2573-2575` | U5 / U9 |
+| **FR-R2** | **乙′**：`ensureTeamAutoWatchdogs` 的 `existing` 查找加「未过期」谓词 ⇒ 过期行落到 `armTeamWatchdog` ⇒ 命中 refresh 分支（同 id 原地刷新 + 挂表）。★ **该分支同批改成与 FR-R1 同一字段形状**（评审第 2 轮 🔴#1）：`planAutoWatchdog` 的 refresh 分支（`:2573-2575`）今天会把 `createdAt` 重写成 now、且不写 `renewedAt`——而 §7 又声称 R2 是这两者的写者 ⇒ **同一机制两种说法**。裁定：**保留原 `createdAt`、写 `renewedAt`**（与 R1 逐字同形，重算 `targets`）。★ **评审第 3 轮 🟡#12 更正**：本行原写「该分支今天是死代码、改动零风险」——**不准确**。它今天**有活调用方**：`armTeamWatchdog` 消费它（`lib/index.js:2716-2718` 的 `planned.created ? … : current.map(…)`），而 `/team_session` 建队路径（`:9959`）调 `armTeamWatchdog` 时**没有 `existing` 守卫** ⇒ **同一个队 + 同一个协调者会话重建时会命中 refresh 分支**。⇒ 这次字段形状改动**也会改变那条路径**（§7 与 U5 已按此扩展） | `:2612-2613` + `:2573-2575` + `/team_session` 路径 `:9959` | U5 / U9 |
 | **FR-R3** | **运行期复活**：在 `patrol` 的**循环体末尾**去抖地（60s，**进程级**时间戳，仿 `runRotationSweep` `:3150`；**不 await 在 tick 的关键路径上**，失败只留 warn）周期调用现有 `ensureTeamAutoWatchdogs` —— 除 FR-R2 那一个谓词外，其语义**逐字不变**。★ **去抖时钟必须可注入**（与 `patrol({ now })` 用**同一注入缝**）—— 否则判据只能靠墙钟真等 60s（评审第 2 轮 🔵#9） | `patrol`（`:3127` 一侧）循环尾 | U6 / U11 |
 | **FR-R4** | **留痕可核**：`renewedAt` 落行字段 + **归一化白名单同批加键** + 状态卡/`watch list` 渲染「上次续期 …」 | 归一化 `watchdogList`（`:1228-1251`）· 渲染 `watchdogLines`（`:4551` 一侧） | U7 |
 | **FR-R5** | **文档同批改准**：`markWatcherDead` 的注释口径（`:2995-2998`：「保留至 TTL」→「保留至**名册有效期内**；名册失效时由 TTL 收尸」）· 摘要脚注（`:2875-2877`）与 `clear` 文案（`:13094`）若与新行为不符则同改 · **四档逐一点名**（★ 评审第 2 轮 🟡#7）：`README.md`（看门狗 TTL 一节）· `CHANGELOG.md`（本批条目）· `docs/verification-log.md`（只追加本批小节）· **本批两份档自身**（需求/设计）—— 另按 D1「建档者随建随登」把**两份新档与 consult minutes 登记进文档地图**（★ 评审 🔵#11） | 前述注释行 · 四档 | **grep 可核**：注释新口径在场、**四档各自的条目串在场**（评审 🟡#4：原格错挂到 U8） |
@@ -169,7 +169,7 @@ async function renewAutoRowIfStillValid(entry, now) {
 | **U2** | **四态负向**（不续，照旧到期被清）：团队不在名册 · watcher 非现任 · 协调者空缺 · 零可盯成员 | 去掉任一门 ⇒ 该态被续 ⇒ 红 | 同上 |
 | **U3** | **写频**：窗口内连巡逻两次 ⇒ 第二次**零** `policy.update`（防 churn 回潮） | 把窗口判定写错（如无条件续）⇒ 第二次也写 ⇒ 红 | 同上 |
 | **U4** | **清扫链不卡死**：混合「有效但过期」与「该合法死掉」的过期行 ⇒ 续有效的、删无效的，链**走到空** | 去掉续期后的 `rearm()` ⇒ 链断、行滞留 ⇒ 红 | 同上 |
-| **U5** | **FR-R2 冷启动（字段形状须与 R1 同形 —— ★ 评审第 2 轮 🔴#1）**：attach 时行**已过期**且名册仍有效 ⇒ 同 `id` 原地刷新并**挂上定时器**（不是被当成 `present` 后清扫掉），且 **`createdAt` 保留原值、`renewedAt` 已写、`targets` 按名册重导出** | 去掉「未过期」谓词 ⇒ 报 present 后被清 ⇒ 红；refresh 分支仍重写 `createdAt` 或不写 `renewedAt` ⇒ 红 | 同上 |
+| **U5** | **FR-R2 冷启动（字段形状须与 R1 同形 —— ★ 评审第 2 轮 🔴#1；含第三轮 🟡#12 那条活调用方路径）**：① attach 时行**已过期**且名册仍有效 ⇒ 同 `id` 原地刷新并**挂上定时器**（不是被当成 `present` 后清扫掉），且 **`createdAt` 保留原值、`renewedAt` 已写、`targets` 按名册重导出**；② **同一队 + 同一协调者会话再次 `/team_session` 建队**（走 `:9959` 那条**无 existing 守卫**的路径）⇒ 命中 refresh 分支时字段形状**同样**是「保 `createdAt` / 写 `renewedAt`」 | 去掉「未过期」谓词 ⇒ 报 present 后被清 ⇒ 红；refresh 分支仍重写 `createdAt` 或不写 `renewedAt` ⇒ 红（①② 两条各自红） | 同上 |
 | **U6** | **FR-R3 复活**：名册有效但行**已被清扫** ⇒ 去抖窗口后的周期 ensure 重铸一条 | 撤掉周期 ensure ⇒ 永不重建 ⇒ 红 | 同上 |
 | **U7** | **留痕可核**：`renewedAt` 出现在 `watch list` 与状态卡看门狗段的渲染文本里；且**归一化后仍在**（不丢字段） | 不把键加进归一化白名单 ⇒ 渲染里看不到 ⇒ 红 | 同上 |
 | **U8** | **不回归**：manual 行到期**逐字节旧行为**；既有「过期行不挂定时器」断言（`:3181-3193` 一族）对**无效/手工**语义仍成立 | 误伤 manual ⇒ 红 | 同上 |
