@@ -13026,7 +13026,7 @@ check("批 H · NF-H5 零新依赖（红相＝本批新增任何 import ⇒ 本�
 // ===========================================================================
 // 批 I · 屏蔽的作用域（block scope）
 // 归属：设计档 docs/2026-10-12-block-scope-design.md（§4 决策 D1–D8 · §5 FR-I1…FR-I6 ·
-// §6 伪代码 · §7 schema · §8 判据 U1–U19 · §9 边界 · §10 实施注意）；
+// §6 伪代码 · §7 schema · §8 判据 U1–U20（U20 ＝ 用户 2026-10-12 追加项 D3）· §9 边界 · §10 实施注意）；
 // 需求档 docs/2026-10-12-block-scope-requirements.md（§二 US-I1…US-I4 · §三 NF-I1…NF-I6）。
 //
 // 本块自持的口径：
@@ -13255,6 +13255,31 @@ check("批 I · U16 单条畸形条目（红相①＝不校验 `by` 就收下 �
 	biBadView.blocks.length === 1 && biBadView.blocks[0].a === BI_SELF && biBadView.blocks[0].b === BI_PEER && biBadView.blocks[0].by === BI_PEER
 		&& __testing.isBlocked(biBadView, BI_SELF, BI_THIRD).blocked === false
 		&& __testing.isBlocked(biBadView, BI_SELF, BI_PEER).blocked === true);
+
+// --- U20: `by` 必须是这一对里的某一方（`by ∉ {a,b}` 的条目在归一化时丢弃） ----------
+const BI_BY_THIRD = "session-worker-d";  // D：`by` 落在 `a`/`b` **之外**的第三人（只出现在那一条坏条目里）
+const biByThird = biBlockEnv({
+	blocks: [
+		// 坏的那一条**排在前面** —— 丢弃它不能占去重位，也不能动到后面那条合法的。
+		{ a: BI_SELF, b: BI_THIRD, by: BI_BY_THIRD },
+		{ a: BI_SELF, b: BI_PEER, by: BI_PEER, since: "2026-10-12T00:00:00.000Z" },
+	],
+});
+const biByThirdView = biByThird.view();
+const biByThirdList = await biByThird.blockTool.execute({ action: "list" }, execFor(biByThird.senderAgent));
+// ④ 负相自证的镜像夹具：**同一条 `a`/`b`**，只把 `by` 换成这一对里的合法一方。
+const biByLegal = biBlockEnv({ blocks: [{ a: BI_SELF, b: BI_THIRD, by: BI_THIRD }] });
+const biByLegalView = biByLegal.view();
+check("批 I · U20 `by ∉ {a,b}` 的条目被归一化丢弃（红相＝归一化收下 `by` 落在 a/b 之外的条目 ⇒ ① 那条死条目留在表里、③ A↔C 被误挡、`list` 里多出一条谁都解不开的条目 ⇒ 本条红）: ① 那一条**被丢弃**（表里只剩一条）；② 同一份输入里**其余条目逐字节原样保留**（合法那条的 a/b/by/since 一个字节没动）；③ 它**不影响任何判定**（两个方向都不挡那个 sender，`list` 面里也不出现它）；④ **负相自证**：同一条 a/b 只把 `by` 换成合法一方 ⇒ **收下且判定命中**（证明校验的是 `by`、不是这一对 —— ①③ 既不是恒真也不是恒假）",
+	biByThirdView.blocks.length === 1
+		&& sameJson(biByThirdView.blocks, [{ a: BI_SELF, b: BI_PEER, by: BI_PEER, since: "2026-10-12T00:00:00.000Z" }])
+		&& __testing.isBlocked(biByThirdView, BI_SELF, BI_THIRD).blocked === false
+		&& __testing.isBlocked(biByThirdView, BI_THIRD, BI_SELF).blocked === false
+		&& BI_BY_THIRD !== BI_SELF && BI_BY_THIRD !== BI_THIRD
+		&& biByThirdList.includes("配对屏蔽 1 条") && !biByThirdList.includes(BI_BY_THIRD) && !biByThirdList.includes(BI_THIRD)
+		&& biByLegalView.blocks.length === 1 && sameJson(biByLegalView.blocks, [{ a: BI_SELF, b: BI_THIRD, by: BI_THIRD, since: "" }])
+		&& __testing.isBlocked(biByLegalView, BI_SELF, BI_THIRD).blocked === true
+		&& __testing.isBlocked(biByLegalView, BI_THIRD, BI_SELF).blocked === true);
 
 // --- U19: 落点不变量（三个写路径各恰一笔、补丁单键、无直接文件写） ------------------
 const biW = biBlockEnv({ askScript: ["发送", "拒绝并屏蔽该会话"], blockedSenders: ["session-blocked-one"] });
