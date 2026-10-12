@@ -8407,9 +8407,13 @@ check("B/U11b 切回不探测: 切**回** sessions **不探测**宿主（回默�
 	smBackOut.includes("已切换形态：团队 " + SM_TEAM + " —— agent-team → sessions") && smBack.row().mode === "sessions" && smBack.row().leadSessionId === "" && /形态 → sessions$/mu.test((await smDecisionsText()).trim()));
 
 // --- 宣传面=实现面: 第五个动词进了工具面 --------------------------------------
+// ★ 批 H（2026-10-12 删团队）**同批改写本条的期望串**：这一条锁的是 roster 的**共享** `action`
+// 闭集，而批 H 往它的末位追加了第六个动词 `delete`（`lib/index.js` 的 `enum`）。除期望串多一个值
+// 之外**逐字未动**（`description.includes("set-mode")` 与 `mode` / `leadSessionId` 两半原样）——
+// 这是闭集锁必须跟着枚举走，**不是** set-mode 的语义变更（U8 的另一半钉住语义没动）。
 const smTool = mdEnv.tool("team_link_roster");
-check("B/宣传面=实现面: roster 的 action 闭集与描述都写上了第五个动词 set-mode，且参数面给出 mode / leadSessionId",
-	smTool.parameters.properties.action.enum.join(",") === "get,upsert-team,set-role,retire,set-mode" && smTool.description.includes("set-mode") && smTool.parameters.properties.mode !== undefined && smTool.parameters.properties.leadSessionId !== undefined);
+check("B/宣传面=实现面: roster 的 action 闭集与描述都写上了第五个动词 set-mode，且参数面给出 mode / leadSessionId（★ 批 H 同批改写：闭集末位加第六个动词 delete）",
+	smTool.parameters.properties.action.enum.join(",") === "get,upsert-team,set-role,retire,set-mode,delete" && smTool.description.includes("set-mode") && smTool.parameters.properties.mode !== undefined && smTool.parameters.properties.leadSessionId !== undefined);
 
 
 
@@ -12681,6 +12685,334 @@ check("批 G · U11 换届（红相＝撤掉周期 ensure ⇒ 新协调者永远
 // `expiresAt` 走删除门，**把刚续的行删掉**。判据：一次**全量**巡逻之后，那条刚被续的行**仍在**。
 check("批 G · U5/U10 第四面 不做外层预扫（快照陷阱）: 一次**全量**巡逻（不带 `id`）之后，窗口内那条刚被续的行**仍在表里**且 `expiresAt` 是**续期后**的值 —— 它没有在同一个循环里被自己那份旧快照走删除门删掉",
 	rgLiveAfter !== null && b5Watchdogs(rgLiveEnv).some((entry) => entry.id === rgLiveAfter.id && entry.expiresAt === RG_NOW + 12 * 3600_000));
+
+// ---------------------------------------------------------------------------
+// 批 H（删团队）：`team_link_roster action=delete` —— 判据 U1…U11（＋ NF-H5）
+// 标识符统一 `Dh` 中缀（批 E 的教训：顶格声明重名 = 整档解析失败）。
+// 设计档：docs/2026-10-12-team-delete-design.md §5 FR-H1…H4 · §6 · §8
+// ---------------------------------------------------------------------------
+const h8DhRoot = path.join(TEST_ROOT, "team-h");
+const h8DhWs = path.join(h8DhRoot, "ws");              // 一般夹具的 workspace（其下**没有** team/<队名>/）
+const h8DhOtherWs = path.join(h8DhRoot, "ws-other");   // U3：另一个团队自己的 workspace
+const h8DhTeam = "dh-night";
+const h8DhOther = "dh-other";
+const h8DhNow = 1_700_000_000_000;                     // 夹具时钟（不依赖墙钟）
+rmSync(h8DhRoot, { recursive: true, force: true });
+
+/** 一行名册：角色用 `__testing.roleRecord` 的**规范形状**、整行过 `normalizeTeams` ⇒ 写前 /
+ * 写后**逐字节**可比（量到的才是「谁动了谁的账」，不是「读时归一化补字段」）。
+ * `history` = 该角色版本史条数（U3/U9 的「连同历史一起消失」与报告里的条数都读它）。
+ * `legacy` = 第 2 条（即最老那条）版本史里的会话 id。★ 分歧修复轮 D0：它必须是**参数**，默认值
+ * `"dh-old-1"` 逐字不动。原先它对**每一行**都写死同一个 id，于是 U3 的「保留队」也带着被删队的标记，
+ * 而 U3 的 ④ 恰要求那个标记在保留下来的一行里**零残留** —— 期望与夹具自相矛盾，该子句**恒假**
+ * （不是实现缺陷：唯一能把它变绿的办法是去删**别的队**的历史，而那正是 NF-H1 禁止的误伤）。
+ * 保留队因此显式传自己的标记，默认值不动 ⇒ 其余 `h8DhRow()` 调用点逐字不受影响。 */
+function h8DhRow({ name = h8DhTeam, writer = "coordinator", current = "session-self", workspace = h8DhWs, history = 2, legacy = "dh-old-1" } = {}) {
+	const entries = [];
+	if (history >= 2) entries.push({ session: legacy, from: h8DhNow - 200, until: h8DhNow - 100 });
+	if (history >= 1) entries.push({ session: current ?? "dh-old-2", from: h8DhNow - 100, until: current === null ? h8DhNow - 50 : null });
+	return { name, createdAt: h8DhNow, workspace, policy: { writer }, roles: [__testing.roleRecord({ role: "coordinator", current, history: entries })] };
+}
+
+const h8DhRosterOf = (env) => env.tool("team_link_roster");
+/** Y7 纪律：本块的每一次被断言的工具调用都收成一个**字符串读数** —— 工具若抛错（参数校验 /
+ * 夹具脚本耗尽 / 意外的 TypeError），红相要报 FAIL，**不许把整轮打崩**（那样连 `assertion total`
+ * 都打印不出来，红相就说不清自己的规模）。`rejects` 是本文件既有的 Y7-safe 调用器。 */
+const h8DhOut = async (tool, args, exec) => String(await rejects(tool, args, exec));
+
+/** 本批的夹具工厂（既有 roster 夹具工厂 `teamEnv` + 两个本批要的稳定条件）：
+ *   ① 名册按 `normalizeTeams` 种下（逐字节可比）；
+ *   ② **先等 attach 后置链落定再取读数** —— 链尾的按队补挂（批 G）是 fire-and-forget，它那笔
+ *      异步的 watchdogs 写会混进「零写入」的读数窗口（批 G 的同款纪律）。 */
+async function h8DhEnvFor({ teams = [h8DhRow()], askScript = ["确认删除"], omitUserQuestions = false, selfCwd = h8DhWs } = {}) {
+	const env = teamEnv({ teams: __testing.normalizeTeams(teams), askScript, omitUserQuestions, selfCwd });
+	await waitForChain(env, 1);
+	return env;
+}
+
+/** 本批「零写入」的读数面：名册（teams）逐字节不变 ＋ **零笔写 teams 的 policy.update**。
+ * 只看 teams 这一路是刻意的：链尾 / 巡逻的 auto 补挂会异步写 watchdogs，拿总写次数当读数会假红。 */
+const h8DhTeamsPatchesSince = (env, since) => env.ns.updates.slice(since).filter((patch) => Object.hasOwn(patch, "teams"));
+const h8DhTeamsText = (env) => JSON.stringify(env.ns.data.teams);
+
+// --- U1: 动作进枚举（模型可见面同批改准） -------------------------------------
+const h8DhProbe = await h8DhEnvFor({ teams: [] });
+const h8DhRosterDef = h8DhRosterOf(h8DhProbe);
+check("批 H · U1 动作在枚举里（红相＝只改 execute 不改 enum ⇒ defineTool 的参数校验先把 delete 当非法值拒掉 ⇒ 红）: `action` 的 enum 逐字是六个值（五值原样、只追加 delete），参数说明与工具 description 也都写了它",
+	h8DhRosterDef.parameters.properties.action.enum.join(",") === "get,upsert-team,set-role,retire,set-mode,delete"
+		&& h8DhRosterDef.parameters.properties.action.description.includes("delete")
+		&& h8DhRosterDef.description.includes("delete"));
+const h8DhUnknownOut = await rejects(h8DhRosterDef, { action: "delete", team: "dh-nope" }, execFor(h8DhProbe.senderAgent));
+check("批 H · U1 delete 是**已知动作**（同一红相的另一半）: 它走进删除分支并如实报「不在名册里」，而不是被参数校验当非法枚举值抛 ToolArgsError、也没有落到「操作失败：action 必须是 …」那句兜底",
+	typeof h8DhUnknownOut === "string" && h8DhUnknownOut.includes("不在名册里") && !h8DhUnknownOut.includes("action 必须是"));
+
+// --- U2: 删除生效 + 恰好一笔写 -------------------------------------------------
+const h8DhDelEnv = await h8DhEnvFor();
+const h8DhDelSince = h8DhDelEnv.ns.updates.length;
+const h8DhDelOut = await h8DhOut(h8DhRosterOf(h8DhDelEnv), { action: "delete", team: h8DhTeam }, execFor(h8DhDelEnv.senderAgent));
+const h8DhDelWrites = h8DhTeamsPatchesSince(h8DhDelEnv, h8DhDelSince);
+const h8DhDelGet = await h8DhOut(h8DhRosterOf(h8DhDelEnv), { action: "get" }, execFor(h8DhDelEnv.senderAgent));
+check("批 H · U2 删除生效（红相＝去掉 policy.update ⇒ 行仍在 ⇒ 红）: 已确认 + 在册 ⇒ 存储视图与 `roster action=get` **两处**都读不到该队，且**恰好一笔**写 teams 的 policy.update（那份补丁只有 teams 一个键）",
+	h8DhDelOut.includes("已删除") && h8DhDelEnv.store().length === 0 && !h8DhDelGet.includes(h8DhTeam)
+		&& h8DhDelWrites.length === 1 && Object.keys(h8DhDelWrites[0]).join(",") === "teams");
+const h8DhDelDialog = h8DhDelEnv.uq.requests[0]?.questions?.[0];
+check("批 H · FR-H3 确认框内容（逐项写清；红相＝不弹框 / 只报队名不写清删什么 ⇒ 本条红）: 队名 · 会删什么（名册行 + 版本史条数）· **不会删**磁盘上的黑板目录（路径原样保留）· 不会改信任数据 · 不可逆；两个选项逐字是「确认删除 / 取消」，且对话框挂在调用方 agent 上",
+	h8DhDelDialog !== undefined && h8DhDelDialog.id === "team-delete-confirm" && h8DhDelDialog.header === `删除团队 ${h8DhTeam}`
+		&& h8DhDelDialog.question.includes(h8DhTeam) && h8DhDelDialog.detail.includes("会删：名册里这一行（含它自己的版本史 2 条）")
+		&& h8DhDelDialog.detail.includes("不会删：磁盘上的黑板目录（") && h8DhDelDialog.detail.includes("原样保留）")
+		&& h8DhDelDialog.detail.includes("不会改：pairs / trustedSenders / rememberTargets") && h8DhDelDialog.detail.includes("不可逆")
+		&& h8DhDelDialog.options.map((option) => option.label).join(",") === "确认删除,取消"
+		&& h8DhDelEnv.uq.requests[0].agent === h8DhDelEnv.senderAgent);
+
+// --- U3: 不误伤（逐字段比对） ---------------------------------------------------
+const h8DhKeepTeams = __testing.normalizeTeams([h8DhRow(), h8DhRow({ name: h8DhOther, workspace: h8DhOtherWs, legacy: "dh-other-old-1" })]);
+h8DhKeepTeams[0].roles.push(__testing.roleRecord({ role: "worker-a", current: "dh-worker" }));
+const h8DhKeepEnv = await h8DhEnvFor({ teams: h8DhKeepTeams });
+h8DhKeepEnv.ns.data.pairs = [{ a: "session-self", b: "session-target", createdAt: 7 }];
+h8DhKeepEnv.ns.data.trustedSenders = ["session-self"];
+h8DhKeepEnv.ns.data.rememberTargets = ["session-target", "session-other"];
+// ★ 分歧修复轮 D3（覆盖缺口）：NF-H1 原文只点名那四项，而块里那句「teams 之外一个字节没动」更宽。
+// 下面把 policy 的**其余每个键**都种成**非空 / 非默认**值，同一条逐字节比对才有内容可比 ——
+// 尤其是 `blockedSenders`（`lib/index.js:1150` 声明的第 5 个数组键）：空数组会让「未动」这句
+// 变成**空真**，所以这里种非空。`pendingCreates` / `sections`（批 3 新增的键）按同一条纪律一并纳入
+// （新键只要进了 `DEFAULT_POLICY` 就自动落在这条比对的射程里）。
+h8DhKeepEnv.ns.data.blockedSenders = ["session-blocked"];
+h8DhKeepEnv.ns.data.receiveMode = "accept";
+h8DhKeepEnv.ns.data.pendingCreates = [{ team: h8DhTeam, role: "worker-a", sessionId: "dh-pending", createdAt: h8DhNow, expiresAt: h8DhNow + 600_000, by: "session-self" }];
+h8DhKeepEnv.ns.data.sections = { role: false, resources: true };
+h8DhKeepEnv.ns.data.watchdogs = [{ id: "wd-dh-keep", team: null, watcherSession: "session-self", targets: ["session-target"], silentMinutes: 10, intervalMinutes: 5, createdAt: h8DhNow, expiresAt: h8DhNow + 12 * 3600_000, origin: __testing.WATCHDOG_ORIGIN_MANUAL }];
+const h8DhKeepSeed = structuredClone(h8DhKeepEnv.ns.data);
+const h8DhKeepSince = h8DhKeepEnv.ns.updates.length;
+const h8DhKeepOut = await h8DhOut(h8DhRosterOf(h8DhKeepEnv), { action: "delete", team: h8DhTeam }, execFor(h8DhKeepEnv.senderAgent));
+const h8DhKeepAfter = h8DhKeepEnv.ns.data;
+check("批 H · U3 不误伤（NF-H1，逐字段比对；红相＝顺手动了别的字段 / 误删别的团队行 ⇒ 红）: 被删队的行**连同它自己的版本史**一起消失（`dh-old-1` 与它的第二个角色在整个 teams 里零残留），其它团队行**逐字节**未动，watchdogs / pairs / trustedSenders / rememberTargets / **blockedSenders**（非空种子 ⇒ 不是空真）/ receiveMode / pendingCreates / sections **逐字节**未动，且只有一笔写",
+	h8DhKeepAfter.teams.length === 1 && h8DhKeepAfter.teams[0].name === h8DhOther
+		&& JSON.stringify(h8DhKeepAfter.teams) === JSON.stringify(h8DhKeepSeed.teams.filter((team) => team.name !== h8DhTeam))
+		&& !JSON.stringify(h8DhKeepAfter.teams).includes("dh-old-1") && !JSON.stringify(h8DhKeepAfter.teams).includes("dh-worker")
+		&& JSON.stringify(h8DhKeepAfter.watchdogs) === JSON.stringify(h8DhKeepSeed.watchdogs)
+		&& JSON.stringify(h8DhKeepAfter.pairs) === JSON.stringify(h8DhKeepSeed.pairs)
+		&& JSON.stringify(h8DhKeepAfter.trustedSenders) === JSON.stringify(h8DhKeepSeed.trustedSenders)
+		&& JSON.stringify(h8DhKeepAfter.rememberTargets) === JSON.stringify(h8DhKeepSeed.rememberTargets)
+		&& JSON.stringify(h8DhKeepAfter.blockedSenders) === JSON.stringify(h8DhKeepSeed.blockedSenders)
+		&& JSON.stringify(h8DhKeepAfter.receiveMode) === JSON.stringify(h8DhKeepSeed.receiveMode)
+		&& JSON.stringify(h8DhKeepAfter.pendingCreates) === JSON.stringify(h8DhKeepSeed.pendingCreates)
+		&& JSON.stringify(h8DhKeepAfter.sections) === JSON.stringify(h8DhKeepSeed.sections)
+		&& h8DhTeamsPatchesSince(h8DhKeepEnv, h8DhKeepSince).length === 1);
+check("批 H · U3 版本史条数如实（红相＝照 §6 伪代码字面写 `row.history?.length ?? 0` ⇒ 团队行根本没有 history 字段 ⇒ 恒报 0 条 ⇒ 本条红）: 报告与确认框报的都是**角色行上加总**的真实条数（角色 2 个 / 版本史 2 条）",
+	h8DhKeepOut.includes("角色 2 个 / 版本史共 2 条") && String(h8DhKeepEnv.uq.requests[0]?.questions?.[0]?.detail ?? "").includes("版本史 2 条"));
+
+// --- U4: 幂等 / 如实拒绝（列已知团队名） ----------------------------------------
+const h8DhMissEnv = await h8DhEnvFor();
+const h8DhMissSince = h8DhMissEnv.ns.updates.length;
+const h8DhMissText = h8DhTeamsText(h8DhMissEnv);
+const h8DhMissOut = await h8DhOut(h8DhRosterOf(h8DhMissEnv), { action: "delete", team: "dh-nope" }, execFor(h8DhMissEnv.senderAgent));
+check("批 H · U4 幂等 / 如实拒绝（NF-H3；红相＝静默成功 ⇒ 红）: 删一个不在册的名字 ⇒ **拒绝 + 零写入**，拒绝文案里**列出已知团队名**，且**连确认框都不弹**（存在性校验在任何副作用之前）",
+	h8DhMissOut.startsWith("删除失败：") && h8DhMissOut.includes("不在名册里") && h8DhMissOut.includes(h8DhTeam)
+		&& h8DhTeamsText(h8DhMissEnv) === h8DhMissText && h8DhTeamsPatchesSince(h8DhMissEnv, h8DhMissSince).length === 0 && h8DhMissEnv.uq.requests.length === 0);
+
+// --- U5: 确认门三态（D3，fail-closed 零写入） -----------------------------------
+const h8DhNoUqEnv = await h8DhEnvFor({ omitUserQuestions: true });
+const h8DhNoUqSince = h8DhNoUqEnv.ns.updates.length;
+const h8DhNoUqText = h8DhTeamsText(h8DhNoUqEnv);
+const h8DhNoUqOut = await h8DhOut(h8DhRosterOf(h8DhNoUqEnv), { action: "delete", team: h8DhTeam }, execFor(h8DhNoUqEnv.senderAgent));
+check("批 H · U5① 无确认服务 ⇒ fail-closed（红相＝去掉确认门 ⇒ 无服务时也照删 ⇒ 红）: 拒绝 + 名册逐字节不变 + **零笔**写 teams 的 policy.update（行仍在）",
+	h8DhNoUqOut.includes("确认服务（userQuestions）不可用") && h8DhNoUqOut.includes("未确认") && h8DhNoUqOut.includes("fail-closed")
+		&& h8DhTeamsText(h8DhNoUqEnv) === h8DhNoUqText && h8DhTeamsPatchesSince(h8DhNoUqEnv, h8DhNoUqSince).length === 0 && h8DhNoUqEnv.store().length === 1);
+
+const h8DhCancelEnv = await h8DhEnvFor({ askScript: ["取消"] });
+const h8DhCancelSince = h8DhCancelEnv.ns.updates.length;
+const h8DhCancelText = h8DhTeamsText(h8DhCancelEnv);
+const h8DhCancelOut = await h8DhOut(h8DhRosterOf(h8DhCancelEnv), { action: "delete", team: h8DhTeam }, execFor(h8DhCancelEnv.senderAgent));
+check("批 H · U5② 用户取消 ⇒ fail-closed 零写入（红相＝不读答案就删 ⇒ 红）: 拒绝文案点名「取消」，名册逐字节不变、零笔写 teams 的 update",
+	h8DhCancelOut.includes("未确认") && h8DhCancelOut.includes("取消") && h8DhCancelEnv.uq.requests.length === 1
+		&& h8DhTeamsText(h8DhCancelEnv) === h8DhCancelText && h8DhTeamsPatchesSince(h8DhCancelEnv, h8DhCancelSince).length === 0 && h8DhCancelEnv.store().length === 1);
+
+const h8DhTimeoutEnv = await h8DhEnvFor({ askScript: [] });
+h8DhTimeoutEnv.uq.script.push((request) => new Promise((_resolve, reject) => {
+	request.signal.addEventListener("abort", () => reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORTED" })));
+}));
+const h8DhTimeoutSince = h8DhTimeoutEnv.ns.updates.length;
+const h8DhTimeoutText = h8DhTeamsText(h8DhTimeoutEnv);
+const h8DhRealSetTimeout = globalThis.setTimeout;
+let h8DhTimeoutOut;
+globalThis.setTimeout = (fn, ms, ...rest) => {
+	if (!(typeof ms === "number" && ms >= 60000)) return h8DhRealSetTimeout(fn, ms, ...rest);
+	const timer = h8DhRealSetTimeout(fn, 0, ...rest);
+	timer.unref = () => timer;
+	return timer;
+};
+try {
+	h8DhTimeoutOut = await h8DhOut(h8DhRosterOf(h8DhTimeoutEnv), { action: "delete", team: h8DhTeam }, execFor(h8DhTimeoutEnv.senderAgent));
+} finally {
+	globalThis.setTimeout = h8DhRealSetTimeout;
+}
+check("批 H · U5③ 超时 ⇒ fail-closed 零写入（红相＝超时后自动删 ⇒ 红；与既有 recover / set-mode 的确认同规，刻意没有无人值守变体）: 拒绝文案如实说是超时，名册逐字节不变、零笔写 teams 的 update",
+	h8DhTimeoutOut.includes("未确认") && h8DhTimeoutOut.includes("分钟内未获确认") && h8DhTimeoutEnv.uq.requests.length === 1
+		&& h8DhTeamsText(h8DhTimeoutEnv) === h8DhTimeoutText && h8DhTeamsPatchesSince(h8DhTimeoutEnv, h8DhTimeoutSince).length === 0 && h8DhTimeoutEnv.store().length === 1);
+
+// --- U6: 不碰黑板（条目 / 字节 / mtime 全比对） ---------------------------------
+const h8DhTouchWs = path.join(h8DhRoot, "ws-files");
+const h8DhTouchDir = path.join(h8DhTouchWs, "team", h8DhTeam);
+mkdirSync(h8DhTouchDir, { recursive: true });
+writeFileSync(path.join(h8DhTouchDir, "tasks.md"), "t-1 | 2026-10-08 | session-x | plan | 真实团队的台账\n", "utf8");
+writeFileSync(path.join(h8DhTouchDir, "notes.md"), "不要删我\n", "utf8");
+/** 目录快照：**条目集 + 每个文件的 size / mtime / 内容 + 目录自己的 mtime**。失败（例如目录被判据的
+ * 红相删掉）如实返回一个哨兵串而**不抛** —— 红相要报 FAIL，不许把整轮打崩（Y7 纪律）。 */
+const h8DhDirSnapshot = async (dir) => {
+	try {
+		const rows = [];
+		for (const entry of readdirSync(dir).sort()) {
+			const info = await stat(path.join(dir, entry));
+			rows.push(`${entry}:${info.size}:${info.mtimeMs}:${await readFile(path.join(dir, entry), "utf8")}`);
+		}
+		return `${(await stat(dir)).mtimeMs}#${rows.join("|")}`;
+	} catch (error) {
+		return `⚠ 快照失败（${error?.code ?? error?.name ?? "?"}）`;
+	}
+};
+const h8DhTouchEnv = await h8DhEnvFor({ teams: [h8DhRow({ workspace: h8DhTouchWs })] });
+const h8DhTouchBefore = await h8DhDirSnapshot(h8DhTouchDir);
+const h8DhTouchOut = await h8DhOut(h8DhRosterOf(h8DhTouchEnv), { action: "delete", team: h8DhTeam }, execFor(h8DhTouchEnv.senderAgent));
+const h8DhTouchAfter = await h8DhDirSnapshot(h8DhTouchDir);
+check("批 H · U6 不碰黑板（NF-H2；红相＝顺手删目录 / 顺手重写 roster.md 镜像 ⇒ 红）: 删除后 `<ws>/team/<队名>/` **逐项逐字节不变**（条目集 · 每个文件的 size/mtime/内容 · 目录自己的 mtime），报告文本里**出现该目录路径**且如实说它**存在**、原样未动",
+	h8DhTouchOut.includes("已删除") && h8DhTouchAfter === h8DhTouchBefore
+		&& h8DhTouchOut.includes(h8DhTouchDir) && h8DhTouchOut.includes("存在（原样未动"));
+
+// --- U7: 文档面同批改准（FR-H5；grep 可核） -------------------------------------
+const h8DhReadmeText = await readFile(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
+const h8DhChangelogText = await readFile(fileURLToPath(new URL("./CHANGELOG.md", import.meta.url)), "utf8");
+const h8DhBacklogText = await readFile(fileURLToPath(new URL("./docs/backlog.md", import.meta.url)), "utf8");
+check("批 H · U7 文档同步（红相＝漏改任一处 ⇒ 本条红）: 工具 description 的枚举串含 delete（与 U1 同一处）· README 的 roster 动作清单含 `action=delete` · CHANGELOG 有本批的 `action=delete` 条目 · `docs/backlog.md` 的 B-1 标 ✅ 并仍指向本批两份档",
+	h8DhRosterDef.description.includes("delete") && h8DhRosterDef.parameters.properties.action.enum.includes("delete")
+		&& h8DhReadmeText.includes("action=delete") && h8DhChangelogText.includes("action=delete")
+		&& /B-1[^\n]*✅/u.test(h8DhBacklogText) && /B-1[^\n]*2026-10-12-team-delete-design\.md/u.test(h8DhBacklogText));
+
+// --- U8: 不回归（其它动作的 gate 逐字未动） -------------------------------------
+const h8DhGateEnv = await h8DhEnvFor();
+const h8DhGateSince = h8DhGateEnv.ns.updates.length;
+const h8DhGateForeign = execFor(h8DhGateEnv.targetAgent);
+const h8DhForeignSetRole = await h8DhOut(h8DhRosterOf(h8DhGateEnv), { action: "set-role", team: h8DhTeam, role: "coordinator", session: "session-target" }, h8DhGateForeign);
+const h8DhForeignRetire = await h8DhOut(h8DhRosterOf(h8DhGateEnv), { action: "retire", team: h8DhTeam, role: "coordinator" }, h8DhGateForeign);
+const h8DhForeignMode = await h8DhOut(h8DhRosterOf(h8DhGateEnv), { action: "set-mode", team: h8DhTeam, mode: "agent-team" }, h8DhGateForeign);
+const h8DhForeignUpsert = await h8DhOut(h8DhRosterOf(h8DhGateEnv), { action: "upsert-team", team: h8DhTeam }, h8DhGateForeign);
+check("批 H · U8 不回归 · 现任在册半边（红相＝顺手放宽 writer gate / 顺手改 retire 语义 ⇒ 红）: writer=coordinator ＋ 现任 session-self 下，**非现任**调用方对 set-role / set-mode / upsert-team 仍是同一句「只有现任协调者会话 session-self 可写」、retire 仍是「只有现任协调者会话 session-self 可以发起退役」，四笔**零写入**（名册逐字节未动）",
+	h8DhForeignSetRole.includes("只有现任协调者会话 session-self 可写")
+		&& h8DhForeignRetire.includes("只有现任协调者会话 session-self 可以发起退役")
+		&& h8DhForeignMode.includes("只有现任协调者会话 session-self 可写")
+		&& h8DhForeignUpsert.includes("只有现任协调者会话 session-self 可写")
+		&& h8DhTeamsPatchesSince(h8DhGateEnv, h8DhGateSince).length === 0
+		&& h8DhGateEnv.store().length === 1 && h8DhGateEnv.store()[0].roles[0].current === "session-self");
+const h8DhVacantGateEnv = await h8DhEnvFor({ teams: [h8DhRow({ current: null, history: 1 })] });
+const h8DhVacantSince = h8DhVacantGateEnv.ns.updates.length;
+const h8DhVacantCaller = execFor(h8DhVacantGateEnv.senderAgent);
+const h8DhVacantSetRole = await h8DhOut(h8DhRosterOf(h8DhVacantGateEnv), { action: "set-role", team: h8DhTeam, role: "coordinator", session: "session-self" }, h8DhVacantCaller);
+const h8DhVacantRetire = await h8DhOut(h8DhRosterOf(h8DhVacantGateEnv), { action: "retire", team: h8DhTeam, role: "coordinator" }, h8DhVacantCaller);
+const h8DhVacantMode = await h8DhOut(h8DhRosterOf(h8DhVacantGateEnv), { action: "set-mode", team: h8DhTeam, mode: "agent-team" }, h8DhVacantCaller);
+check("批 H · U8 不回归 · 空缺半边（同一红相）: coordinator 空缺时 set-role / retire / set-mode **逐字**仍是既有的「当前空缺 ⇒ 会话路径拒绝 / 请由用户经设置 UI」拒绝（豁免只给 delete），三笔零写入",
+	h8DhVacantSetRole.includes("当前空缺") && h8DhVacantSetRole.includes("设置 UI")
+		&& h8DhVacantRetire.includes("当前空缺") && h8DhVacantRetire.includes("设置 UI")
+		&& h8DhVacantMode.includes("当前空缺") && h8DhVacantMode.includes("设置 UI")
+		&& h8DhTeamsPatchesSince(h8DhVacantGateEnv, h8DhVacantSince).length === 0
+		&& h8DhVacantGateEnv.store().length === 1 && h8DhVacantGateEnv.store()[0].roles[0].current === null);
+
+// --- U9: ★ US-H2 钉死（本批存在的全部理由） -------------------------------------
+const h8DhUsH2Env = await h8DhEnvFor();
+const h8DhUsH2Out = await h8DhOut(h8DhRosterOf(h8DhUsH2Env), { action: "delete", team: h8DhTeam }, execFor(h8DhUsH2Env.targetAgent));
+check("批 H · U9 ★ US-H2 被钉死（红相＝不豁免 writer gate ⇒ 非现任调用方被拒 ⇒ 本条红）: `policy.writer=coordinator` ＋ 现任是 session-self，**非现任**的 session-target 也能把队删掉（豁免的正是这一档），且报告里没有半句 gate 拒绝",
+	h8DhUsH2Out.includes("已删除") && h8DhUsH2Env.store().length === 0
+		&& !h8DhUsH2Out.includes("只有现任协调者会话") && !h8DhUsH2Out.includes("写操作被拒绝"));
+const h8DhVacantDelEnv = await h8DhEnvFor({ teams: [h8DhRow({ current: null, history: 1 })] });
+const h8DhVacantDelOut = await h8DhOut(h8DhRosterOf(h8DhVacantDelEnv), { action: "delete", team: h8DhTeam }, execFor(h8DhVacantDelEnv.senderAgent));
+check("批 H · U9 ★ US-H2 被钉死 · 已退役（vacant）那半边 —— 真机两例（`u9-verify-1012` / `u9b-verify-1012`）的形状: 没有现任协调者的队照删不误，报告如实报出它的版本史条数（1 条），且不再出现 gate 的空缺拒绝",
+	h8DhVacantDelOut.includes("已删除") && h8DhVacantDelOut.includes("版本史共 1 条")
+		&& h8DhVacantDelEnv.store().length === 0 && !h8DhVacantDelOut.includes("当前空缺"));
+
+// --- U10: 写盘抛错 ⇒ 行仍在、如实报错 ------------------------------------------
+const h8DhThrowEnv = setup({ sessions: [], useSettings: true, settingsUpdateThrows: true, askScript: ["确认删除"], selfCwd: h8DhWs });
+const h8DhThrowNs = h8DhThrowEnv.settings.namespaces.get("team-link");
+h8DhThrowNs.data.teams = __testing.normalizeTeams([h8DhRow()]);
+await tick();
+await tick();
+const h8DhThrowOut = await h8DhOut(h8DhThrowEnv.tool("team_link_roster"), { action: "delete", team: h8DhTeam }, execFor(h8DhThrowEnv.senderAgent));
+check("批 H · U10 写盘抛错 ⇒ 行仍在、如实报错（红相＝吞掉异常、报「已删除」而名册没变 ⇒ 红）: 返回文本**如实说失败**且**零成功措辞**，名册行仍在（同一个现任）",
+	h8DhThrowOut.startsWith("删除失败：") && h8DhThrowOut.includes("写入设置失败") && h8DhThrowOut.includes("名册行仍在") && !h8DhThrowOut.includes("已删除")
+		&& h8DhThrowNs.data.teams.length === 1 && h8DhThrowNs.data.teams[0].roles[0].current === "session-self");
+
+// --- U11: 黑板目录不存在也如实说 ------------------------------------------------
+const h8DhAbsentWs = path.join(h8DhRoot, "ws-absent");
+const h8DhAbsentDir = path.join(h8DhAbsentWs, "team", h8DhTeam);
+const h8DhAbsentEnv = await h8DhEnvFor({ teams: [h8DhRow({ workspace: h8DhAbsentWs })] });
+const h8DhAbsentBefore = existsSync(h8DhAbsentDir);
+const h8DhAbsentOut = await h8DhOut(h8DhRosterOf(h8DhAbsentEnv), { action: "delete", team: h8DhTeam }, execFor(h8DhAbsentEnv.senderAgent));
+check("批 H · U11 黑板目录不存在也如实说（FR-H4③；红相＝目录不存在时静默省略这一句、或因此报错 ⇒ 红）: 前置自证那个目录**本来就不存在**；删除**照常成功**（不因缺目录失败），报告**点出该目录路径**并**如实说不存在**，且删除**没有创建**那个目录",
+	h8DhAbsentBefore === false && h8DhAbsentOut.includes("已删除") && h8DhAbsentOut.includes(h8DhAbsentDir) && h8DhAbsentOut.includes("不存在")
+		&& existsSync(h8DhAbsentDir) === false && h8DhAbsentEnv.store().length === 0);
+
+// --- U12: ★ 评审 🟡#2 的**写前重读**必须有自己的判据（分歧修复轮 D1） --------------
+// 块内原先**没有任何一条**在对话框打开期间改 `ns.data.teams`（`askScript` 只有「确认删除」/
+// 「取消」/ `[]+abort` 三种）⇒ 「U4 ＋ 写前重读覆盖了同一语义」这句**不成立**：U4 盖的是
+// 「**一开始就不在册**」，**不盖**「确认期间被别人删掉 / 改动」。下面两条夹具把那两条到达路径
+// 各自钉住（两条都要，因为它们不是同一条路径：① 目标行在窗口内消失；② 目标行还在、但名册里
+// **别的行**被并发改了 —— 后者才是「拿陈旧快照回写」的真红相）。
+//
+// 夹具纪律：`askScript` 的**函数式**条目就在对话框打开的**当口**跑（`makeUserQuestions` 的既有
+// 语义，R1 retire race 用的同一条路），所以下面这两条不需要任何时钟技巧。
+// ★ 期望值快照的**时机**（分歧修复轮 D1 第二轮）：`h8DhTocText` 在**弹框之前**取，而下面闭包里的并发改动
+// 发生在**弹框当口** ⇒ 拿它当期望值永远对不上（恒假格 —— 与本条要钉的「并发改动原样在」是同一件事，
+// 只是取早了）。⇒ 期望值改用「并发那一下之后」的那份快照 `h8DhTocConcurrent`，并另加一条**非空真锚**
+// （`h8DhTocText !== h8DhTocConcurrent`）证明并发那一下**真发生过** —— 否则闭包不跑时本条也会假绿。
+let h8DhTocConcurrent = null;
+const h8DhTocWs = path.join(h8DhRoot, "ws-toc");
+const h8DhTocEnv = await h8DhEnvFor({
+	teams: [h8DhRow(), h8DhRow({ name: h8DhOther, workspace: h8DhOtherWs, legacy: "dh-other-old-1" })],
+	selfCwd: h8DhTocWs,
+	askScript: [() => {
+		// 确认期间**别的会话**把目标行删掉了（同一份存储的并发改动）。
+		h8DhTocEnv.ns.data.teams = h8DhTocEnv.ns.data.teams.filter((team) => team.name !== h8DhTeam);
+		h8DhTocConcurrent = h8DhTeamsText(h8DhTocEnv);
+		return "确认删除";
+	}],
+});
+const h8DhTocSince = h8DhTocEnv.ns.updates.length;
+const h8DhTocText = h8DhTeamsText(h8DhTocEnv);
+const h8DhTocOut = await h8DhOut(h8DhRosterOf(h8DhTocEnv), { action: "delete", team: h8DhTeam }, execFor(h8DhTocEnv.senderAgent));
+check("批 H · U12① 写前重读：★ 确认期间目标行被别人删掉 ⇒ 幂等拒绝 + **零写入**（红相＝拿弹框前那份 `teams0` 快照回写 ⇒ 既不报「已被删除」、又落一笔多余写 ⇒ 本条红）: 拒绝文案点名「在确认期间已被删除」，名册里的**并发改动原样在**（那一行没有因为本次调用而复活），**零笔**写 teams 的 policy.update",
+	h8DhTocOut.startsWith("删除失败：") && h8DhTocOut.includes(h8DhTeam) && h8DhTocOut.includes("在确认期间已被删除")
+		&& h8DhTocEnv.uq.requests.length === 1
+		&& h8DhTocEnv.store().length === 1 && h8DhTocEnv.store()[0].name === h8DhOther
+		&& h8DhTeamsText(h8DhTocEnv) === h8DhTocConcurrent && h8DhTocText !== h8DhTocConcurrent
+		&& h8DhTeamsPatchesSince(h8DhTocEnv, h8DhTocSince).length === 0);
+
+let h8DhTocFieldConcurrent = null;
+const h8DhTocFieldWs = path.join(h8DhRoot, "ws-toc-field");
+const h8DhTocFieldEnv = await h8DhEnvFor({
+	teams: [h8DhRow(), h8DhRow({ name: h8DhOther, workspace: h8DhOtherWs, legacy: "dh-other-old-1" })],
+	selfCwd: h8DhTocFieldWs,
+	askScript: [() => {
+		// 确认期间**别的会话**改了**另一行**的一个字段（目标行仍在册 ⇒ 本次删除照常进行）。
+		h8DhTocFieldEnv.ns.data.teams[1].workspace = path.join(h8DhRoot, "ws-other-concurrent");
+		h8DhTocFieldConcurrent = h8DhTeamsText(h8DhTocFieldEnv);
+		return "确认删除";
+	}],
+});
+const h8DhTocFieldBefore = h8DhTeamsText(h8DhTocFieldEnv);
+const h8DhTocFieldSince = h8DhTocFieldEnv.ns.updates.length;
+const h8DhTocFieldOut = await h8DhOut(h8DhRosterOf(h8DhTocFieldEnv), { action: "delete", team: h8DhTeam }, execFor(h8DhTocFieldEnv.senderAgent));
+const h8DhTocFieldAfter = h8DhTocFieldEnv.ns.data;
+check("批 H · U12② 写前重读：★ 确认期间别的行被并发改动 ⇒ 那笔改动**不被静默回退**（评审 🟡#2 的**真红相**：拿陈旧快照过滤回写会把并发改动悄悄抹掉 ⇒ 删掉「写前重读」这一行本条必红）: 删除照常成功，且名册里**只剩下带并发改动的那一行**（`teams` 逐字节 === 弹框期间那份新鲜快照去掉目标行）—— 陈旧快照回写会让它退回旧 workspace",
+	h8DhTocFieldOut.includes("已删除")
+		&& h8DhTocFieldAfter.teams.length === 1 && h8DhTocFieldAfter.teams[0].name === h8DhOther
+		&& h8DhTocFieldAfter.teams[0].workspace === path.join(h8DhRoot, "ws-other-concurrent")
+		&& JSON.stringify(h8DhTocFieldAfter.teams) === JSON.stringify(JSON.parse(h8DhTocFieldConcurrent).filter((team) => team.name !== h8DhTeam))
+		&& h8DhTocFieldBefore !== h8DhTocFieldConcurrent
+		&& h8DhTeamsPatchesSince(h8DhTocFieldEnv, h8DhTocFieldSince).length === 1);
+
+// --- NF-H5: 零新依赖（八条 import 白名单是硬闸门） ------------------------------
+const h8DhLibSource = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
+const h8DhImportLines = h8DhLibSource.split(/\r?\n/u).filter((line) => line.startsWith("import "));
+const h8DhImportSpecs = h8DhImportLines.map((line) => (/from\s+"([^"]+)"/u.exec(line) ?? [])[1]);
+check("批 H · NF-H5 零新依赖（红相＝本批新增任何 import ⇒ 本条红）: `lib/index.js` 的顶层 import 仍**恰 8 条**，八条说明符逐字是白名单那一份（本批用的 `readdir` / `path` / `basename` 全部来自既有八条）。★ 范围如实：同一条白名单另有既有锁（`U19 日志事件` 的 import surface），本条是**本批自己的**第二把锁 + 点名本批的到达路径",
+	h8DhImportLines.length === 8 && h8DhImportSpecs.slice().sort().join(",") === ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "node:crypto", "node:fs", "node:fs/promises", "node:os", "node:path", "schemastery"].join(","));
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。

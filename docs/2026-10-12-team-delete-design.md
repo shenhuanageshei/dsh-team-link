@@ -3,6 +3,7 @@
 > **规格档**。需求档 [`docs/2026-10-12-team-delete-requirements.md`](2026-10-12-team-delete-requirements.md)。
 > 行号一律 as-of **2026-10-12 工作树（commit `2329a0a`）**，实施按**符号名**定位。
 > ★ 本档全文不写出框定 token 的原串（批 E 立的仓规）；实施时新测试标识符用 **`Dh` 中缀**（避免与既有顶格声明重名）。
+> **实施状态（2026-10-12，批 H 落码）**：**已实施** —— 落点 `lib/index.js` 的 `deleteTeam` / `askDeleteConfirm` / `blackboardDirPresence` / `blackboardUntouchedLine` ＋ roster 工具的 `if (action === "delete")` 分支；判据 **21 条**在 `host-half.test.mjs` 的「批 H」块（落码时 **19 条**：U1–U11 ＋ NF-H5；**2026-10-12 分歧修复轮追加 2 条**：`U12①②`（§6 伪代码那条「写前重读」的 TOCTOU 夹具 —— 此前块内没有任何一条在对话框打开期间改名册，如实登记见本段末））。入库点与读数口径见 [`docs/verification-log.md`](verification-log.md) 的「2026-10-12 · 批 H」一节与其 §七（分歧修复轮）与 [`CHANGELOG.md`](../CHANGELOG.md) 的同名条目（**宿主回执待回填**）。★ **§6 末尾有一处实施勘误**（伪代码里版本史条数的写法），实施按 FR-H3/FR-H4 的意图改正并配了红相判据。★ **同一轮另修三处判据 / 文档面**（实现零改动）：U3 的 ④ 恒假格（夹具把同一 legacy 标记种进**保留队**，与断言自相矛盾 ⇒ 工厂形参加 `legacy` 参数、默认值不动）· U3 逐字节比对**纳入 `blockedSenders`**（连通 `receiveMode` / `pendingCreates` / `sections`，且种成非空避免空真）· §八 U 表的行号与 `README.md` §十 的计数漂移。
 
 ---
 
@@ -93,12 +94,15 @@ async function deleteTeam(ctx, agent, policy, teamName, signal) {
     // NF-H3：如实拒绝 + 列已知团队名（不是静默成功）
     return { ok: false, reason: `团队「${teamName}」不在名册里。已知团队：${teams0.map((t) => t.name).join("、") || "（无）"}` };
   }
+  // ★ 实施勘误（见本档 §6 末尾）：版本史挂在**角色行**上（团队行没有 `history` 字段），
+  //   所以条数是各角色 `history` 之和 —— 字面写 `row.history?.length ?? 0` 会恒报 0。
+  const historyCount = row.roles.reduce((total, entry) => total + entry.history.length, 0);
   // FR-H3：人类确认（fail-closed —— 无服务 / 取消 / 超时都拒绝）
   const confirmed = await askDeleteConfirm(ctx, agent, {
     header: `删除团队 ${teamName}`,
     question: `确定把团队「${teamName}」从名册里删掉吗？`,
     detail: [
-      `会删：名册里这一行（含它自己的版本史 ${row.history?.length ?? 0} 条）`,
+      `会删：名册里这一行（含它自己的版本史 ${historyCount} 条）`,
       `不会删：磁盘上的黑板目录（<workspace>/team/${teamName}/ 原样保留）`,
       `不会改：pairs / trustedSenders / rememberTargets（信任数据一个字不动）`,
       `不可逆：删掉之后团队成员、版本史都从名册里消失`,
@@ -112,17 +116,31 @@ async function deleteTeam(ctx, agent, policy, teamName, signal) {
     return { ok: false, reason: `团队「${teamName}」在确认期间已被删除（幂等：本次零写入）。` };
   }
   await policy.update({ teams: fresh.filter((t) => t.name !== teamName) });
-  return { ok: true, removedHistory: row.history?.length ?? 0 };
+  return { ok: true, historyCount };
 }
 ```
+
+★ **§6 实施勘误（2026-10-12，落码时发现并改正；**原写法逐字保留在本注里**）**：上面这段伪代码的两处
+`row.history?.length ?? 0` **是笔误**（逐字原文即本句里这两个写法）—— `row` 是**团队行**，而团队行**没有** `history` 字段
+（版本史挂在**角色行**上；`normalizeTeams` 也不产出团队级 `history`）⇒ 字面照抄会**恒报 0 条**，
+与本档自己的 FR-H3「含版本史 N 条」/ FR-H4① 直接矛盾。落码按**意图**改正为
+`row.roles.reduce((n, e) => n + e.history.length, 0)`（D4：删行即全删它**每个角色**的历史），
+并配一条**红相判据**钉住它（`host-half.test.mjs` 的 `批 H · U3 版本史条数如实`：字面实现 ⇒ 恒 0 ⇒ 红）。
+另：落码另加了一处实现细节（本档未写、与既有名册写入点同形）：成功分支调 `sections?.sync()`
+（`set-role` / `retire` / `upsert-team` 都调），使被删团队的角色段随之释放。
 
 **确认helper 的形制**（照 `askRecoveryConfirm` 的既有范式，**只列签名与前置**）：
 
 ```js
-/** 前置：ctx 可 `get("userQuestions")`（不可用 ⇒ 返回 false，**不抛**）。
+/** 前置：ctx 可 `get("userQuestions")`（不可用 ⇒ 返回 `{ confirmed: false }`，**不抛**）。
  *  后置：返回 true 仅当用户在对话框里选了「确认删除」那一项；取消 / 超时 / 无服务一律 false。 */
 async function askDeleteConfirm(ctx, agent, request, signal) { … }
 ```
+
+★ **落码的返回形状（与 `askRecoveryConfirm` 逐字同形，实施时如实记一笔）**：上面那行「返回 true / false」
+在实现里是 **`{ confirmed: boolean, reason: string }`** —— 即上句的「true / false」读作 `confirmed` 字段；
+多出来的 `reason` 让**三态各自可读**（无确认服务 / 用户取消 / 超时 各自点名），工具拒绝文案据此如实转述，
+U5 的三条判据也据此断言。**没有任何一态会因这个形状而放松**：只有 `confirmed === true` 才继续往下走。
 
 ## §7 状态与 schema
 
@@ -159,7 +177,7 @@ async function askDeleteConfirm(ctx, agent, request, signal) { … }
 | --- | --- |
 | **空集 / 畸形输入** | `team` 为空 / 不是字符串 ⇒ 沿用既有参数校验（本批不动）；**不在册** ⇒ 按 §6 拒绝并列出已知名 |
 | **team 名大小写 / 前后空格** | 沿用既有工具的 trim 与精确匹配（不新增模糊匹配） |
-| **并发** | ① 两处同时删 ⇒ `policy.update` 后写胜；第二笔读到的是「不在册」⇒ 走拒绝分支（**幂等**，不重复删）；② ★ 评审 🟡#2：**删 vs 其它名册变更**（确认窗口内别的会话做了 `set-role` / `upsert-team` / 删了另一个队）⇒ §6 的伪代码**写前重读**、以**新鲜** `teams` 过滤，绝不回写陈旧快照 |
+| **并发** | ① 两处同时删 ⇒ `policy.update` 后写胜；第二笔读到的是「不在册」⇒ 走拒绝分支（**幂等**，不重复删）；② ★ 评审 🟡#2：**删 vs 其它名册变更**（确认窗口内别的会话做了 `set-role` / `upsert-team` / 删了另一个队）⇒ §6 的伪代码**写前重读**、以**新鲜** `teams` 过滤，绝不回写陈旧快照（★ **这条防线的范围**（2026-10-12 补，是**界定范围**、不是改口）：它盖的是**同一个宿主进程内**的并发写 —— 另一个会话的工具调用、设置 UI，二者都走**同一个 store 读面**、每次 `get` 现读 ⇒ **看得见**；而**另一个 OS 进程**、或**手工改 `policy.json`** ⇒ 本插件**看不见**（设置服务是进程内状态、每个 store 只读一次文件）⇒ **不在这条防线内**，那种改法按 `AGENTS.md` §七 要重启才生效） |
 | **落点不可写 / 损坏档** | ★ 评审 🔵#6：**沿用 store 层既有语义**，本批**不新增分支** —— `settings` 在场 ⇒ 写 settings；文件后端损坏（读不出/非法 JSON）时按 `AGENTS.md` §七「**不覆盖**、落内存、如实报因」，报告面沿用**落点行的既有五态**措辞（即：内存态删除成功但**如实标未落盘**，不冒充已持久化） |
 | **重启 / 升级** | 无新依赖、无新 import、无 schema 变更（只是少一行数据） |
 | **失败方向** | **fail-closed**：确认不可得 / 写入抛错 ⇒ 行仍在、如实报错；**绝不**出现「报成功但没删」 |
