@@ -4525,6 +4525,51 @@ async function askDeleteConfirm(ctx, agent, request, signal)
 7. **所有写入均为 UTF-8 无 BOM**（用编辑工具，未用 PowerShell `Set-Content` / `Out-File -Encoding utf8`）；**本轮新增文本里的框定 token 原串命中 ＝ 0**（未逐字写出该 token，构造才用码点）；
 8. **未改 `README.md` / `CHANGELOG.md` / 两份批 H 档的状态行与计数**：本轮的判据条数**不变**（仍 21 条 / 1619 条），故那些计数声明**无需同步**、也不应改动（「只做这两件，不夹带新东西」）。**留作父侧裁决的一处**：设计档**头部**的**实施状态行**（[`2026-10-12-team-delete-design.md:6`](2026-10-12-team-delete-design.md)）里那句「★ 同一轮另修三处判据 / 文档面（实现零改动）」说的是**上一轮（§七）**、本轮未提 —— 本轮只动 §9 一行（且判据条数不变），故按任务范围**未改**；若要求把本轮回填进该状态行，属父侧决定，本轮不擅自扩面。
 
+---
+
+### 2026-10-12 · 批 H **宿主回执**（收口 · 回填上表第 3 项与第四节的「期望值」口径）
+
+**一、两次实测读数（命令与自报行原文）**
+
+```
+$ node host-half.test.mjs
+ALL PASS
+assertion total: 1619 (failed: 0)          (exit 0)
+
+$ node client-half.test.mjs
+ALL PASS
+assertion total: 310 (failed: 0)           (exit 0)
+
+$ node .investigations/token-sanitize-2026-10-11/scripts/scrub-sources.mjs .
+扫了 89 个文件；写死原串的行 0 处；（体检模式，零写入）
+
+$ node .investigations/eng-tooling/scripts/balance-scan.mjs host-half.test.mjs
+✓ 括号与引号全部配平（未发现语法类不平衡）
+```
+
+`lib/index.js` 的 import 面仍 **8 条**（八模块白名单未被扩）。四个 stage check 全部 `PASS`，`验收：PASS`。
+
+**二、★ 计数指正（交付方写下时点的推算值 vs 宿主实测）**
+
+交付方在**分歧修复轮 §七/§八** 写下「套件总数 1617 = 1598 + 19」时，D1 的两条新判据（`U12①/U12②`）**还未落地** ⇒ 那是**当时的**推算值。
+本轮回填后：**`grep -c '^check("批 H ·'` 实测 = 21**（19 条交付面 ＋ D1 的 2 条）⇒ **总数 1619 = 1598 + 21**。
+⇒ **以宿主实测的 `1619` 为准**；README / CHANGELOG 里凡写 `1617` 或「批 H 新增 19 条」的处，**按本节同批改准**（文档卫生 ①：计数与列表同改）。
+
+**三、交付评审（`advisor type=code`，自动流程节点）**：`VERDICT: PASS` —— **0 🔴** / 1 🟡 / 3 🔵。逐条处置：
+
+| # | 级别 | 意见 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 🟡 | **roster 工具的 60 秒预算罩不住 delete 的 3 分钟确认框**（`:6015 timeoutMs: 60000` vs `ROTATION_CONFIRM_TIMEOUT_MS = 180000`）；本仓先例 `rotate`(`:7031`)/`recover`(`:12959`) 都是 `300000`。真机上有效确认窗 ≤60 秒，且 60 秒后走 aborted 文案而非设计口径的「超时」 | **Dispatched**（`eng-dsh-11` stage 1：抬到 300000 + 注释点名理由；先核 `set-mode` 是否同形） |
+| 2 | 🔵 | 成功报告的 `historyCount`/`roleCount`/`workspace` 取自**弹框前的陈旧行**（`:5174`），窄竞态下失真 | **Dispatched**（`eng-dsh-11` stage 2：改从 `fresh` 里那一行重算） |
+| 3 | 🔵 | **宿主回执未回填**（账本/README/CHANGELOG/backlog 仍是「期望值/待回填」口径） | **Fixed（父侧）** —— **本节即回填**；四处措辞同批翻成实测 |
+| 4 | 🔵 | `askDeleteConfirm` 超时文案**硬编码「3 分钟」**（`:5140`），常量调整会静默漂移 | **Dispatched**（`eng-dsh-11` stage 3：改用与 `:4909` 同款的常量渲染） |
+
+**四、入库**：`da9b074`（8 文件 +854/−16）；父侧提交前复跑两道套件与三道校验（见本节一）。
+**批 H 的实现经三份独立材料交叉确认无缺陷**：分歧审计（逐子句实测）· 变异实验（去掉写前重读 ⇒ 判据按标签变红）· 交付评审（0 🔴）。
+
+**五、回答 §八 第 8 条留的那个父侧裁决**：设计档 `:6` 的**实施状态行**里那句「★ 同一轮另修三处判据 / 文档面（实现零改动）」**归属上一轮（§七）是对的**；
+本轮（§八）只动 §9 一行（范围句），**判据条数不变** ⇒ **该状态行无需改动**。裁决：**不改**（避免把两轮的账混在一句里）。
+
 
 
 
