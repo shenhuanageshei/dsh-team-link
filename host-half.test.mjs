@@ -2915,8 +2915,10 @@ check("U5: the mixed report counts one delivery and one refusal", mixOut.include
 
 const blockEnv = fanEnv({ pairs: [pairSelf("session-worker-a"), pairSelf("session-worker-b")] });
 blockEnv.ns.data.blockedSenders = ["session-self"];
+// ★ 批 I（FR-I5）: 旧格式那一支的文案仍以「已屏蔽来自当前会话的消息」开头（识别度保留），
+// 后面接上「范围偏大」的标注与可执行的清除指引 —— 所以期望串只钉到「消息」为止。
 const blockOut = await blockEnv.send.execute({ targets: ["team:night-shift/*"], message: "全队通知" }, execFor(blockEnv.senderAgent));
-check("U5: the explicit block is re-checked per target and pairs do not override it", (blockOut.match(/→ refused：未投递：目标会话已屏蔽来自当前会话的消息。/gu) ?? []).length === 2 && blockEnv.calls("session-worker-a").followedup.length === 0);
+check("U5: the explicit block is re-checked per target and pairs do not override it", (blockOut.match(/→ refused：未投递：目标会话已屏蔽来自当前会话的消息/gu) ?? []).length === 2 && blockOut.includes("旧格式") && blockOut.includes("team_link_block action=clear-legacy sender=session-self") && blockEnv.calls("session-worker-a").followedup.length === 0);
 check("U5: the blocked broadcast reports zero deliveries", blockOut.includes("汇总：0 投递 / 2 拒绝。"));
 
 const deadFanEnv = fanEnv();
@@ -5277,7 +5279,7 @@ const reapTool = reapEnv.tool("team_link_recover");
 // ★ FR-10（批 5）: attach 后置链现在会按队补挂 auto 工作台注册 ⇒ 命名空间在**恢复动作之前**就已经
 // 多了 `watchdogs` 这一项。U29 的红线管的是**恢复路径**，所以判据是**快照对比**：恢复前后顶层键集
 // 与 `watchdogs` 内容逐字不变（恢复一个字都不许加/删），而 attach 那一笔不参与判定。
-// 绝对键集仍由紧随其后的那条「base = 九项」钉住 —— 两条各管一件事，互不替对方背书。
+// 绝对键集仍由紧随其后的那条「base = 十项」钉住 —— 两条各管一件事，互不替对方背书。
 // 快照必须取在**后置链落定之后**：FR-10 的补挂是 fire-and-forget 的一次微任务，若在它落笔前取
 // 快照，「恢复期间」这个窗口就会把 attach 的那一笔也算进去（那是假红，不是恢复路径写的）。
 await waitForChain(reapEnv, 1);
@@ -5511,10 +5513,10 @@ check("U29 红线: 恢复路径不新增日志事件类型——宿主动作仍�
 		// `watchdogs` 这一项。它**不是恢复路径写的**，所以判据取**快照对比**（reapKeysBefore /
 		// reapWatchdogsBefore，都在恢复动作之前取）：恢复期间键集一字未动、watchdogs 内容一字未改。
 		// 旧写法把「绝对键集」写在恢复路径的判据里 ⇒ FR-10 一挂上就会红（假红），把 attach 的承诺
-		// 与恢复路径的红线搅在一起；绝对键集现在只由下一条（base = 九项）钉。
+		// 与恢复路径的红线搅在一起；绝对键集现在只由下一条（base = 十项）钉。
 		&& JSON.stringify(Object.keys(reapEnv.ns.data).sort()) === reapKeysBefore
 		&& JSON.stringify(reapEnv.ns.data.watchdogs ?? null) === reapWatchdogsBefore);
-check("U29 schema: 恢复没有新增任何顶层 policy key（recoveries 是 role 行内字段）——八项一个不多", sameJson(Object.keys(reapEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && reapEnv.role().recoveries !== undefined && reapEnv.ns.data.recoveries === undefined);
+check("U29 schema: 恢复没有新增任何顶层 policy key（recoveries 是 role 行内字段）——十项一个不多（批 I 的 `blocks` 是第十项）", sameJson(Object.keys(reapEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && reapEnv.role().recoveries !== undefined && reapEnv.ns.data.recoveries === undefined);
 
 // --- 缺口1 的第三半：claim 的超时读数**不得**与 fail-closed 同形 -----------------------
 //
@@ -5600,8 +5602,9 @@ check("Y1 文档面=实现面（双向锁，批次 2 改写）: README 与工具
 check("Y2 文档面=实现面: 发起域（现任成员 ∪ 该角色最近一任前任，域外拒绝且指向设置 UI）同时写在 README 与工具描述里", handoffReadme.includes("现任成员") && handoffReadme.includes("最近一任前任") && handoffReadme.includes("设置 UI") && reviveTool.description.includes("发起域") && reviveTool.description.includes("现任成员"));
 // 同改清单锁（② 轮「同一清单两处写、只改了一处」的教训）：README 里的工具计数必须
 // 等于**实际注册的工具数**——加一个工具而忘了改 README（或反过来）在这里立刻变红。
+// ★ 批 I 把常量从 10 抬到 11（新增 `team_link_block`，FR-I4）—— README 架构图行同批改准。
 const README_TOOL_COUNT = /(\d+) 个工具 \+ 2 条 \/ 命令/u.exec(handoffReadme)?.[1];
-check("§11.9 文档面=实现面（工具计数同改锁）: README 架构图里写的工具数 == 实际注册的工具数（加/删工具而不同改文档即红）", README_TOOL_COUNT !== undefined && Number(README_TOOL_COUNT) === diagEnv.registeredTools.length && diagEnv.registeredTools.length === 10 && diagEnv.registeredTools.some((tool) => tool.name === "team_link_recover") && diagEnv.registeredTools.some((tool) => tool.name === "team_link_status"));
+check("§11.9 文档面=实现面（工具计数同改锁）: README 架构图里写的工具数 == 实际注册的工具数（加/删工具而不同改文档即红）", README_TOOL_COUNT !== undefined && Number(README_TOOL_COUNT) === diagEnv.registeredTools.length && diagEnv.registeredTools.length === 11 && diagEnv.registeredTools.some((tool) => tool.name === "team_link_recover") && diagEnv.registeredTools.some((tool) => tool.name === "team_link_status") && diagEnv.registeredTools.some((tool) => tool.name === "team_link_block"));
 
 // ---------------------------------------------------------------------------
 // §9 收尾修复（0.3.7）: U9 settings 时序锁 / U10 创建即认领 / U11 降级红线
@@ -5688,7 +5691,7 @@ const pendingFoldNs = pendingFoldEnv.settings.namespaces.get("team-link");
 check("U9 对照 (pendingCreates) 前置: the fold itself happened — the window's roster write reached the namespace (so a missing intent below cannot be blamed on a fold that never ran)", (pendingFoldNs?.data.teams ?? []).map((team) => team.name).join(",") === "night-shift" && pendingFoldEnv.log.lines.warn.some((line) => line.includes("unattached startup window")));
 check("U9 对照 (pendingCreates): a §10.2.6 intent written inside the startup window SURVIVES the fold into the settings namespace — the durable orphan record the next boot's sweep reports is not dropped by adopting the window", (pendingFoldNs?.data.pendingCreates ?? []).length === 1 && (pendingFoldNs?.data.pendingCreates ?? [])[0].sessionId === pendingFoldId && (pendingFoldNs?.data.pendingCreates ?? [])[0].role === "worker-b" && (pendingFoldNs?.data.pendingCreates ?? [])[0].team === "night-shift");
 check("U9 对照 (pendingCreates): the folded rows are the window's own normalized rows — every field of the intent survived, not just its presence", (pendingFoldNs?.data.pendingCreates ?? []).length === 1 && (pendingFoldNs?.data.pendingCreates ?? []).every((entry) => entry.createdAt > 0 && entry.expiresAt > entry.createdAt && entry.by === "session-self" && Object.keys(entry).sort().join(",") === "by,createdAt,expiresAt,role,sessionId,team"));
-check("U9 对照 (pendingCreates): the fold is the wholesale write {@link policyIsAtDefaults} licenses, so it carries all NINE policy keys（FR-9 的 sections 是第九个）— the new one beside the seven that pre-date ②, with the window's roster and the pair granted for the one worker that WAS created inside them", sameJson(Object.keys(pendingFoldNs?.data ?? {}).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && (pendingFoldNs?.data.teams ?? []).length === 1 && (pendingFoldNs?.data.pairs ?? []).length === 1 && at(pendingFoldNs?.data.pairs, 0, {}).b === at(pendingFoldEnv.creates, 0, {}).sessionId);
+check("U9 对照 (pendingCreates): the fold is the wholesale write {@link policyIsAtDefaults} licenses, so it carries all TEN policy keys（FR-9 的 sections 是第九个、批 I 的 blocks 是第十个）— the new ones beside the seven that pre-date ②, with the window's roster and the pair granted for the one worker that WAS created inside them", sameJson(Object.keys(pendingFoldNs?.data ?? {}).sort(), ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && (pendingFoldNs?.data.teams ?? []).length === 1 && (pendingFoldNs?.data.pairs ?? []).length === 1 && at(pendingFoldNs?.data.pairs, 0, {}).b === at(pendingFoldEnv.creates, 0, {}).sessionId);
 
 // --- U10 (§3.3.2 创建即认领 / §9.2.2): bootstrap, no hijack, gates untouched ---
 const u10Env = teamEnv({ teams: [] });
@@ -7301,14 +7304,18 @@ check("U19 inject: ... and the host module really is the four-entry shape: `appl
 // Schema: the ② round declared ONE new key (`pendingCreates`, §10.2.6's durable
 // intent) beside the seven that pre-date it — the two batch bounds are code
 // constants (U16 asserts that), so the red line is that no further key appeared.
+// ★ 批 I 追加第十项 `blocks`（配对屏蔽，FR-I1）—— 本条的语义因此改成「声明面 = 十项」，
+// 钉的仍是同一件事：**没有计划外的新键**。声明面读自**注册出去的命名空间 base**
+//（provider 实际拿到的那一份），不是手抄一张清单。
 // The declared surface is read from the REGISTERED namespace's base (what the
 // provider actually takes), not from a hand-copied list.
-const U19_POLICY_KEYS = ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"];
+const U19_POLICY_KEYS = ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"];
 const u19Base = u19ConcurrencyEnv.settings.namespaces.get("team-link").base;
 // 批 1（FR-3a）: the WORKED surface gained `watchdogs` — 因为 `/team_session` 现在会经**既有的**
-// `watchdogs` 键自动注册一条工作台注册（§7.1「既有键的加性扩展」）。上半句（**声明面** = 八个键）
-// 一字未动，这条判据要钉的「没有新顶层键」因此仍成立：新增的是既有数组里一行的 `origin` 字段。
-check("U19 schema: the registered policy namespace still declares exactly its **nine** keys —— ② 的 pendingCreates 与 FR-9 的 sections 加在更早的七项之上，其余一个不多", sameJson(Object.keys(u19Base).sort(), U19_POLICY_KEYS) && sameJson(Object.keys(u19ConcurrencyEnv.settings.namespaces.get("team-link").data).sort(), ["pairs", "pendingCreates", "teams", "watchdogs"]));
+// `watchdogs` 键自动注册一条工作台注册（§7.1「既有键的加性扩展」）。上半句（**声明面** = 十项）
+// 一字未动，这条判据要钉的「没有计划外的新顶层键」因此仍成立：新增的是既有数组里一行的 `origin`
+// 字段（批 1）、`renewedAt` 字段（批 G）与批 I 的第十项 `blocks`（它**在计划内**，见设计档 §7）。
+check("U19 schema: the registered policy namespace still declares exactly its **ten** keys —— ② 的 pendingCreates、FR-9 的 sections 与批 I 的 blocks 加在更早的七项之上，其余一个不多", sameJson(Object.keys(u19Base).sort(), U19_POLICY_KEYS) && sameJson(Object.keys(u19ConcurrencyEnv.settings.namespaces.get("team-link").data).sort(), ["pairs", "pendingCreates", "teams", "watchdogs"]));
 const sendToolU19 = u19ConcurrencyEnv.tool("team_link_send");
 const sendParams = sendToolU19.parameters;
 check("U19 schema: team_link_send's argument surface is unchanged (mutually-exclusive addressing, the message, the §3.4 envelope) — and the real key is `message`, not `text`", sameJson(Object.keys(sendParams.properties).sort(), ["message", "meta", "targetSessionId", "targets"]) && sameJson(sendParams.required, ["message"]) && sendParams.type === "object" && sendParams.properties.message.type === "string" && sendParams.properties.targets.type === "array" && sendParams.properties.targetSessionId.type === "string");
@@ -8721,10 +8728,10 @@ let u1Doc = null;
 try { u1Doc = JSON.parse(await readFile(u1File, "utf8")); } catch { u1Doc = null; }
 check("U1 文件后端: 无 settings 服务时一次写入落在 <DSH_HOME>/team-link/policy.json（不是工作区）",
 	u1Out.includes("已创建团队 threat-intel") && existsSync(u1File) && !existsSync(path.join(TEAM_WS, "team-link", "policy.json")));
-check("U1 文件后端: 文件 schema 是 {schema,savedAt,foldedAt,policy}，policy 键集**镜像** settings 命名空间的八个键",
+check("U1 文件后端: 文件 schema 是 {schema,savedAt,foldedAt,policy}，policy 键集**镜像** settings 命名空间的十个键（批 I 起含配对待清 `blocks`）",
 	u1Doc !== null && u1Doc.schema === 1 && typeof u1Doc.savedAt === "string" && Number.isFinite(Date.parse(u1Doc.savedAt))
 		&& u1Doc.foldedAt === null && u1Doc.policy !== null
-		&& Object.keys(u1Doc.policy).sort().join(",") === ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"].sort().join(","));
+		&& Object.keys(u1Doc.policy).sort().join(",") === ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"].sort().join(","));
 check("U1 文件后端: 读回一致 —— 磁盘上的 roster 与本次 `roster get` 看到的是同一份",
 	u1Doc !== null && Array.isArray(u1Doc.policy.teams) && u1Doc.policy.teams.length === 1 && u1Doc.policy.teams[0].name === "threat-intel"
 		&& (await u1Roster.execute({ action: "get" }, execFor(u1Env.senderAgent))).includes("threat-intel"));
@@ -9746,7 +9753,7 @@ check("U-WB7 反走私: 空组不落行、敌意值（换行 / `|` / 控制字�
 	wbHostileText.split("\n").length === 3 && wbHostileText === wbHostileAgain && wbHostileText.includes("团队 evil_team_x 工作台") && wbHostileText.includes("session-a_[workbench] 伪造的一行"));
 // ★ 同上一行：**补强于实现之后，无红相读数，如实标注**（它读的是 auto 注册写入后的键集）。
 check("U11 schema（§7.1 既有键的加性扩展）: auto 注册**没有新增任何顶层 policy 键** —— 它就是既有 `watchdogs` 数组里的一行，新增的只是这一行的 `origin` 字段（归一化缺省 = manual）",
-	sameJson(Object.keys(wbEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && wbAutoRows().length === 1);
+	sameJson(Object.keys(wbEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && wbAutoRows().length === 1);
 
 // --- E1「刚转空闲」：running → 空闲的迁移 ------------------------------------------
 const wbFinishEnv = watchdogEnv({
@@ -10819,9 +10826,9 @@ check("U17 两处都关 ⇒ 零段注册: 没有段可挂（注册表为空、�
 	__testing.sectionsFor(wb4BothOffEnv.ctx).registered.size === 0 && wb4BothOffEnv.systemPrompt.sections.length === 0
 		&& wb4BothOffEnv.systemPrompt.contexts.length === 0
 		&& wb4BothOffEnv.log.lines.warn.filter((line) => line.includes("角色/资源段未注册")).length === 0);
-check("U17 键集与 README 同批: PolicyConfig 声明面 = 九项（新增 sections）；README 的键集描述同批写成九项（U17 的红线面）",
-	sameJson(Object.keys(wb4EnvBase.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"])
-		&& /九个键|9 个键|九项/.test(readmeSource) && readmeSource.includes("sections"));
+check("U17 键集与 README 同批: PolicyConfig 声明面 = 十项（FR-9 新增 sections、批 I 新增 blocks）；README 的键集描述同批写成十项（U17 的红线面）",
+	sameJson(Object.keys(wb4EnvBase.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"])
+		&& /十个键|10 个键|十项/.test(readmeSource) && readmeSource.includes("sections"));
 
 // --- U17 续：清掉的 auto 注册同进程不自愈 ------------------------------------------
 const wb4ClearEnv = teamSessionEnv({ askScript: ["创建"] });
@@ -11737,12 +11744,14 @@ check("批 E · U11 ② 两处一次替换（一处裸包裹 ＋ 一处前缀形
 			&& frameClean(result.text);
 	})());
 
-// --- U2 十个工具全覆盖 ---------------------------------------------------------------
-// 结构性半边：本插件**全部 10 个工具**都经 `textOutput().render`（或它的扩展 `sendOutput()`）
+// --- U2 十一个工具全覆盖 -------------------------------------------------------------
+// 结构性半边：本插件**全部 11 个工具**都经 `textOutput().render`（或它的扩展 `sendOutput()`）
 // 出模型可见文本，而 `render` 就是消毒挂在 `wellFormed` 上的那一处 ⇒ 「一个都没漏」是
 // **结构性**的，不是逐处记得。判据对每个工具**逐个**喂一个带毒返回值（模型可见文本不可能是
 // 调用方以外的字节 —— 这一面正是「返回值里出现什么都必须干净」），断言渲染出的每一个文本块都干净。
-const BE_TOOLS = ["team_link_recover", "team_link_list_sessions", "team_link_status", "team_link_export", "team_link_send", "team_link_watch", "team_link_roster", "team_link_team_read", "team_link_team_append", "team_link_rotate"];
+// ★ 批 I 把清单与计数从 10 改到 11（新增 `team_link_block`，它也走 `textOutput()`）—— 这一格是
+// 「同一份工具清单两处写、只改一处即红」的同类锁（清单本身 + 标签里的两个计数 + 长度断言）。
+const BE_TOOLS = ["team_link_recover", "team_link_list_sessions", "team_link_status", "team_link_export", "team_link_send", "team_link_watch", "team_link_roster", "team_link_team_read", "team_link_team_append", "team_link_rotate", "team_link_block"];
 const u2BeEnv = setup({ sessions: [], useSettings: true, selfCwd: BE_WS });
 const u2Rows = BE_TOOLS.map((toolName) => {
 	const tool = u2BeEnv.tool(toolName);
@@ -11756,8 +11765,8 @@ const u2Rows = BE_TOOLS.map((toolName) => {
 	//   而 `FRAME_PH` 带收尾方括号、**不是**它们的前缀 ⇒ 旧写法 `joined.includes(FRAME_PH)` 恒假。
 	return { toolName, present: true, clean: frameClean(joined) && joined.includes(framePh(1, 2)) && joined.includes(framePh(2, 2)) };
 });
-check(`批 E · U2 ① 十个工具**逐个**喂带毒返回值 ⇒ 每一个的 `+"`output.render`"+` 输出都零命中（呈现实测：${u2Rows.filter((row) => row.clean).length}/10）——「一个都没漏」是结构性的：10 个工具全经同一个收口点`,
-	u2Rows.length === 10 && u2Rows.every((row) => row.present && row.clean));
+check(`批 E · U2 ① 十一个工具**逐个**喂带毒返回值 ⇒ 每一个的 `+"`output.render`"+` 输出都零命中（呈现实测：${u2Rows.filter((row) => row.clean).length}/11）——「一个都没漏」是结构性的：11 个工具全经同一个收口点`,
+	u2Rows.length === 11 && u2Rows.every((row) => row.present && row.clean));
 
 // --- U6 ⑤ 变异自证 ＋ U7 前置锚（★ 分歧修复轮：挪到「手边有生产渲染路径」的位置） -----------
 // 红相口径②要求「凡标了红相的判据都在断言里同批做一次变异自证」。**变异的可观测面是
@@ -13013,6 +13022,284 @@ const h8DhImportLines = h8DhLibSource.split(/\r?\n/u).filter((line) => line.star
 const h8DhImportSpecs = h8DhImportLines.map((line) => (/from\s+"([^"]+)"/u.exec(line) ?? [])[1]);
 check("批 H · NF-H5 零新依赖（红相＝本批新增任何 import ⇒ 本条红）: `lib/index.js` 的顶层 import 仍**恰 8 条**，八条说明符逐字是白名单那一份（本批用的 `readdir` / `path` / `basename` 全部来自既有八条）。★ 范围如实：同一条白名单另有既有锁（`U19 日志事件` 的 import surface），本条是**本批自己的**第二把锁 + 点名本批的到达路径",
 	h8DhImportLines.length === 8 && h8DhImportSpecs.slice().sort().join(",") === ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "node:crypto", "node:fs", "node:fs/promises", "node:os", "node:path", "schemastery"].join(","));
+
+// ===========================================================================
+// 批 I · 屏蔽的作用域（block scope）
+// 归属：设计档 docs/2026-10-12-block-scope-design.md（§4 决策 D1–D8 · §5 FR-I1…FR-I6 ·
+// §6 伪代码 · §7 schema · §8 判据 U1–U19 · §9 边界 · §10 实施注意）；
+// 需求档 docs/2026-10-12-block-scope-requirements.md（§二 US-I1…US-I4 · §三 NF-I1…NF-I6）。
+//
+// 本块自持的口径：
+//  · 屏蔽是**两个会话之间的一对**（双向）⇒ 判定是**接收方视角**的 `isBlocked(view, 接收方, 发送方)`；
+//  · 旧格式 `blockedSenders` **原样保留、只读不写**，检查时**并集**参与（D3/NF-I3：不静默放开）；
+//  · 解除只认 `entry.by`（D7）；旧格式清条按 D8（被挡的发送方本人不得自清，其余任何会话可清）；
+//  · 三个写路径各**恰一笔** `policy.update`、补丁**单键**、无直接文件写（U19）。
+//
+// 夹具纪律：一律用既有工厂 `setup`（与 `teamEnv` 同一个），**不依赖墙钟**（本块没有一处读
+// `Date.now()` 做判据；`since` 只作留痕、不参与任何断言值）；每条判据标签里写明**红相构造**
+// （「去掉哪一处实现 ⇒ 本条按标签变红」）。
+// 标识符一律 `Bi` 中缀（`bi` 前缀 + `BI_` 常量）：顶格声明重名会让整档解析失败。
+// ===========================================================================
+const BI_SELF = "session-self";       // A：本会话（夹具里的 senderAgent）
+const BI_PEER = "session-worker-a";   // B：被投递的那一方 / 点屏蔽的那一方（U13 的 `by`）
+const BI_THIRD = "session-worker-c";  // C：第三方（U4 的负相、U14③ 的第三方）
+const biExtraAgents = () => [{ id: BI_PEER, status: "idle" }, { id: BI_THIRD, status: "idle" }];
+
+/**
+ * 批 I 的夹具工厂：`setup`（既有工厂）+ 一个把「种状态 / 取工具 / 取会话收件 / 取自己的会话 id」
+ * 收在一起的壳。种状态一律直接写**命名空间的 data**（与 `teamEnv` 对 `teams` 的做法逐字相同）——
+ * 那些值就是 store 的 `get()` 会读到的存储态，不是测试侧的第二份真相。
+ */
+function biBlockEnv({ askScript = [], pairs = [], trustedSenders = [], rememberTargets = [], blocks = [], blockedSenders = [], receiveMode = undefined, useSettings = true, policySeed = undefined } = {}) {
+	const env = setup({ useSettings, askScript, selfCwd: TEAM_WS, extraAgents: biExtraAgents(), policySeed });
+	const ns = env.settings === undefined ? undefined : env.settings.namespaces.get("team-link");
+	if (ns !== undefined) {
+		if (pairs.length > 0) ns.data.pairs = structuredClone(pairs);
+		if (trustedSenders.length > 0) ns.data.trustedSenders = [...trustedSenders];
+		if (rememberTargets.length > 0) ns.data.rememberTargets = [...rememberTargets];
+		if (blocks.length > 0) ns.data.blocks = structuredClone(blocks);
+		if (blockedSenders.length > 0) ns.data.blockedSenders = [...blockedSenders];
+		if (receiveMode !== undefined) ns.data.receiveMode = receiveMode;
+	}
+	return {
+		...env,
+		ns,
+		send: env.tool("team_link_send"),
+		blockTool: env.tool("team_link_block"),
+		store: () => __testing.policyFor(env.ctx),
+		view: () => __testing.policyFor(env.ctx).get(),
+		blocks: () => (ns?.data.blocks ?? []),
+		legacy: () => (ns?.data.blockedSenders ?? []),
+		calls: (id) => env.extraCalls.get(id),
+		execAs: (id) => execFor(env.agentFor(id)),
+	};
+}
+/** 规范化的一对（判据不手抄一份规范化 —— 读的是 `__testing.blockPair` 这个真函数）。 */
+const biCanon = (a, b) => __testing.blockPair(a, b);
+
+// --- U1: `blocks` 的三点齐（默认值 / schema / 归一化） -----------------------------
+const biU1Env = biBlockEnv({});
+check("批 I · U1 ① 声明面（红相＝只加默认值不加 schema ⇒ 真实宿主的 coerce 阶段把这个键丢掉、写入被拒 ⇒ 本条红）: 注册出去的策略命名空间 `base` 里确实声明了 `blocks`（读的是 provider 真正拿到的那一份 base，不是手抄清单）",
+	Object.keys(biU1Env.ns.base).includes("blocks") && Array.isArray(biU1Env.ns.base.blocks) && biU1Env.ns.base.blocks.length === 0);
+
+const biU1Write = biBlockEnv({ askScript: ["发送", "拒绝并屏蔽该会话"] });
+await biU1Write.send.execute({ targetSessionId: BI_PEER, message: "U1 写入面" }, execFor(biU1Write.senderAgent));
+check("批 I · U1 ② 写入面（红相＝schema 未声明该键 ⇒ 命名空间的 `blocks` 上什么都没有 ⇒ 本条红）: 一次「拒绝并屏蔽」之后，命名空间的 `blocks` 键上真的躺着一条条目（不只是内存视图里有）",
+	Array.isArray(biU1Write.ns.data.blocks) && biU1Write.ns.data.blocks.length === 1 && biU1Write.ns.data.blocks[0].by === BI_PEER);
+
+// U1 ③ —— 归一化面：一份**没有** `blocks` 键的旧 policy.json（file backend，§9「重启/升级」那一行）。
+const biU1FileEnv = biBlockEnv({ useSettings: false, policySeed: policyDoc({ receiveMode: "ask", teams: [] }) });
+const biU1FilePlace = (await biU1FileEnv.tool("team_link_roster").execute({ action: "get" }, execFor(biU1FileEnv.senderAgent))).split("\n")[0];
+check("批 I · U1 ③ 归一化面（红相＝归一化不补这个键 ⇒ 读出来是 `undefined`，`isBlocked` 当场抛 ⇒ 本条红）: 缺 `blocks` 键的旧档 ⇒ 归一化视图给出 `[]`（不是 `undefined`）；且落点首行仍是三态里的「存储：文件 <绝对路径>」（U19 的落点半句在本批后仍绿）",
+	Array.isArray(biU1FileEnv.view().blocks) && biU1FileEnv.view().blocks.length === 0
+		&& biU1FilePlace === `存储：文件 ${path.join(biU1FileEnv.policyHome, "team-link", "policy.json")}`);
+
+// --- U2 / U13: 写入配对化 + 必记 `by` ---------------------------------------------
+const biWrite = biBlockEnv({ askScript: ["发送", "拒绝并屏蔽该会话"] });
+const biWriteLegacyBefore = JSON.stringify(biWrite.legacy());
+const biWriteOut = await biWrite.send.execute({ targetSessionId: BI_PEER, message: "第一条：请复核 A 方案" }, execFor(biWrite.senderAgent));
+const biWriteEntry = at(biWrite.blocks(), 0, {});
+check("批 I · U2 写入配对化（红相＝仍往 `blockedSenders` 里塞 `sender.id` ⇒ 本条三个子句同时红）: `blocks` 恰多**一条**规范化条目（`blockPair(接收方, 发送方)` 的那两个 id、`since` 非空字符串），且旧格式 `blockedSenders` **一字未变**（仍是空的）",
+	biWrite.blocks().length === 1
+		&& biWriteEntry.a === biCanon(BI_PEER, BI_SELF).a && biWriteEntry.b === biCanon(BI_PEER, BI_SELF).b
+		&& typeof biWriteEntry.since === "string" && biWriteEntry.since !== ""
+		&& JSON.stringify(biWrite.legacy()) === biWriteLegacyBefore && biWrite.legacy().length === 0);
+check("批 I · U13 写入必记 `by`（红相＝不写 `by` / 写成发送方 ⇒ 本条红，且 U14 会跟着红）: 那一条的 `by` 就是**点屏蔽的那一方**（当事接收方 B），不是发送方 A、也不是空",
+	biWriteEntry.by === BI_PEER && biWriteEntry.by !== BI_SELF && biWriteEntry.by !== "");
+check("批 I · U8 文案（对话框那一处；红相＝只说「已屏蔽」、不说出口 ⇒ 本条红）: 拒绝文案点名**谁挡的**（目标会话 B）与**怎么解**（`team_link_block action=unblock` ＋ 这一对的两个 id ＋「只有发起屏蔽的一方可以解除」）",
+	biWriteOut.includes("拒绝并屏蔽") && biWriteOut.includes(BI_PEER)
+		&& biWriteOut.includes("team_link_block action=unblock")
+		&& biWriteOut.includes(`a=${biCanon(BI_PEER, BI_SELF).a}`) && biWriteOut.includes(`b=${biCanon(BI_PEER, BI_SELF).b}`)
+		&& biWriteOut.includes("只有发起屏蔽的一方可以解除"));
+
+const biWriteSince = biWrite.ns.updates.length;
+await __testing.blockSender(biWrite.store(), BI_PEER, BI_SELF);   // 同一对、同一方向，第二遍
+await __testing.blockSender(biWrite.store(), BI_SELF, BI_PEER);   // 同一对、**反方向**（§9 的「互蔽」）
+check("批 I · U3 幂等 + 规范化（红相①＝没有幂等早退 ⇒ 变成两条；红相②＝写入与解除各写一份规范化 ⇒ 反方向再写一条 ⇒ 本条红）: 同一对再屏蔽两遍（正向 + 反向）⇒ `blocks` 仍**只一条**、**零**新写入（`policy.update` 一笔都没多），且 `by` 仍是**最早**那个发起方（§9「互蔽」的已知行为）",
+	biWrite.blocks().length === 1 && biWrite.blocks()[0].by === BI_PEER && biWrite.ns.updates.length === biWriteSince);
+
+// --- U4 / U8（配对条目那一处）: 只挡那一对（★ 本批的核心判据） ----------------------
+const biScope = biBlockEnv({ askScript: ["发送", "拒绝并屏蔽该会话", "发送", "拒绝并屏蔽该会话"], pairs: [{ a: BI_PEER, b: BI_THIRD, createdAt: 1 }] });
+const biScopeBlockOut = await biScope.send.execute({ targetSessionId: BI_PEER, message: "A→B 第一次" }, execFor(biScope.senderAgent));
+const biScopeAgain = await biScope.send.execute({ targetSessionId: BI_PEER, message: "A→B 第二次" }, execFor(biScope.senderAgent));
+const biScopeBA = await biScope.send.execute({ targetSessionId: BI_SELF, message: "B→A" }, biScope.execAs(BI_PEER));
+const biScopeCB = await biScope.send.execute({ targetSessionId: BI_PEER, message: "C→B 照常" }, biScope.execAs(BI_THIRD));
+const biScopeBC = await biScope.send.execute({ targetSessionId: BI_THIRD, message: "B→C 照常" }, biScope.execAs(BI_PEER));
+check("批 I · U4 只挡那一对（★ 红相＝检查仍是全局判断 / 仍按 sender 一个键判 ⇒ C→B 与 B→C 一起被拒，本条红）: A↔B 屏蔽后 **B 拒 A**、**A 拒 B**（双向），而 **C→B 与 B→C 全部照常投递**（各自恰好一封）",
+	biScopeBlockOut.includes("拒绝并屏蔽") && biScopeAgain.includes("已屏蔽") && biScopeBA.includes("已屏蔽")
+		&& biScopeCB.includes("已投递") && biScopeBC.includes("已投递")
+		&& !biScopeCB.includes("屏蔽") && !biScopeBC.includes("屏蔽")
+		&& biScope.calls(BI_PEER).followedup.length === 1 && biScope.calls(BI_THIRD).followedup.length === 1);
+check("批 I · U8 文案（收件检查那一处的**配对**分支；红相＝只说「已屏蔽」、不点名发起方也不给出口 ⇒ 本条红）: 点名**谁挡的**（发起方 B ＝条目的 `by`）与**怎么解**（`team_link_block action=unblock` ＋ 这一对的两个 id）",
+	biScopeAgain.includes(`由 ${BI_PEER} 发起`) && biScopeAgain.includes("只有发起屏蔽的一方")
+		&& biScopeAgain.includes("team_link_block action=unblock")
+		&& biScopeAgain.includes(`a=${biCanon(BI_PEER, BI_SELF).a}`) && biScopeAgain.includes(`b=${biCanon(BI_PEER, BI_SELF).b}`));
+
+// --- U5: 旧格式仍挡（NF-I3：不静默放开）＋ 标注「范围偏大」 ------------------------
+const biLegacy = biBlockEnv({ blockedSenders: [BI_SELF], trustedSenders: [BI_THIRD], rememberTargets: [BI_PEER] });
+const biLegacyOut = await biLegacy.send.execute({ targetSessionId: BI_PEER, message: "旧保护" }, execFor(biLegacy.senderAgent));
+const biLegacyThird = await biLegacy.send.execute({ targetSessionId: BI_PEER, message: "第三方不受牵连" }, biLegacy.execAs(BI_THIRD));
+check("批 I · U5 旧格式仍挡 + 文案标注（红相＝迁移时清空旧名单 ⇒ 保护失效；文案不标注「旧格式 / 范围偏大」⇒ 本条红）: 旧格式那一支**仍拒收**，文案说明它是**旧格式**且**范围偏大**，并给出可执行的清除指引；同一条旧记录**不挡别的发送方**（旧名单按发送方判，不是「谁都别发」）",
+	biLegacyOut.includes("已屏蔽来自当前会话的消息") && biLegacyOut.includes("旧格式") && biLegacyOut.includes("范围偏大")
+		&& biLegacyOut.includes(`team_link_block action=clear-legacy sender=${BI_SELF}`)
+		&& biLegacyOut.includes("被该条目挡住的发送方本人不能清自己的条目")
+		&& biLegacyThird.includes("已投递"));
+
+// --- U6 / U7 / U14: 解除的动作面与权限模型 ----------------------------------------
+const biUn = biBlockEnv({
+	askScript: ["发送", "拒绝并屏蔽该会话", "发送", "拒绝并屏蔽该会话"],
+	blocks: [{ a: BI_SELF, b: BI_THIRD, by: BI_THIRD, since: "2026-10-12T00:00:00.000Z" }],
+	blockedSenders: ["session-legacy-blocked"],
+});
+const biUnBlockOut = await biUn.send.execute({ targetSessionId: BI_PEER, message: "B 屏蔽 A" }, execFor(biUn.senderAgent));
+const biUnSeededBefore = JSON.stringify(biUn.blocks().filter((entry) => entry.a === BI_SELF && entry.b === BI_THIRD));
+const biUnSince = biUn.ns.updates.length;
+const biUnAbsent = await biUn.blockTool.execute({ action: "unblock", a: BI_PEER, b: "session-nobody" }, biUn.execAs(BI_PEER));
+check("批 I · U7 解除的负相（红相＝解一对不存在的静默成功 ⇒ 本条红）: **前置**（那一条真的写进去了，否则本条会在一个空表上假绿）＋ 解一对**不存在**的 ⇒ 如实拒绝 + **零写入**，且拒绝文案**列出当前全部屏蔽**（配对组与旧格式组都在）",
+	biUnBlockOut.includes("拒绝并屏蔽") && biUn.blocks().length === 2
+		&& biUnAbsent.includes("解除失败") && biUnAbsent.includes("没有配对屏蔽") && biUnAbsent.includes("零写入")
+		&& biUnAbsent.includes("【配对屏蔽】") && biUnAbsent.includes("范围偏大（旧格式）")
+		&& biUn.ns.updates.length === biUnSince && biUn.blocks().length === 2);
+
+const biUnByVictim = await biUn.blockTool.execute({ action: "unblock", a: BI_SELF, b: BI_PEER }, execFor(biUn.senderAgent));
+check("批 I · U14② 被屏蔽的一方不能解（红相＝任何会话都能解 / 不校验 `by` ⇒ 本条红）: A（被 B 屏蔽的那一方）调用 unblock ⇒ **拒绝 + 零写入**，文案说明「只有发起屏蔽的一方可以解除」并点名发起方 B",
+	biUnByVictim.includes("解除失败") && biUnByVictim.includes("只有发起屏蔽的一方可以解除") && biUnByVictim.includes(BI_PEER)
+		&& biUnByVictim.includes("零写入") && biUn.ns.updates.length === biUnSince && biUn.blocks().length === 2);
+const biUnByThird = await biUn.blockTool.execute({ action: "unblock", a: BI_SELF, b: BI_PEER }, biUn.execAs(BI_THIRD));
+check("批 I · U14③ 第三方不能解（红相＝不校验 `by` ⇒ 第三方也能解掉别人的屏蔽 ⇒ 本条红）: C（既非 a 也非 b）调用 unblock ⇒ **拒绝 + 零写入**，文案如实说它不在这一对里",
+	biUnByThird.includes("解除失败") && biUnByThird.includes("既不是这一对的两个端点之一")
+		&& biUn.ns.updates.length === biUnSince && biUn.blocks().length === 2);
+
+const biUnOut = await biUn.blockTool.execute({ action: "unblock", a: BI_SELF, b: BI_PEER }, biUn.execAs(BI_PEER));
+check("批 I · U14① / U6① `by` 那一方能解（红相①＝不校验 `by` 就放行（那条由 U14② 咬住）；红相②＝只删一半 / 误删别的对 ⇒ 本条红）: 发起屏蔽的一方 B 调用 unblock ⇒ 成功；那一条消失、**双向**恢复（两个方向的判定都不再命中）、**别的对逐字节未动**、旧名单逐字节未动，且**恰一笔**写 `blocks` 的补丁",
+	biUnOut.includes("已解除配对屏蔽") && biUnOut.includes("双向") && biUnOut.includes(BI_SELF) && biUnOut.includes(BI_PEER)
+		&& sameJson(biUn.blocks(), [{ a: BI_SELF, b: BI_THIRD, by: BI_THIRD, since: "2026-10-12T00:00:00.000Z" }])
+		&& JSON.stringify(biUn.blocks()) === biUnSeededBefore
+		&& sameJson(biUn.legacy(), ["session-legacy-blocked"])
+		&& __testing.isBlocked(biUn.view(), BI_SELF, BI_PEER).blocked === false && __testing.isBlocked(biUn.view(), BI_PEER, BI_SELF).blocked === false
+		&& biUn.ns.updates.slice(biUnSince).length === 1 && Object.keys(biUn.ns.updates.slice(biUnSince)[0]).join(",") === "blocks");
+
+// U6① 端到端：解除之后同一条投递重新投得出去（先补一条**配对通道**绕过两道门 ⇒ 判定只可能落在「屏蔽不再命中」上）。
+biUn.ns.data.pairs = [{ a: BI_SELF, b: BI_PEER, createdAt: 1 }];
+const biUnRecovered = await biUn.send.execute({ targetSessionId: BI_PEER, message: "解除之后" }, execFor(biUn.senderAgent));
+check("批 I · U6① 解除真的解开（端到端；红相＝只删一半 ⇒ 这个方向仍被拒 ⇒ 本条红）: 解除之后同一对**重新投得出去**（返回「已投递」，而不是任何屏蔽拒绝）",
+	biUnRecovered.includes("已投递") && !biUnRecovered.includes("屏蔽"));
+// U6③ 再屏蔽一次又能挡上：把那一条配对通道撤掉 ⇒ 回到需要走门的形状 ⇒ 对话框照样给得出「拒绝并屏蔽」。
+biUn.ns.data.pairs = [];
+const biUnReBlock = await biUn.send.execute({ targetSessionId: BI_PEER, message: "再屏蔽一次" }, execFor(biUn.senderAgent));
+check("批 I · U6③ 再屏蔽一次又能挡上（红相＝解除把写入路径也弄坏了 ⇒ 本条红）: 撤掉配对通道后再走一次门 ⇒ 新增那一条的 `by` 仍是发起方 B，且两个方向的判定重新命中",
+	biUnReBlock.includes("拒绝并屏蔽") && biUn.blocks().length === 2
+		&& at(biUn.blocks().filter((entry) => entry.a === BI_SELF && entry.b === BI_PEER), 0, {}).by === BI_PEER
+		&& __testing.isBlocked(biUn.view(), BI_SELF, BI_PEER).blocked && __testing.isBlocked(biUn.view(), BI_PEER, BI_SELF).blocked);
+
+// --- U11 / U12 / U15 / U18: 旧格式清条的权限三态与分组读面 --------------------------
+const biLc = biBlockEnv({
+	blockedSenders: ["session-blocked-one", BI_SELF, "session-blocked-two"],
+	blocks: [{ a: BI_PEER, b: BI_THIRD, by: BI_PEER, since: "2026-10-12T00:00:00.000Z" }],
+	pairs: [{ a: BI_SELF, b: BI_THIRD, createdAt: 7 }],
+	trustedSenders: ["session-trusted-x"],
+	rememberTargets: ["session-remembered-y"],
+});
+/** 除 `blockedSenders` 以外的**全部**顶层键快照（U11 的「逐字节不变」读数面）。 */
+const biLcOthers = (env) => JSON.stringify({
+	blocks: env.ns.data.blocks ?? null, pairs: env.ns.data.pairs ?? null, trustedSenders: env.ns.data.trustedSenders ?? null,
+	rememberTargets: env.ns.data.rememberTargets ?? null, teams: env.ns.data.teams ?? null, watchdogs: env.ns.data.watchdogs ?? null,
+	receiveMode: env.ns.data.receiveMode ?? null, pendingCreates: env.ns.data.pendingCreates ?? null, sections: env.ns.data.sections ?? null,
+});
+const biLcOthersBefore = biLcOthers(biLc);
+const biLcSince = biLc.ns.updates.length;
+const biLcSelf = await biLc.blockTool.execute({ action: "clear-legacy", sender: BI_SELF }, execFor(biLc.senderAgent));
+check("批 I · U18① 受益方不能自己动手（红相＝不校验 `selfId` ⇒ 被挡的发送方自己就把条目清了 ⇒ 本条红）: A（正是那条旧记录挡住的发送方）调用 clear-legacy ⇒ **拒绝 + 零写入**，文案点名「受益方不能自己动手」并指路由**别的**会话清",
+	biLcSelf.includes("清除失败") && biLcSelf.includes("受益方不能自己动手")
+		&& biLcSelf.includes(`team_link_block action=clear-legacy sender=${BI_SELF}`)
+		&& biLc.ns.updates.length === biLcSince
+		&& sameJson(biLc.legacy(), ["session-blocked-one", BI_SELF, "session-blocked-two"]));
+const biLcAbsent = await biLc.blockTool.execute({ action: "clear-legacy", sender: "session-not-listed" }, biLc.execAs(BI_THIRD));
+check("批 I · U12 / U18③ 旧名单里没有这个 sender ⇒ 如实拒绝 + 零写入 + **列出当前旧名单**（红相＝静默成功 / 拒绝文案不给读数 ⇒ 本条红）: 另一个会话清一条**不在**旧名单里的 ⇒ 拒绝、零写入，文案里能看到当前那三条旧记录",
+	biLcAbsent.includes("清除失败") && biLcAbsent.includes("session-not-listed") && biLcAbsent.includes("【旧格式屏蔽")
+		&& biLcAbsent.includes("session-blocked-one") && biLcAbsent.includes(BI_SELF) && biLcAbsent.includes("session-blocked-two")
+		&& biLc.ns.updates.length === biLcSince);
+const biLcOther = await biLc.blockTool.execute({ action: "clear-legacy", sender: "session-blocked-one" }, biLc.execAs(BI_THIRD));
+check("批 I · U11 / U18② 逐条清只清那一条（红相＝顺手清空整张旧名单 / 误动别的键 / 批量清 ⇒ 本条红）: 另一个会话（C）清指定的那一条 ⇒ 只有它消失、**其余旧记录原样在**，`blocks` / `pairs` / `trustedSenders` / `rememberTargets` / `teams` / `watchdogs` / `receiveMode` / `pendingCreates` / `sections` **逐字节不变**，且**恰一笔**只含 `blockedSenders` 的补丁",
+	biLcOther.includes("已清除 1 条旧格式屏蔽") && sameJson(biLc.legacy(), [BI_SELF, "session-blocked-two"])
+		&& biLcOthers(biLc) === biLcOthersBefore
+		&& biLc.ns.updates.length === biLcSince + 1 && Object.keys(biLc.ns.updates.slice(biLcSince)[0]).join(",") === "blockedSenders");
+const biListOut = await biLc.blockTool.execute({ action: "list" }, execFor(biLc.senderAgent));
+check("批 I · U15 `action=list` 分组呈现（红相＝两类混排 / 旧格式不标注「范围偏大（旧格式）」/ 两组各自缺解除指引 ⇒ 本条红）: 配对屏蔽与旧格式**分成两组**且配对组在前，旧格式组**标注**范围偏大并给出**按发送方逐条**的清除指引（两个方向各自的指引都在）",
+	biListOut.includes("【配对屏蔽】") && biListOut.includes("范围偏大（旧格式）")
+		&& biListOut.indexOf("【配对屏蔽】") < biListOut.indexOf("范围偏大（旧格式）")
+		// ★ 解除指引里的 id 对读**夹具自己那一条屏蔽**（本夹具唯一的一条 `blocks` 条目是 `{a: BI_PEER, b: BI_THIRD}`，即
+		// `biCanon(BI_PEER, BI_THIRD)`）；此前这里钉死的是 `a=BI_SELF b=BI_THIRD`（`session-self ↔ session-worker-c`），
+		// 而那一对在本夹具里**只是 `pairs`（信任配对）、不是屏蔽条目** ⇒ 判据超出规格（§5 FR-I4 只要求「分组呈现」、
+		// §8 U15 只要求「分成两组 + 旧格式标注 + 解除指引」、§9 只要求「分开展示」，全档没有一行钉死指引里的 id 对）。
+		&& biListOut.includes(`team_link_block action=unblock a=${biCanon(BI_PEER, BI_THIRD).a} b=${biCanon(BI_PEER, BI_THIRD).b}`)
+		&& biListOut.includes(`team_link_block action=clear-legacy sender=${BI_SELF}`)
+		&& biListOut.includes("team_link_block action=clear-legacy sender=session-blocked-two"));
+const biListEmpty = await biU1Env.blockTool.execute({ action: "list" }, execFor(biU1Env.senderAgent));
+check("批 I · U15 负相（空集也分组、也如实说「无」，不谎报条数）: 一条屏蔽都没有时 `list` 仍出两个组头、两处「（无）」，条数报 0/0",
+	biListEmpty.includes("配对屏蔽 0 条 / 旧格式屏蔽 0 条") && biListEmpty.includes("【配对屏蔽】") && biListEmpty.includes("范围偏大（旧格式）")
+		&& (biListEmpty.match(/（无）/gu) ?? []).length === 2);
+
+// --- U16: 单条畸形条目的归一化 -----------------------------------------------------
+const biBad = biBlockEnv({
+	blocks: [
+		{ a: BI_SELF, b: BI_PEER, by: BI_PEER, since: "2026-10-12T00:00:00.000Z" },
+		{ a: BI_SELF, b: BI_THIRD },
+		{ b: BI_THIRD, by: BI_THIRD },
+		"junk",
+		null,
+	],
+});
+const biBadView = biBad.view();
+check("批 I · U16 单条畸形条目（红相①＝不校验 `by` 就收下 ⇒ 缺 `by` 的那条进表、A↔C 被误挡 ⇒ 本条红；红相②＝一条坏的丢掉整张表 ⇒ 合法那条也没了 ⇒ 同样红）: 缺 `a` / 缺 `by` / 非对象 / `null` 四种畸形条目**各自被丢弃**，合法那一条**原样保留**，且畸形条目**没有被带进判定**",
+	biBadView.blocks.length === 1 && biBadView.blocks[0].a === BI_SELF && biBadView.blocks[0].b === BI_PEER && biBadView.blocks[0].by === BI_PEER
+		&& __testing.isBlocked(biBadView, BI_SELF, BI_THIRD).blocked === false
+		&& __testing.isBlocked(biBadView, BI_SELF, BI_PEER).blocked === true);
+
+// --- U19: 落点不变量（三个写路径各恰一笔、补丁单键、无直接文件写） ------------------
+const biW = biBlockEnv({ askScript: ["发送", "拒绝并屏蔽该会话"], blockedSenders: ["session-blocked-one"] });
+await tick();
+await tick();
+const biWFile = path.join(biW.policyHome, "team-link", "policy.json");
+const biWFileBefore = existsSync(biWFile) ? await readFile(biWFile, "utf8") : null;
+const biWSince = biW.ns.updates.length;
+await biW.send.execute({ targetSessionId: BI_PEER, message: "写路径①：blockSender" }, execFor(biW.senderAgent));
+const biWBlockPatches = biW.ns.updates.slice(biWSince);
+await biW.blockTool.execute({ action: "unblock", a: BI_SELF, b: BI_PEER }, biW.execAs(BI_PEER));
+const biWUnblockPatches = biW.ns.updates.slice(biWSince + biWBlockPatches.length);
+await biW.blockTool.execute({ action: "clear-legacy", sender: "session-blocked-one" }, biW.execAs(BI_THIRD));
+const biWClearPatches = biW.ns.updates.slice(biWSince + biWBlockPatches.length + biWUnblockPatches.length);
+const biWFileAfter = existsSync(biWFile) ? await readFile(biWFile, "utf8") : null;
+check("批 I · U19 落点不变量（红相＝双写 / 绕开 `policy.update` 直接写文件 / 顺手带上第二个键 ⇒ 本条红）: 三个写路径（`blockSender` / `unblockPair` / `clearLegacy`）**各恰一笔** `policy.update`、补丁**只含那一个键**（`blocks` · `blocks` · `blockedSenders`），且同一窗口内对落点文件（`<policyHome>/team-link/policy.json`）**没有一个字节的直接文件写** —— 本夹具是 settings 在位环境，那一份文件**两态都不存在**，故此半句在本夹具里判的是「本次动作**没有新建**它」（文件若为 settings 在位所新建 ⇒ 两态里至少一个不是 `null` ⇒ 本条红；真正的文件后端落点由 U1③ 承接 —— 那一档下 `policy.update` **本身就会合法写**这份文件，故它的判据是落点首行三态，**不做**字节比对）",
+	biWBlockPatches.length === 1 && Object.keys(biWBlockPatches[0]).join(",") === "blocks"
+		&& biWUnblockPatches.length === 1 && Object.keys(biWUnblockPatches[0]).join(",") === "blocks"
+		&& biWClearPatches.length === 1 && Object.keys(biWClearPatches[0]).join(",") === "blockedSenders"
+		&& biWFileBefore === null && biWFileAfter === null);
+
+// --- U17: 零新依赖（八条 import 白名单是硬闸门） -----------------------------------
+const biLibSource = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
+const biImportLines = biLibSource.split(/\r?\n/u).filter((line) => line.startsWith("import "));
+const biImportSpecs = biImportLines.map((line) => (/from\s+"([^"]+)"/u.exec(line) ?? [])[1]);
+check("批 I · U17 零新依赖（红相＝本批顺手新增一个 import ⇒ 本条红）: `lib/index.js` 顶层 `^import` 仍**恰 8 条**，八条说明符逐字是白名单那一份（新工具用的是本文件已有的 `wellFormed` / `agentSessionId` / `policy`）",
+	biImportLines.length === 8 && biImportSpecs.slice().sort().join(",") === ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "node:crypto", "node:fs", "node:fs/promises", "node:os", "node:path", "schemastery"].join(","));
+
+// --- U9: 文档同批改准（工具面 / README / CHANGELOG / backlog） ---------------------
+const biReadmeSource = await readFile(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
+const biChangelogSource = await readFile(fileURLToPath(new URL("./CHANGELOG.md", import.meta.url)), "utf8");
+const biBacklogSource = await readFile(fileURLToPath(new URL("./docs/backlog.md", import.meta.url)), "utf8");
+check("批 I · U9 文档同步（红相＝漏任何一处 ⇒ 本条红）: 新工具在册（工具 description 点名三个动作与两条权限口径 · README 能力清单含 `team_link_block` ＋ 架构图计数行同批改成 11 · CHANGELOG 有本批条目 · backlog 的 **B-2 标 ✅** 且 **B-3 仍在册**（重立即红））",
+	biU1Env.blockTool.description.includes("list") && biU1Env.blockTool.description.includes("unblock") && biU1Env.blockTool.description.includes("clear-legacy")
+		&& biU1Env.blockTool.description.includes("只有发起屏蔽的那一方") && biU1Env.blockTool.description.includes("本人")
+		&& biReadmeSource.includes("team_link_block") && biReadmeSource.includes("11 个工具 + 2 条 / 命令")
+		&& biChangelogSource.includes("team_link_block") && biChangelogSource.includes("批 I")
+		&& /\*\*B-2\*\*[^\n]*✅/u.test(biBacklogSource) && (biBacklogSource.match(/\*\*B-3\*\*/gu) ?? []).length === 1 && biBacklogSource.includes("投递目标过期"));
+
+// --- U10: 不回归（门序 / 屏蔽优先于配对；两道门的提问形状逐字未动） -----------------
+const biRegress = biBlockEnv({ blockedSenders: [BI_SELF], pairs: [{ a: BI_SELF, b: BI_PEER, createdAt: 1 }] });
+const biRegressOut = await biRegress.send.execute({ targetSessionId: BI_PEER, message: "屏蔽优先于配对" }, execFor(biRegress.senderAgent));
+check("批 I · U10 不回归（红相＝顺手改了门序 / 让配对压过屏蔽 / 动了提问形状 ⇒ 本条红）: ① 屏蔽仍**优先于配对快路径** —— 同一对既在 `pairs` 又在旧名单里 ⇒ 仍拒收、那一条陈旧配对按既有行为被清掉、且**一个对话框都不弹**（屏蔽检查在两道门之前，与改前逐字相同）；② 未屏蔽路径上的两道门提问顺序与 id 逐字未动（`send-confirm` → `receive-confirm`）",
+	biRegressOut.includes("已屏蔽") && biRegress.uq.requests.length === 0 && (biRegress.ns.data.pairs ?? []).length === 0
+		&& biWrite.uq.requests.length === 2 && biWrite.uq.requests.map((request) => request.questions[0].id).join(",") === "send-confirm,receive-confirm");
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
