@@ -30,6 +30,11 @@ sequenceDiagram
 
 ## 1. 背景
 
+**设计输入出处（评审 🟡#2 要求留痕）**：本批**没有会诊** —— 输入 = **用户 2026-10-13 的直接裁定**
+（父侧提问「心跳跑在插件里还是独立进程」⇒ 用户答「**心跳装插件里**」），以及同日父侧对崩溃史的取证
+（`death_forensics_report` 的 40 条 `non-graceful-end` 读数）。除此之外，第二轮设计评审的
+🟡/🔵 建议已在下方逐条折入（见各节 ★ 标注）。
+
 需求档 §2：崩溃史 **40 条**（自 2026-09-29），最近两次死亡窗口 `12:58:36Z → 01:37:59Z` 与 `00:18:52Z → 01:37:59Z`。
 DSH 自带 `~/.dsh/death-forensics/` 已有半个仪表（`crash.log` / `heartbeat.log` / `state.json`），
 但**心跳只有三格**（`ts` / `boot` / `pid`）⇒ **死前那一刻的机器状态无据可查**。
@@ -77,6 +82,7 @@ DSH 自带 `~/.dsh/death-forensics/` 已有半个仪表（`crash.log` / `heartbe
 | **FR-K2** | **周期心跳**：每次巡逻写一拍（原子覆盖 `heartbeat.json`）；内容见 §7 | `patrol()`（`:3485-3503`）循环体末尾，与 `runPatrolEnsure`（`:3495`）并列 |
 | **FR-K3** | **启动时算死亡窗口**：扫描 `forensics/*/`，取**非本次**目录里 `lastBeatAt` 最大的那份 ⇒ 与本次 `startedAt` 一起渲染 | 同上新模块；读数缓存在进程内（activation 一次） |
 | **FR-K4** | **读面**：`team_link_status` 新增可选参数 `action=forensics` ⇒ 输出「本次启动 + 上一次的死亡窗口 + 死前读数 + 保留份数」；**不带该参数时输出逐字不变** | `team_link_status` 的 handler（`:13408` 注册 · 渲染在 `:13485` 邻近） |
+| **FR-K5 ★（评审 🟡#1 的处置：补零注册空集）** | **兜底心跳定时器**：巡逻定时器是**按注册建**的（`schedule(entry)` → `setInterval`，`lib/index.js:3217` 是全模块**唯一**一处 `setInterval`）⇒ **零看门狗注册时根本不存在巡逻 ⇒ 心跳会静默停在首拍** ✗。而这与 B-4 的目的（**宿主级**崩溃取证）冲突。⇒ activation 时若 `policy.get().watchdogs.length === 0`，**另起一个 unref 的兜底定时器**（间隔 `FORENSICS_FALLBACK_INTERVAL_MS = 10 × 60000`）专心跳；一旦出现注册（巡逻开始跑）就**停掉兜底**（避免双写）。**常见情形（本部署恒有自动注册）仍走 D4 的复用路径、零额外定时器** | 新模块级 helper · 与 `schedule` / `patrol` 同闭包 |
 
 **改动的文件面**：`lib/index.js`（一个新模块区 + 巡逻挂钩 + 状态卡一个新动作）· `host-half.test.mjs`（新判据块）· 本批两份档 · `CHANGELOG.md` · `README.md`（状态卡动作表）。
 
@@ -135,7 +141,9 @@ function readPreviousForensics() { /* 扫描 forensics/*/heartbeat.json，取 la
 async function pruneForensics(keep = FORENSICS_KEEP_BOOTS) { /* 纯读目录 + unlink；越界不删；永不删本次 */ }
 ```
 
-**新增符号**：`bootId` / `forensicsRoot` / `writeHeartbeat` / `readPreviousForensics` / `pruneForensics` / `renderForensicsReport` · 具名常量 `FORENSICS_KEEP_BOOTS = 10`。
+**新增符号（★ 评审 🔵#4：与既有助手分开列，避免实施者以为是既有）**
+- **本批新增**：`bootId` · `forensicsRoot` · `writeHeartbeat` · `readPreviousForensics` · `pruneForensics` · `renderForensicsReport` · `armForensicsFallback` / `disarmForensicsFallback`（FR-K5）· 具名常量 `FORENSICS_KEEP_BOOTS = 10` 与 `FORENSICS_FALLBACK_INTERVAL_MS = 600000` · 心跳状态的进程内 `beatSeq`（计数器）。
+- **既有的（本批只调用）**：`writePolicyFileAtomic`（`:1895`）· `patrol` / `schedule` / `runPatrolEnsure`（`:3485` / `:3214` / `:3420` 邻近）· `describeError`（`:659`）· `ctx.agents.list()` · `policy.get()`。伪代码里的 `memoryReading` / `diskReading` / `liveAgentCount` / `rosterSessionCount` / `watchdogRowCount` / `warnOnce` 是**本批新增的小助手**（分别包 `process.memoryUsage()` / `statfs` / `ctx.agents.list().length` / `policy.get().teams` 的会话数 / `policy.get().watchdogs.length` / 单行 warn 门）。
 **前置（对 `writeHeartbeat`）**：`forensicsRoot` 已建（activation 那一步）。
 **后置（对 `pruneForensics`）**：目录数 ≤ keep；**永不删本次**。
 
@@ -185,6 +193,8 @@ async function pruneForensics(keep = FORENSICS_KEEP_BOOTS) { /* 纯读目录 + u
 | **U9** | **零新依赖 / 零 schema**：顶层 `import` 仍 8 条；`policy.json` 键集仍十键 | 新增 import 行或字段 ⇒ 本条红 |
 | **U10** | **磁盘读不到的诚实路径（★ 评审 🟡#3①）**：把 `statfs` 桩成 reject ⇒ `disk.free` / `disk.total` **恰为 `null`**，且**不得**出现任何数字（编造 ⇒ 本条红）；同时 `writeHeartbeat` **不抛**、巡逻照常 | 用 0 或估算值冒充 ⇒ 本条红 |
 | **U11** | **免责声明在场（★ 评审 🟡#3②）**：`action=forensics` 的输出**含**那句「**非正常退出不单独归因**」（本批只留现场、不下崩溃结论）；★ **且**「正常退出」与「崩溃」同形这件事在输出里说清 | 删掉那句 ⇒ 本条红 |
+| **U12 ★（评审 🟡#1 的处置）** | **零注册兜底**：预置 `policy.watchdogs === []` ⇒ ① 兜底定时器**存在**（心跳仍周期更新：跑两次注入时钟 ⇒ `seq` 递增）② 一旦出现一条注册 ⇒ 兜底**停掉**（不双写：同一窗口内 `seq` 只增一） | 去掉兜底 ⇒ ① 红；出现注册后不停兜底 ⇒ ② 红（`seq` 增二） |
+| **U13 ★（评审 🔵#6 的处置：给「不写宿主地盘」一条负向锁）** | **写面只落在自家根下**：断言心跳写路径（`writeHeartbeat` 的目标与 `pruneForensics` 的删除面）**只**出现 `forensicsRoot` 之下的路径，**代码里不出现** `death-forensics` 这一字面量 | 把目标改到宿主目录、或代码里出现 `death-forensics` ⇒ 本条红 |
 
 **用户故事 → 判据映射（★ 评审 🔵#6 要求显式化）**
 
@@ -193,9 +203,9 @@ async function pruneForensics(keep = FORENSICS_KEEP_BOOTS) { /* 纯读目录 + u
 | **US-K1**（看死前读数） | U1 · U2（心跳在场且更新）· U10（磁盘诚实） |
 | **US-K2**（看死亡窗口时长） | U4（窗口计算 + 首次运行如实说「无」） |
 | **US-K3**（一条命令可读） | U6（只读合同）· U7（输出面）· U11（免责声明） |
-| **US-K4**（不打扰、有界） | U5（保留上限）· U8（失败静默） |
+| **US-K4**（不打扰、有界） | U5（保留上限）· U8（失败静默）· **U12（零注册兜底：不静默退化）** |
 
-**两次实测读数（实施方必须给）**：修复前（把周期心跳那一句去掉）⇒ **U2 红**；接上 ⇒ 全绿。清理判据的**双向**读数：不清理 ⇒ U5 红；清理但删错（含本次）⇒ U5 红。磁盘与免责声明两条的**双向**读数：桩成 reject ⇒ U10 绿而「编造数字」的变异版本红；删免责句 ⇒ U11 红。
+**两次实测读数（实施方必须给）**：修复前（把周期心跳那一句去掉）⇒ **U2 红**；接上 ⇒ 全绿。清理判据的**双向**读数：不清理 ⇒ U5 红；清理但删错（含本次）⇒ U5 红。磁盘与免责声明两条的**双向**读数：桩成 reject ⇒ U10 绿而「编造数字」的变异版本红；删免责句 ⇒ U11 红。兜底那条：去掉 FR-K5 ⇒ **U12 红**；把 `death-forensics` 写进代码 ⇒ **U13 红**。
 
 ---
 
@@ -204,10 +214,12 @@ async function pruneForensics(keep = FORENSICS_KEEP_BOOTS) { /* 纯读目录 + u
 | 情形 | 行为 |
 | --- | --- |
 | **首次运行（没有任何旧目录）** | 如实说「无（首次运行）」——**不编造**窗口 |
+| **★ 零看门狗注册（评审 🟡#1 补）** | **不由「无注册」静默退化**：巡逻定时器是按注册建的（全模块唯一一处 `setInterval` 在 `schedule`，`lib/index.js:3217`）⇒ 零注册时**另起兜底定时器**（**FR-K5**），心跳仍周期更新；一旦出现注册（巡逻开始跑）⇒ **停掉兜底、改走巡逻**（不双写）。本部署恒有自动注册 ⇒ 该分支**实践上不触发**，但有判据（**U12**）钉住 |
+| **旧目录里的心跳文件损坏 / 不可解析（评审 🔵#3 补）** | **跳过该目录、视同无此份**（`readPreviousForensics` 的既有「不抛」承诺 + 该跳过语义）；全部旧目录都坏 ⇒ 与「首次运行」同支：如实说「无」 |
 | **目录不可写 / 磁盘满** | 只 warn；**主功能零影响**（NF-K4） |
 | **`statfs` 不可用（平台差异）** | `disk` 写 `null` 并如实标注，**不编造数字** |
-| **进程正常退出** | 最后一次心跳仍在 ⇒ 窗口 = [最后心跳, 下次启动]（这与崩溃**同形**）⇒ 判据必须**结合宿主 `crash.log` 的 `non-graceful-end`** 才能区分「崩」与「正常退出后关机」——**本批把这句写进输出**，不单独下「崩溃」结论 |
-| **同时多次启动** | 每个 pid 一个目录（bootId 含 pid）⇒ 互不覆盖 |
+| **进程正常退出** | 最后一次心跳仍在 ⇒ 窗口 = [最后心跳, 下次启动]（这与崩溃**同形**）⇒ **判定需由人结合宿主 `crash.log` 的 `non-graceful-end`** 才能区分「崩」与「正常退出后关机」——**本批把免责句写进输出**（U11），**插件自己不读**那个文件（§5 ★）、也不单独下「崩溃」结论 |
+| **同时多次启动（评审 🔵#5 补）** | 每个 pid 一个目录（bootId 含 pid）⇒ 互不覆盖。★ `readPreviousForensics` **取「非本次中 lastBeatAt 最大」**是**有意取舍**：并存实例下它可能选中另一个**仍在跳动**的兄弟实例 —— 那是「最近一次真实现场」，**正是要找的那份**（而不是把并存当成异常） |
 | **清理越界** | `pruneForensics` **永不删本次**，且只删匹配 `forensics/<bootId>/` 形态的目录（不做通配删除） |
 | **失败方向** | **fail-open**（观测失败绝不影响功能）；**取证本身 fail-closed**（读不到就写 `null` / 说「无」，绝不编造） |
-| **重启** | 这是本批的**设计前提**：每次启动都是新目录 |
+| **重启** | 这是本批的**设计前提**：每次启动都是新目录；落地判据 = Aw/§8 **U4**（窗口计算）＋ **U7**（输出面）——**等价新进程读回**（评审 🟡#3 的口径对齐：单测里不真重启进程，取「读回路径」等价形态） |
