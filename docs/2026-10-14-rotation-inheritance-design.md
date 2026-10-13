@@ -23,7 +23,7 @@ flowchart TD
     C -- "无确认服务/取消/超时" --> X["fail-closed：零会话零令牌零冻结（既有语义，本批不动）"]
     C -- 确认 --> D["③ 逐角色建会话：plan = { preset, provider, model }"]
     D --> E["既有 buildTeamSessionCreateOptions（:10946，本函数逐字不改）<br/>resolve → meta.agentPreset → agentOptions → mount"]
-    E --> F["④ 三处如实回填：prepare 回执 · 交接文档事实段 · （审批档若可写）setup 里设"]
+    E --> F["④ 三处如实回填：prepare 回执 · 交接文档事实段 · （审批档若可写）**创建返回之后**设<br/>（默认；探针显示「只能创建时设」⇒ 退化为 setup 里设 + D6/§5 同批改写）"]
     F --> G["继任者凭令牌自行 claim（Phase B 逐字不动）"]
 ```
 
@@ -60,11 +60,11 @@ flowchart TD
 | # | 决策 | 理由 | 被否决的备选 |
 | --- | --- | --- | --- |
 | **D1** | **预设**：读**前任会话自己存的那一份**（`agent.session.header.agentPreset`，与复活面 `:11100` **同一个字段**） | **该字段已被复活路径在真机验证可读**（本仓既有实现与判据都在用它）⇒ 零风险面 | 在 `TeamConfig` 里存「每角色上次 preset 镜像」—— **双事实源必漂移**，且违反「状态单写一处」 |
-| **D2** | **读不到 ⇒ 回退宿主缺省 + 具名如实行，不阻断创建** | 换届场景**前任已被冻结**；若因「继承失败」拒绝创建，整次换届会卡死在**没人能修的墙前**（会诊 [5] R-②b 的论证）。⇒ 如实报 > 假装，**可用 > 完美** | 「继承来的 preset 解析失败 ⇒ fail-closed 拒绝创建」（会诊 [3] 主张）—— 它保护的是「不出现顶着旧名字跑别的工作面的继任者」，但代价是换届死锁；本批用**三处可见的如实报**替代拒绝 |
+| **D2** | **读不到 ⇒ 回退宿主缺省 + 具名如实行，不阻断创建** | 换届场景**前任已被冻结**；若因「继承失败」拒绝创建，整次换届会卡死在**没人能修的墙前**（会诊 [5] R-②b 的论证）。⇒ 如实报 > 假装，**可用 > 完美** | 「继承来的 preset 解析失败 ⇒ fail-closed 拒绝创建」（**会诊 [2] glm-5.3 主张**；★ 出处经设计评审 🟡#5 更正：原写 [3] 是记错 —— 会诊 [3] deepseek 恰恰主张「绝不因此拒绝创建」）—— 它保护的是「不出现顶着旧名字跑别的工作面的继任者」，但代价是换届死锁；本批用**三处可见的如实报**替代拒绝 |
 | **D3** | **优先级：前任存量 > 调用方显式给 > 宿主缺省** | 换届场景没有「调用方显式给」这一档（prepare 不加 preset/model 参数 —— 参数膨胀，且**模型转录 preset id 正是本仓反复要防的事**）；该顺序为将来留门且当下行为确定 | 调用方显式 > 前任（会让「谁发起」隐式决定新会话设置，更难审计） |
 | **D4** | **审批档：先探针、后定**。宿主**可写面在场** ⇒ 继承并把该项**写进确认框正文**；不在场 ⇒ **如实报一行未继承** | 用户原话逐字含「还得重新设置**权限**」；但**静默把高权限档复制给新会话是安全回退**（会诊 [5] 的顾虑）⇒ 用**披露**化解：**看得见就不算静默** | ① 一律不继承（会诊 [5] 主张）—— 用户的抱怨没被解决；② 一律继承且不披露 —— 静默延续高风险配置，不可接受 |
 | **D5** | **零新增政策状态**：不落 `policy.json` 字段；继承结果写进 **prepare 回执** + **交接文档事实段**（+ 确认框正文） | prepare 与 create 在**同一调用链内** ⇒ 无需落盘中间态；`policy.json` 键集仍**十键**（既有判据 `U19_POLICY_KEYS` 原样绿） | 落 `pending.inherit` 快照（会诊 [4] 主张）—— 引入会过期、会与 header 漂移的中间态 |
-| **D6** | **改动面**：新增一个**继承读取器** + 改**两个调用点**；`buildTeamSessionCreateOptions` / 复活路径 / `/team_session` 建队路径**逐字不改** | 病根在「传什么」，不在「怎么建」；把改动压在调用点 ⇒ 既有判据（尤其 U19 与复活面那一组）零牵连 | 改造 `buildTeamSessionCreateOptions` 内部回退源（会波及 `/team_session` 路径，回归面变大） |
+| **D6** | **改动面**：新增一个**继承读取器** + 改**两个调用点**；`buildTeamSessionCreateOptions` / 复活路径 / `/team_session` 建队路径**逐字不改**（★ 评审 🔴#2 的口径补全：**审批档默认在创建返回之后设**，不进 plan、不动该函数；**仅当探针 2 显示该宿主只能创建时设时**才退化为「加进 plan + setup 里设」，**届时 D6 与 §5 文件面同批改写并明文豁免那一行**） | 病根在「传什么」，不在「怎么建」；把改动压在调用点 ⇒ 既有判据（尤其 U19 与复活面那一组）零牵连 | 改造 `buildTeamSessionCreateOptions` 内部回退源（会波及 `/team_session` 路径，回归面变大） |
 
 ---
 
@@ -74,8 +74,8 @@ flowchart TD
 | --- | --- | --- |
 | **FR-P1** | **继承读取器** `readInheritableSettings(ctx, incumbentSessionId)` → `{ preset, provider, model, approvalPolicy }`（读不到的项为 `null`，**绝不编造**） | 新模块级函数；读面分别见**实施首步的两个探针**（§6 前置） |
 | **FR-P2** | **两个调用点接上**：`autoHandover`（`:8134`）与 reappoint 自建支路（`:13981`）的 `plan` 改为由 FR-P1 的结果填充（读不到的项仍传 `undefined`） | 同上两处 |
-| **FR-P3** | **三处如实可见**：① **确认框正文**逐项列「继承 preset=X · model=Y · 审批档=Z 或 未继承：<原因>」；② **prepare 回执**同项一行；③ **交接文档事实段**同项一行 | 确认框：`rotate` / `reappoint` 的确认构造点；回执与文档：`writeHandoffDocument` 的调用方 |
-| **FR-P4** | **审批档继承（条件性）**：宿主可写面在场 ⇒ 在 `setup` 期把档位设到新会话；不在场 ⇒ 只走 FR-P3 的「未继承」如实报 | `buildTeamSessionCreateOptions` 的 `setup`（`:11010-11014` 邻近，**只加调用不加逻辑**；⚠ 见 §6 探针 2） |
+| **FR-P3** | **三处如实可见**：① **确认框正文**逐项列「继承 preset=X · model=Y · 审批档=Z 或 未继承：<原因>」；② **prepare 回执**同项一行；③ **交接文档事实段**同项一行 | 确认框：`rotate` / `reappoint` 的确认构造点（as-of：`team_link_rotate` 的 `askRotationConfirm` 调用点 · `reappoint` 的对话框构造点）· 回执与文档：`writeHandoffDocument` 的调用方（as-of：`prepare` 收尾与 `reappoint` 交付处）★ 评审 🔵#8：两处落点补 as-of 符号锚，实施按符号定位 |
+| **FR-P4** | **审批档继承（条件性）**：① **默认 = 创建返回之后设**（在两个调用点、`agents.create` 返回之后调宿主写面）⇒ **`buildTeamSessionCreateOptions` 逐字不改**（与 D6 一致、回归面最小）；② **仅当探针 2 显示该宿主只能「创建时设」时**才退化为「把 `approvalPolicy` 加进 `plan` + 在 `setup` 里设」——**届时 D6 与 §5 文件面必须同批改写**（明文豁免那一行）。不在场/不可写 ⇒ 只走 FR-P3 的「未继承」如实报 | 默认落点：`autoHandover`（`:8134` 附近）与 reappoint 自建支路（`:13981` 附近）的**返回之后**；退化落点：`buildTeamSessionCreateOptions` 的 `setup`（`:11010-11014` 邻近）＋ **D6/§5 同批改写**。⚠ 见 §6 探针 2 |
 
 **改动的文件面**：`lib/index.js`（读取器 + 两调用点 + 确认框/回执/文档三处文案）· `host-half.test.mjs`（新判据块）· `README.md` / `CHANGELOG.md` / 本批两份档。
 
@@ -94,6 +94,12 @@ flowchart TD
 
 探针 2（审批档可写性）：`permissionPresets.set(session, preset)` 或等价写面，对**插件自建会话**是否可达？
   ⇒ 可达 ⇒ 做 FR-P4；不可达 ⇒ 本项降级为「如实报未继承」，并在档里登记为宿主面缺口
+
+探针 3（评审 🟡#4 折入：**不靠活代理**的会话级读面）：
+  「前任代理已不在场」时，`header.agentPreset` 还能不能读到？（`ctx.agents.get(id)` 对已死代理返回空 ⇒ 需另找面：
+   会话持久化/查询面，或复活路径实际用的那条存取面）
+  ⇒ 能 ⇒ §9 的「已死前任仍可继承预设」成立，Pi9 取「仍继承」分支；
+  ⇒ 不能 ⇒ **§9 该句必须改准**为「已死前任 ⇒ 如实报未继承」，Pi9 取「如实报」分支（两条都不许静默）
 ```
 
 ### 6.2 读取器与接线
@@ -105,19 +111,26 @@ flowchart TD
  *       本函数**不抛**（内部逐项 try/catch ⇒ null），因为「继承失败」永远不许阻断创建（NF-P3）。
  */
 function readInheritableSettings(ctx, incumbentSessionId) {
-    const session = ctx.agents.get(incumbentSessionId)?.session;
+    const session = ctx.agents.get(incumbentSessionId)?.session;   // ⚠ 代理不在场 ⇒ 按探针 3 走会话级读面（Pi9）
     return {
         preset: stringOrNull(session?.header?.agentPreset),      // D1：与复活面同源
-        provider/model: probeModelPair(ctx, incumbentSessionId), // D2/探针 1：全不可读 ⇒ 两个 null
+        provider: probeModelPair(ctx, incumbentSessionId).provider, // D2/探针 1：读不到 ⇒ null
+        model: probeModelPair(ctx, incumbentSessionId).model,       //   （评审 🔵#7：拆成两个显式键）
         approvalPolicy: probeApprovalPolicy(ctx, incumbentSessionId), // D4/探针 2
     };
 }
 
-/** 两个调用点的接线（逐字：只把 undefined 换成读数，其它参数不动） */
+/**
+ * 两个调用点的接线（逐字：只把 undefined 换成读数，其它参数不动）。
+ * ★ 审批档**不进 plan**（D6：创建函数逐字不改）—— 它由调用方在 `agents.create` **返回之后**设置
+ *   （FR-P4 默认支路）；仅当探针 2 显示「只能创建时设」时才把它加进 plan 并在 setup 里设（届时改 D6）。
+ */
 const inherited = readInheritableSettings(ctx, incumbent.sessionId);
 const plan = { preset: inherited.preset ?? undefined,
                provider: inherited.provider ?? undefined,
                model: inherited.model ?? undefined, team };
+const created = await createRootAgent(ctx, rootCtx, plan, entry, cwd);
+if (inherited.approvalPolicy !== null) await setApprovalPreset(ctx, created, inherited.approvalPolicy); // FR-P4 ①
 ```
 
 **前置（对 FR-P3 的三处回填）**：`inherited` 与最终生效值都可读（读不到就是一个 `null` + 一条原因串）。
@@ -146,11 +159,14 @@ const plan = { preset: inherited.preset ?? undefined,
 | # | 判据 | 红相（怎么让它红） |
 | --- | --- | --- |
 | **Pi1** | **预设继承**：前任 header 存非缺省 preset ⇒ 继任者 create 的 `meta.agentPreset` **等于**前任值 | 把读取源改回字面量 `preset: undefined` ⇒ 继任者落宿主缺省 ⇒ **本条红** |
-| **Pi2** | **模型继承**（探针 1 通过时）：前任可读模型对 ⇒ 继任者 `agentOptions` 里是**同一对**；探针不通过时本条降级为「如实报一行（含原因）」的断言 | 同上（改回 `undefined`）⇒ **本条红** |
+| **Pi2** | **模型继承**（探针 1 通过时）：前任可读模型对 ⇒ 继任者 `agentOptions` 里是**同一对**。★ **双分支红相（评审 🟡#6 折入）**：① 探针通过分支的红相 = 把读取源改回 `undefined` ⇒ 红；② **降级分支的红相 = 去掉那行「未继承（原因）」如实报 ⇒ 红**（与 Pi3 联动） | 见左列两条红相 |
 | **Pi3** | **三处如实可见**：确认框正文 / prepare 回执 / handoff 事实段**各含**继承行（且三项齐全：preset/model/审批档，未继承的写明原因） | 去掉任一处 ⇒ **本条红** |
 | **Pi4** | **不阻断**：前任 preset 不可解析（`resolve` 抛）⇒ **创建仍成功**、`agents.create` **被调用一次**、回执含「未继承 + 原因 + 出路」 | 改成 fail-closed 拒绝创建 ⇒ **本条红** |
 | **Pi5** | **零新增状态 / 零新依赖**：`policy.json` 键集仍十键（复用 `U19_POLICY_KEYS` 真读数）；顶层 `^import` 仍 8 条 | 加字段或加 import ⇒ **本条红** |
 | **Pi6** | **不回归**：`/team_session` 建队路径与**复活路径**的既有判据全绿（尤其复活面读 `header.agentPreset` 那一组逐字不变） | 顺手改了 `buildTeamSessionCreateOptions` 内部回退源 ⇒ 既有多条判据红 |
+| **Pi7 ★（评审 🔴#1 折入：**判据不能只查「印了字」**）** | **审批档真的设进去了**（探针 2 通过时）：① 新会话的审批档**等于**前任值（或 `permissionPresets.set` **恰被调用一次**且第二参为前任值）；② **降级分支**（探针 2 不通过）：只投「未继承（原因）」如实行，**零设置调用** | ① 把那次设置调用改成 **no-op** ⇒ **本条红**（★ 这正是原设计的洞：只打印一行「审批档=Z」而没真设，**Pi3 照样绿**）；② 降级分支仍去调用设置 ⇒ 本条红 |
+| **Pi8 ★（评审 🔵#9 折入）** | **「前任从没存过 preset」路径**：`header.agentPreset` 为 `undefined`/空串 ⇒ 继任者落**宿主缺省**、且回执含具名「未继承（原因：前任无存量）」行（与 Pi4 的「解析抛」是**两条不同**路径） | 把该路径写成静默落缺省 ⇒ 本条红 |
+| **Pi9 ★（评审 🟡#4 折入）** | **已死前任**：代理不在场时，按**探针 3** 的结论落 —— 有会话级读面 ⇒ 预设**仍继承**（`header` 在盘上）；无 ⇒ **如实报未继承**（**绝不静默变 null**） | 让「代理不在场」直接静默成 `null` 而无如实行 ⇒ 本条红 |
 
 **两次实测读数（实施方必须给）**：**修复前** ⇒ **Pi1/Pi2 红**（继任者落宿主缺省）；**修复后** ⇒ 全绿。
 
@@ -160,7 +176,7 @@ const plan = { preset: inherited.preset ?? undefined,
 
 | 情形 | 行为 |
 | --- | --- |
-| **前任会话已死（代理不在场）** | 名字里的 header 仍在盘上（**复活路径已证实**）⇒ 预设**仍能继承**；模型大概率读不到 ⇒ 该项 `null` + 如实报 |
+| **前任会话已死（代理不在场）** | ★ **按探针 3 的结论落，两个分支都不许静默**（评审 🟡#4）：有会话级读面 ⇒ 预设**仍能继承**（`header` 在盘上）；无 ⇒ **如实报「未继承（原因：宿主无会话级读面）」**；模型大概率读不到 ⇒ 该项 `null` + 如实报 |
 | **前任没有存过 preset** | `preset = null` ⇒ 走宿主缺省 + 具名如实行（**不编造**） |
 | **继承来的 preset 已被删除/改名** | `resolve` 抛 ⇒ **回退宿主缺省 + 具名如实行**（D2；**不阻断创建**），文案点名那个 id 与出路 |
 | **探针 1/2 都失败** | 本批退化为「**只继承预设**」+ 三处如实报两项「未继承（原因：宿主无可读面）」—— 需求档 US-P1 仍满足 |
