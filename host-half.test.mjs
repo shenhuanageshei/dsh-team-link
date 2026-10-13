@@ -3592,7 +3592,7 @@ const rotRoles = () => [
  * and the trust state a rotation operates on. `receiveMode: accept` keeps notice
  * delivery out of the receiver dialog; the notice cases set their mode explicitly.
  */
-function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, agentPresetsOptions = undefined, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitResume = false, extraAgents = undefined, omitAgentsCreate = false } = {}) {
+function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, agentPresetsOptions = undefined, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, projectionsReadings = undefined, omitResume = false, extraAgents = undefined, omitAgentsCreate = false } = {}) {
 	const env = setup({
 		sessions: [],
 		useSettings: true,
@@ -3624,6 +3624,10 @@ function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trus
 		// 里带上模型选择，否则「令牌投给了一个跑不起来的持钥者、而旧任已冻结」。
 		omitAgentDefaultModel,
 		agentDefaultModelOptions,
+		// 批 P（FR-P1/FR-P2）：继承读取器的模型投影读数面（`sessionProjections.stateOf(session,
+		// "modelSelection")` 的读数）。透传它 = 让 `successor:"auto"` 这条真路径能带上
+		// 「前任上次用的模型对」，而不是只测一个复制品。
+		projectionsReadings,
 		// §10.2.2 模板的第四块（真机缺陷 #4）：auto 路径的继任者同样要被命名
 		// （同一个 `createRootAgent` ⇒ 同一个注入点），两档降级 fixture 同样转发。
 		omitSessionTitle,
@@ -14534,6 +14538,113 @@ check("批 J · U6 反走私负向判据（★ 收尾单补齐：此前如实登
 		&& (cjU6IdleFace.match(CJ_U6_MARK_RE_G) ?? []).length === 2
 		&& !CJ_U6_CTRL_RE.test(cjU6PressureFace) && !cjU6PressureFace.includes(CJ_U6_MARK) && cjU6PressureFace.includes("未知")
 		&& !CJ_U6_CTRL_RE.test(cjU6PressureFrameFace) && frameClean(cjU6PressureFrameFace));
+
+// ---------------------------------------------------------------------------
+// 批 P · 换届继任者的设置继承（设计档 docs/2026-10-14-rotation-inheritance-design.md）
+// FR-P1 读取器 + FR-P2 两个调用点接线；§8 的判据 Pi1 / Pi2 / Pi5 / Pi6。
+// **本块 4 条判据，共 7 条断言**（Pi1 两条 · Pi2 两条 · Pi5 两条 · Pi6 一条）。
+// 三个宿主探针的结论（只读，实读宿主 app.asar）：
+//   探针 1 通过 —— 非调用方会话的 provider/model 可读（活代理走宿主持久投影
+//     `sessionProjections.stateOf(session, "modelSelection").lastUsed`，无活代理走
+//     `sessionQuery.readSession` 的最后一条 `request/header`）⇒ 模型**继承**分支生效。
+//   探针 2 通过 —— `permissionPresets.set(session, name)` 对插件自建会话可达，且宿主自己的
+//     建会话路径（asar 的 `createWebhookSession`）是 **create 返回之后** 才设 ⇒ FR-P4 走默认
+//     支路（本单不做 FR-P4，审批档**不进 plan**）。
+//   探针 3 通过 —— 代理不在场时 `header.agentPreset` 仍可读（`sessionQuery.readSession` 返回
+//     盘上那份 `SessionLogHeader`）⇒ 「已死前任仍可继承预设」分支生效（Pi1 第二条断言）。
+// ---------------------------------------------------------------------------
+const piInherit = __testing.readInheritableSettings;
+/** 前任 header 里存着的**非缺省** preset（必须在 `makeAgentPresets` 的 `known` 里）。 */
+const PI_INCUMBENT_PRESET = "reviewer";
+/** 前任上次用的模型对（与 `STUB_DEFAULT_*` 不同 —— 否则「继承生效」与「落宿主缺省」同值，判据恒真）。 */
+const PI_INCUMBENT_PROVIDER = "inherited-provider";
+const PI_INCUMBENT_MODEL = "inherited-model";
+const PI_HANDOFF = handoffAll;
+
+// --- Pi1① / Pi2①：端到端 —— `successor:"auto"` 建出来的继任者带上前任的三项 --------
+const piEnv = rotateEnv({
+	askScript: ["创建并交班"],
+	projectionsReadings: { modelSelection: { lastUsed: { provider: PI_INCUMBENT_PROVIDER, model: PI_INCUMBENT_MODEL }, pending: null } },
+});
+// 前任 = coordinator 的现任 = `session-self`（M4 的发起人就是该角色现任）。
+// 「它自己存下的那一份」写在**会话 header** 上（D1：与复活面读的是同一个字段）。
+piEnv.senderAgent.session.header.agentPreset = PI_INCUMBENT_PRESET;
+await piEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: PI_HANDOFF }, execFor(piEnv.senderAgent));
+const piCreate = piEnv.creates[0];
+check(`批 P · Pi1① 预设继承（红相＝把两个调用点的读取源改回字面量 \`preset: undefined\` ⇒ 继任者落宿主缺省 ${STUB_DEFAULT_PRESET} ⇒ 本条红）: 前任 coordinator 现任的 header 存着非缺省 preset（${PI_INCUMBENT_PRESET}）⇒ 继任者 create 的 \`meta.agentPreset\` **等于前任值**`,
+	piEnv.creates.length === 1 && piCreate?.meta?.agentPreset === PI_INCUMBENT_PRESET && PI_INCUMBENT_PRESET !== STUB_DEFAULT_PRESET);
+check(`批 P · Pi2① 模型继承（红相＝把读取源改回 \`provider/model: undefined\` ⇒ 继任者落宿主缺省 ${STUB_DEFAULT_PROVIDER}/${STUB_DEFAULT_MODEL} ⇒ 本条红）: 前任的持久投影（\`modelSelection.lastUsed\`）可读 ⇒ 继任者 \`agentOptions\` 里是**同一对**，且因为两半都给足了、宿主缺省服务**一次都没被问过**`,
+	piCreate?.agentOptions?.provider === PI_INCUMBENT_PROVIDER && piCreate?.agentOptions?.model === PI_INCUMBENT_MODEL && piEnv.agentDefaultModel.calls.length === 0 && piEnv.creates.length === 1);
+
+// --- Pi1②（探针 3 的分支）/ Pi2②：读取器本体直接驱动两次 -------------------------
+// ①代理不在场（探针 3 通过的那条路）：预设**仍继承**（走会话级冷读面），模型读不到 ⇒ 如实 null。
+const piDeadReads = [];
+const piDead = await piInherit({
+	agents: { get() { return undefined; } },
+	get() { return undefined; },
+	sessionQuery: { async readSession(id) { piDeadReads.push(id); return { session: { id, agentPreset: PI_INCUMBENT_PRESET }, events: [] }; } },
+}, "session-dead-incumbent");
+check(`批 P · Pi1② 已死前任（探针 3 通过 ⇒ 走「仍继承」分支；红相＝让「代理不在场」直接静默成 \`null\` 而不去会话级读面 ⇒ 本条红）: 没有活代理时，preset 由 \`sessionQuery.readSession(id).session.agentPreset\` 得到 —— **仍等于前任值**，且冷读面被点了名（同一个 id）`,
+	piDead.preset === PI_INCUMBENT_PRESET && piDeadReads.join(",") === "session-dead-incumbent");
+// ②两项都读不到（投影面不在场 + 冷读面拒绝）：**如实 null，绝不编造** —— 调用方因此落宿主缺省。
+const piBlind = await piInherit({
+	agents: { get() { return undefined; } },
+	get() { return undefined; },
+	sessionQuery: { async readSession() { throw new Error("stub: session log unreadable"); } },
+}, "session-unreadable");
+const piFallbackEnv = rotateEnv({ askScript: ["创建并交班"] });
+await piFallbackEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: PI_HANDOFF }, execFor(piFallbackEnv.senderAgent));
+check(`批 P · Pi2② 读不到的降级支路（红相＝① 读取器把读不到编造成一个值 / 抛出去 ⇒ 本条红；② 计划面不再落宿主缺省 ⇒ 后半条红）: 模型面全不可读时读取器给的**恰是 \`null\`**（不是 \`undefined\`、不是编造的一对），于是调用方 \`?? undefined\` ⇒ plan 里三项都是 \`undefined\` ⇒ 宿主缺省解析**照旧被问恰一次**（继任者拿到的仍是可运行的一对 ${STUB_DEFAULT_PROVIDER}/${STUB_DEFAULT_MODEL}）★「未继承（原因）」那一行如实文案属 FR-P3（设计档 §5），**本单不做**、判据在下一单`,
+	piBlind.preset === null && piBlind.provider === null && piBlind.model === null && piBlind.approvalPolicy === null
+	&& piFallbackEnv.creates.length === 1 && piFallbackEnv.creates[0].meta?.agentPreset === STUB_DEFAULT_PRESET
+	&& piFallbackEnv.creates[0].agentOptions?.provider === STUB_DEFAULT_PROVIDER && piFallbackEnv.creates[0].agentOptions?.model === STUB_DEFAULT_MODEL
+	&& piFallbackEnv.agentDefaultModel.calls.length === 1);
+
+// --- Pi5：零新增政策状态 / 零新依赖 ---------------------------------------------
+check(`批 P · Pi5① 零新增政策状态（红相＝往 \`policy.json\` 加一格字段 ⇒ 本条红）: 本批之后，\`team-link\` 命名空间的 base 键集仍与权威读数 \`U19_POLICY_KEYS\` 的**十键**逐字一致（继承是创建那一刻的派生读数，不落盘 —— D5/NF-P2）`,
+	piEnv.settings !== undefined && sameJson(Object.keys(piEnv.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS));
+const piImportLines = (hostSource.match(/^import .*$/gmu) ?? []).map((line) => line.trim());
+check(`批 P · Pi5② 零新依赖（红相＝加一条顶层 \`import\` / 换掉其中一条 ⇒ 本条红）: 顶层 \`^import\` 仍**恰 8 条**，且逐字就是那八条（读取器只用既有符号：\`ctx.agents\` / \`ctx.sessionQuery\` / \`ctx.get\`）`,
+	piImportLines.length === 8 && sameJson(piImportLines, [
+		'import { encodeSessionReferenceUri, parseSessionReferenceText } from "@deepseek-ai/dsh-session-reference";',
+		'import { defineTool } from "@deepseek-ai/dsh-tools";',
+		'import z from "schemastery";',
+		'import { createHash, randomUUID } from "node:crypto";',
+		'import { appendFile, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from "node:fs/promises";',
+		'import { mkdirSync, readFileSync } from "node:fs";',
+		'import os from "node:os";',
+		'import path from "node:path";',
+	]));
+
+// --- Pi6：不回归（两个**没动**的路径） ------------------------------------------
+const piCreateBody = hostSource.slice(hostSource.indexOf("async function buildTeamSessionCreateOptions("), hostSource.indexOf("async function buildTeamSessionResumeOptions("));
+const piExplicitPlan = await __testing.buildTeamSessionCreateOptions(piEnv.ctx, { preset: "coder", provider: "explicit-provider", model: "explicit-model" }, { sessionId: "session-explicit", role: "worker-a" }, TEAM_WS);
+check(`批 P · Pi6 不回归（红相＝把回退源改到 \`buildTeamSessionCreateOptions\` **内部**（＝顺手波及 /team_session 建队路径）⇒ 前半条红；动复活面读 preset 的那一行 ⇒ 后半条红）: ① 创建选项构造器**逐字未动**（函数体里零继承读取器、零 sessionQuery 读面），且它照旧把**调用方显式给的三项**原样落进 \`meta.agentPreset\` / \`agentOptions\`（两半都给 ⇒ 缺省服务零询问）；② 复活面仍读**会话自己存下的** \`agentPreset\`（\`agent?.session?.header?.agentPreset\` 逐字在场）`,
+	piCreateBody.includes("async function buildTeamSessionCreateOptions(") && !piCreateBody.includes("readInheritableSettings") && !piCreateBody.includes("sessionQuery")
+	&& piExplicitPlan.meta?.agentPreset === "coder" && piExplicitPlan.agentOptions?.provider === "explicit-provider" && piExplicitPlan.agentOptions?.model === "explicit-model"
+	&& hostSource.includes("agent?.session?.header?.agentPreset"));
+// ★ 批 P 定点修复轮的**中间读数**（定位用；**不新增、不放宽任何断言** —— 本块仍是 4 条判据 7 条
+//   断言，`assertion total` 随之不变）。四格对应「① 夹具喂的投影读数 ② 实现取的是哪条读面
+//   ③ 宿主缺省模型服务被问了几次、问的什么 ④ 最终进 plan 的那一对」，外加 Pi2① 三条子句的逐条读数。
+console.log(`[PI-DIAG] ${JSON.stringify({
+	piProjectionsReadings: piEnv.projections.readings,
+	piProjectionStateOfModelSelection: piEnv.projections.calls.filter((row) => row.key === "modelSelection"),
+	piProjectionStateOfAll: piEnv.projections.calls.length,
+	piDefaultCalls: piEnv.agentDefaultModel.calls.length,
+	piDefaultAsked: piEnv.agentDefaultModel.calls,
+	piPair: `${piCreate?.agentOptions?.provider ?? "-"}/${piCreate?.agentOptions?.model ?? "-"}`,
+	piMeta: piCreate?.meta?.agentPreset ?? null,
+	piClauses: {
+		pairProvider: piCreate?.agentOptions?.provider === PI_INCUMBENT_PROVIDER,
+		pairModel: piCreate?.agentOptions?.model === PI_INCUMBENT_MODEL,
+		zeroDefaultCalls: piEnv.agentDefaultModel.calls.length === 0,
+		oneCreate: piEnv.creates.length === 1,
+	},
+	piDeadPreset: piDead.preset,
+	piBlind: [piBlind.preset, piBlind.provider, piBlind.model, piBlind.approvalPolicy],
+	piFallbackPair: `${piFallbackEnv.creates[0]?.agentOptions?.provider ?? "-"}/${piFallbackEnv.creates[0]?.agentOptions?.model ?? "-"}`,
+	piFallbackDefaultCalls: piFallbackEnv.agentDefaultModel.calls.length,
+})}`);
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
