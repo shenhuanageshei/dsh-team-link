@@ -11904,6 +11904,17 @@ const u4TickAuto = __testing.tickMessage("session-self", FRAME_POISON2, { verdic
 const u4Digest = __testing.renderWatchdogDigest({ id: "wd-e", team: FRAME_POISON2, watcherSession: "session-self", targets: [] }, { running: [], justFinished: [], idleAwait: [{ target: FRAME_POISON2, signal: { agent: "idle", verdict: "ok", silenceMs: 60_000, lastAssistantAt: 1, lastInboundAt: null, goal: null }, previous: undefined }], alarm: [] }, batchENow);
 const u4WatchEnv = setup({ sessions: [], useSettings: true, selfCwd: BE_WS, extraAgents: [{ id: "session-e-watcher", status: "idle", cwd: BE_WS }] });
 const u4WatchLines = __testing.watchdogLines(u4WatchEnv.ctx, [{ id: "wd-e", team: FRAME_POISON2, watcherSession: "session-e-watcher", targets: [FRAME_POISON2], silentMinutes: 10, intervalMinutes: 5, expiresAt: batchENow + 3_600_000, origin: "manual" }]);
+// ★ 批 J 收尾单（U6 同批）：把 `renderIdleAlert` **补进本清单** —— 它确有字符串插值面（`team`
+//   ＋ 每个目标的 id），与上面每一面同一口径（`noticeField` 逐字段 ＋ 末行 `wellFormed`）。
+//   本清单**仍然不收** `renderPressureAlert`：它的正文只插值**读数**（`percent.toFixed(1)` /
+//   `formatTokenCount` ⇒ 数字或「未知」），任何字符串都进不去 ⇒ 放进这份「零命中 **且** 看得见
+//   占位符」的清单只会得到一个**恒假项**（占位符结构上不可能出现）。它由「批 J」块的 U6 判据
+//   第 ④ 段直接锁（结构免疫），理由与落点写在那一块的头注里。
+const u4IdleAlert = __testing.renderIdleAlert(
+	{ id: "wd-e-idle", team: FRAME_POISON2, watcherSession: "session-self", targets: [] },
+	{ running: [], justFinished: [], idleAwait: [{ target: FRAME_POISON2, signal: { silenceMs: 60_000, lastAssistantAt: 1, lastInboundAt: null }, previous: undefined }], alarm: [] },
+	batchENow,
+);
 const u4Faces = [
 	["renderResourceLine", u4ResourceLine],
 	["renderResourceContext", u4ResourceContext],
@@ -11913,6 +11924,9 @@ const u4Faces = [
 	["tickMessage（goal-disarmed 档）", u4TickAuto],
 	["renderWatchdogDigest", u4Digest],
 	["watchdogLines", u4WatchLines.join("\n")],
+	// ★ 批 J 收尾单补列的一面（`renderIdleAlert`）：`team` 与目标 id 各插值一次 ⇒ 与上面三面同款
+	//   的 4 处命中（每处 2 个 token × 2 个字段），占位符带编号。
+	["renderIdleAlert（批 J 收尾单补列）", u4IdleAlert],
 ];
 // ★ 本轮更正（父侧 2026-10-11 的第 6 条红 —— 三张脏面）：判据的**「看得见占位符」那一半走词干**
 //   （`framePhSeen`），不是 `includes(FRAME_PH)`。原因不是实现缺消毒（六个出口**各自**都过了
@@ -14382,6 +14396,144 @@ const cjU9DescSentence = cjU9SentenceOf(cjU9Desc);
 const cjU9ReadmeSentence = cjU9SentenceOf(readmeSource);
 check("批 J · U9 FR-J4 文档面同批改准（红相①＝只改工具 description、README 那一份留着旧文 ⇒ 两句不等 ⇒ 本条红；红相②＝两处都漏改 ⇒ 抽取为空 ⇒ 本条红）: `team_link_watch` 的 description 与 `README.md` 的摘要段含**同一句**事实源指路，且**逐字一致**（两边各自按同一模式抽出整句后 `===` 互比），两边都不是空串 / 半句（长度下限自证）",
 	cjU9DescSentence.length >= 30 && cjU9DescSentence === cjU9ReadmeSentence);
+
+// --- U6：反走私负向判据（★ 收尾单补齐 —— 此前如实登记为「已知覆盖缺口」）-------------------
+// 归属：设计档 §8 U6（「把注册参数（团队名 / 目标 id）替换成含换行与控制字符的载荷 ⇒ 投出的消息里
+//   **不含**那些字节（过 `noticeField`）」）· 需求档 NF-J3（新增文本只能由插件常量组成、插值的只有
+//   状态字段，且必须过既有消毒出口）· 设计档 §9（边界）· §10 的收尾单登记。
+// ★ 两个渲染面与批 E「U4 面清单」（`u4Faces`）的关系 —— 本单同批处置，两条**不同**的落点：
+//   · `renderIdleAlert` **已补进**那份清单（它确有字符串插值面：`team` ＋ 每个目标的 id，各过
+//     `noticeField`、整段过 `wellFormed`）⇒ 框定 token 那一档毒由 U4 咬，控制字符这一档由本判据咬。
+//   · `renderPressureAlert` **补不进去**：它的正文只插值**读数**（`percent.toFixed(1)` /
+//     `formatTokenCount` ⇒ 数字或「未知」），任何字符串都进不了正文；而那份清单的判法是
+//     「零命中 **且** 看得见占位符」，一个结构上不可能出现占位符的面放进去 = 一个**恒假项**
+//     （AGENTS.md §一.1：恒真或恒假的断言永远是绿的）⇒ 它改由**本判据第 ④ 段**直接锁住
+//     （毒读数喂进去 ⇒ 零控制字节 ＋ 零框定命中 ＋ 可见毒标记不在场），并在设计档 §7/§8 点名。
+/** 毒串里**可见**的那一段：消毒之后它必须**还在**正文里（否则「不含控制字节」可以由「整段被丢掉」冒充）。 */
+const CJ_U6_MARK = "CJU6PROBE";
+/** 「含换行与控制字符」的载荷：把可见标记用 `\n` / `\t` / `\u0007` 包夹起来（题面给的那一类）。 */
+const CJ_U6_POISON = `\n\t\u0007${CJ_U6_MARK}\u0007\t\n`;
+/**
+ * 控制字节谓词 —— **只排除 `\n`**（U+000A）：告警正文自己就是多行的，`\n` 是它合法的行分隔符；
+ * 除它之外的 C0 控制字符（含载荷里的 `\t` 与 `\u0007`）与 DEL 一律不许出现在正文里。
+ * 载荷那两枚 `\n` 的走私由**行数**判：不过消毒的对照拼串会多出 3 行，真正文必须仍是渲染器
+ * 定死的那 3 行（见下面的 `cjU6RawLineCount` 与两处 `split("\n").length`）。
+ */
+const CJ_U6_CTRL_RE = /[\u0000-\u0009\u000B-\u001F\u007F]/u;
+const CJ_U6_CTRL_RE_G = /[\u0000-\u0009\u000B-\u001F\u007F]/gu;
+const CJ_U6_MARK_RE_G = new RegExp(CJ_U6_MARK, "gu");
+/** **不过消毒**的对照渲染：与真渲染同形（字段插值 ＋ 换行拼接），只少了 `noticeField` / `wellFormed` 两道口。 */
+const cjU6RawJoin = (value) => [`团队 ${value}`, `目标 ${value}`].join("\n");
+
+// ① 负相自证（反假绿的前提）：载荷**自己真带着**那些字节，而不过消毒的对照渲染把它们**原样**带进正文
+//    ⇒ 下面的「不含」不是恒真，是真在判。
+const cjU6PayloadHits = (CJ_U6_POISON.match(CJ_U6_CTRL_RE_G) ?? []).length;
+const cjU6RawText = cjU6RawJoin(CJ_U6_POISON);
+const cjU6RawHits = (cjU6RawText.match(CJ_U6_CTRL_RE_G) ?? []).length;
+/** 对照拼串的**行数**（载荷那两枚 `\n` 原样落进来 ⇒ 比正文的 3 行多出 3 行）。 */
+const cjU6RawLineCount = cjU6RawText.split("\n").length;
+
+// ② 端到端（注册参数 `targets` 就是毒串）：走真投递路径（`patrolOne` 里的两条新告警）。
+//    ★ 夹具用 `cjRow`（`origin:"auto"`）：manual 行会在 watcher 被判定为「忙」时整轮早退
+//      （`if (suppressed && !workbench) return;`），auto 行才走得到那两条告警（与 U1/U4 同一条夹具纪律）；
+//      到期点 12h、`silentMinutes` 默认 10min（时间线只有一轮，两处都不会漂移）。
+//    ★ 队伍只留协调者一个角色 ⇒ attach 后置链的按队补挂没有可盯成员、不会另造一条注册行（读数确定）。
+const cjU6Env = watchdogEnv({
+	targets: { [CJ_U6_POISON]: { events: oneShotSurface(CJ_NOW - 120_000) } },
+	teams: [b5Team("cj-u6", TEAM_WS, [wb2Role("coordinator", "session-self")])],
+	watchdogs: [cjRow({ id: "wd-cj-u6", team: "cj-u6", targets: [CJ_U6_POISON] })],
+});
+await waitForChain(cjU6Env, 1);
+cjSetPressure(cjU6Env, 90);                                    // 压力面也一起喂（同一条巡逻两条都投）
+await cjU6Env.watchdog.patrol({ now: CJ_NOW });
+const cjU6IdleEnd = cjAlertsOf(cjU6Env);
+const cjU6IdleEndTexts = cjU6IdleEnd.map((message) => message.content[0].text);
+const cjU6PressureEnd = cjPressureOf(cjU6Env);
+const cjU6PressureEndTexts = cjU6PressureEnd.map((message) => message.content[0].text);
+
+// ②′ 注册参数 `team` 的另一半（负相，如实登记一条**结构性**结论）：毒团队名**进不了名册** ——
+//    `normalizeTeams` 只收 `^[a-z0-9-]+$`（团队名是黑板目录的**路径段**，收紧字符集以杜绝路径穿越）⇒
+//    `policy.get().teams` 里没有这个队 ⇒ 角色门恒假 ⇒ **两条告警一条都不投**。
+//    负相自证：同一次巡逻里摘要**照投**（证明巡逻真的跑到了、行也真的读到了，零投递不是早退）。
+const cjU6TeamRow = b5Team(CJ_U6_POISON, TEAM_WS, [wb2Role("coordinator", "session-self")]);
+const cjU6TeamEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(CJ_NOW - 120_000) } },
+	teams: [cjU6TeamRow],
+	watchdogs: [cjRow({ id: "wd-cj-u6-team", team: CJ_U6_POISON, targets: ["session-peer"] })],
+});
+await waitForChain(cjU6TeamEnv, 1);
+cjSetPressure(cjU6TeamEnv, 90);
+await cjU6TeamEnv.watchdog.patrol({ now: CJ_NOW });
+const cjU6TeamEnvTeams = __testing.policyFor(cjU6TeamEnv.ctx).get().teams.map((team) => team.name);
+
+// ③ 渲染面直喂（`renderIdleAlert`：team ＋ target 都带毒 —— 纯函数层不设名册门，所以这里两个字段都能咬）。
+const cjU6IdleFace = __testing.renderIdleAlert(
+	{ id: "wd-cj-u6-face", team: CJ_U6_POISON, watcherSession: "session-self", targets: [] },
+	{ running: [], justFinished: [], idleAwait: [{ target: CJ_U6_POISON, signal: { silenceMs: 180_000, lastAssistantAt: 1, lastInboundAt: null }, previous: undefined }], alarm: [] },
+	CJ_NOW,
+);
+// ④ 结构免疫锁（`renderPressureAlert`）：把毒串喂进它的**每一个**字段（含框定 token 那一份）——
+//    正文必须零控制字节、零框定命中、且**看不见**毒标记（那两格按类型门落成「未知」⇒ 证明毒串
+//    真的喂进去了，只是进不了正文）。将来谁给这个渲染器开一条字符串插值面，本条立刻红。
+const cjU6PressureFace = __testing.renderPressureAlert({ percent: 90, pressureTokens: CJ_U6_POISON, window: CJ_U6_POISON }, CJ_NOW);
+const cjU6PressureFrameFace = __testing.renderPressureAlert({ percent: 90, pressureTokens: FRAME_POISON2, window: FRAME_POISON2 }, CJ_NOW);
+/**
+ * 收尾等待面（★ 本单的**夹具纪律**，与批 K `fkWaitSeq` 同规：I/O 驱动、有界 tick、**零墙钟判据**）。
+ *
+ * 治的是什么（本机实测定位，不是推断）：U6 是套件里**最后两个**夹具，而 activation 的**首拍**是
+ * fire-and-forget 的异步原子写（`apply` 收尾的 `void forensics.start()`，见批 K 的 `fkWaitBeat`
+ * 注释）。它若在飞时撞上套件末尾的 `rmTestRoot()`，那次删除会以 `ENOTEMPTY`/`EPERM` 抛出 ——
+ * 而它抛在 `assertion total` **之前**，于是整跑的收尾两行被吞掉（本单实测：不等待时 8 跑 4 次被吞；
+ * 逐子树归因读数 = `policy` 子树 `ENOTEMPTY`；同窗口下**未加本块的**版本 14 跑 0 次）。
+ * 等的是「**没有谁还在写**」这个 I/O 事实：连续 `CJ_SETTLE_READS` 次读到**同一份**心跳，
+ * 且整棵 `TEST_ROOT` 下没有任何 `.tmp-*` 残片（原子写的临时件）。到不了就原样返回 `false`
+ * —— 不阻断跑，也不放宽任何判据（本函数只被收尾调用，不进任何断言的谓词）。
+ */
+const CJ_SETTLE_READS = 4;
+/** TEST_ROOT 下的**临时残片**（原子写用 `<目标>.tmp-<pid>-<hex>`，名字每次唯一 ⇒ 只能扫目录）。 */
+const cjTmpLeftovers = () => {
+	const acc = [];
+	const walk = (dir) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) walk(full);
+			else if (entry.name.includes(".tmp-")) acc.push(full);
+		}
+	};
+	if (existsSync(TEST_ROOT)) walk(TEST_ROOT);
+	return acc;
+};
+/** 等某个 env 的**首拍落定**（心跳文件在场、内容连续 `CJ_SETTLE_READS` 次不变、且零临时残片）。 */
+async function cjWaitBeatSettled(env) {
+	const file = __testing.forensicsFor(env.ctx)?.heartbeatFile;
+	if (typeof file !== "string" || file === "") return false;
+	let previous = null;
+	let stable = 0;
+	for (let i = 0; i < 200; i += 1) {
+		let text = null;
+		try { text = await readFile(file, "utf8"); } catch { text = null; }
+		stable = text !== null && text === previous ? stable + 1 : 0;
+		previous = text;
+		if (stable >= CJ_SETTLE_READS && cjTmpLeftovers().length === 0) return true;
+		await tick();
+	}
+	return false;
+}
+// 读数可见性（本文件既有惯例 `[CJ-U2-DIAG]` 那一类）；`settled` 两格是收尾等待面的读数（见上面的注释）。
+console.log(`[CJ-U6-DIAG] ${JSON.stringify({ payloadHits: cjU6PayloadHits, rawHits: cjU6RawHits, rawLines: cjU6RawLineCount, idleEnd: cjU6IdleEndTexts.length, pressureEnd: cjU6PressureEndTexts.length, idleFaceMarks: (cjU6IdleFace.match(CJ_U6_MARK_RE_G) ?? []).length, teamPoison: { teams: cjU6TeamEnvTeams.length, idle: cjAlertsOf(cjU6TeamEnv).length, pressure: cjPressureOf(cjU6TeamEnv).length, digest: digestOf(cjU6TeamEnv).length }, settled: [await cjWaitBeatSettled(cjU6Env), await cjWaitBeatSettled(cjU6TeamEnv)] })}`);
+check("批 J · U6 反走私负向判据（★ 收尾单补齐：此前如实登记为已知覆盖缺口）（红相①＝把 `renderIdleAlert` 或 `renderPressureAlert` 里任一处 `noticeField` / 末行 `wellFormed` 去掉 ⇒ 毒串原样落进正文 ⇒ 本条红；红相②＝把两条投递的渲染调用换成直接拼串 ⇒ 同上红；红相③＝让载荷**根本进不了**正文（例如把注册参数换成常量、或把毒串替换掉）⇒「看得见毒标记 / 多出来的行数」那两半红 —— 那两半正是**反假绿**：本条的「不含」不许由「载荷没进去」冒充）: ① **负相自证**：毒载荷自己带着 `\\t` / `\\u0007`（控制字节计数 = 4 —— 正文自己的行分隔符 `\\n` 按谓词口径**排除**，载荷的那两枚 `\\n` 由行数那一半判）与 2 枚 `\\n`，而**不过消毒**的对照渲染把它们**原样**带进正文（控制字节更多、行数 6 > 3）⇒ 断言的谓词**真的能假**；② **端到端**（注册参数 `targets` 就是毒串、走真投递路径）：两条新告警各自投出 **≥1** 条，**每一条**正文零控制字节、行数仍是 3（载荷的 `\\n` 没有多带出一行），且 `[idle-unassigned]` 的正文里**看得见**毒串的可见标记（载荷真进去了、不是被整段丢掉），而 `[pressure-warn]` 的正文里**看不见**它（它的正文只插值读数 ⇒ 注册参数在那条通道上**没有**插值面）；②′ **另一半（`team` 是毒串）**：`policy.get().teams` 里**没有**这个队（名册只收 `^[a-z0-9-]+$`，团队名是黑板目录的路径段）⇒ 角色门恒假 ⇒ 两条告警**零投递**，而同一次巡逻的**摘要照投**（负相自证：巡逻真的跑到了）；③ **渲染面**：`renderIdleAlert` 带毒（team ＋ target）⇒ 零控制字节、行数 3、可见标记**恰 2 次**（两个字段各一次）；④ **结构免疫锁**：`renderPressureAlert` 把毒串喂进每个字段（含框定 token 那一份）⇒ 正文零控制字节、零框定命中、可见标记不在场，且那两格如实落成「未知」",
+	cjU6PayloadHits === 4 && cjU6RawHits >= cjU6PayloadHits && cjU6RawLineCount > 3
+		&& cjU6IdleEnd.length >= 1
+		&& cjU6IdleEndTexts.every((text) => !CJ_U6_CTRL_RE.test(text) && text.includes(CJ_U6_MARK) && text.split("\n").length === 3)
+		&& cjU6IdleEndTexts.some((text) => text.startsWith(__testing.WATCHDOG_IDLE_ALERT_LABEL))
+		&& cjU6PressureEnd.length >= 1
+		&& cjU6PressureEndTexts.every((text) => !CJ_U6_CTRL_RE.test(text) && !text.includes(CJ_U6_MARK))
+		&& cjU6TeamEnvTeams.length === 0
+		&& cjAlertsOf(cjU6TeamEnv).length === 0 && cjPressureOf(cjU6TeamEnv).length === 0 && digestOf(cjU6TeamEnv).length === 1
+		&& !CJ_U6_CTRL_RE.test(cjU6IdleFace) && cjU6IdleFace.split("\n").length === 3
+		&& (cjU6IdleFace.match(CJ_U6_MARK_RE_G) ?? []).length === 2
+		&& !CJ_U6_CTRL_RE.test(cjU6PressureFace) && !cjU6PressureFace.includes(CJ_U6_MARK) && cjU6PressureFace.includes("未知")
+		&& !CJ_U6_CTRL_RE.test(cjU6PressureFrameFace) && frameClean(cjU6PressureFrameFace));
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
