@@ -7,7 +7,9 @@ import { Context } from "@deepseek-ai/cordis";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+// ★ 批 L：多一个 `rename` —— 判据用它做「注入的接缝第 3 次放行」时那一次**真改名**
+//（`__testing.setRenameThroughSeam` 会把 `lib/index.js` 的改名出口换成桩，桩要能自己完成改名）。
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { apply, __testing } from "./lib/index.js";
@@ -67,10 +69,13 @@ process.on("exit", () => { try { rmSync(TEST_ROOT, { recursive: true, force: tru
  * 治的是什么（本轮实测）：8 并发跑套件时抓到 1/8 次 `Error: ENOTEMPTY, Directory not empty:
  * <TEST_ROOT>` —— 抛在套件**末尾**那一次 `rmSync` 上，于是那一次跑**连 `assertion total` 都没
  * 打出来**（退出码 1、零行断言汇总），而套件自己的纪律（`assertion total` 必须自报）正是靠那一行。
- * 成因与 U14 的那个偶发红同族：`writePolicyFileAtomic` 的临时名是固定的 `${file}.tmp`，两次并发写
- * 交错时会有一次 `rename` 落空（或先把 `.tmp` 换走），而**心跳的写是常驻后台**的
- * （兜底定时器 / 巡逻定时器在套件跑着的时候仍可能补一拍）⇒ 删 `TEST_ROOT` 的那一瞬间目录里可能
- * 正躺着 `.tmp`。
+ * 成因与 U14 的那个偶发红同族：批 L **之前** `writePolicyFileAtomic` 的临时名是固定的（全进程
+ * 共用一个 `<目标>.tmp`），两次并发写交错时会有一次 `rename` 落空（或先把临时文件换走），而
+ * **心跳的写是常驻后台**的（兜底定时器 / 巡逻定时器在套件跑着的时候仍可能补一拍）⇒ 删
+ * `TEST_ROOT` 的那一瞬间目录里可能正躺着临时文件。★ 批 L 把临时名改成**每次写唯一**
+ * （`<目标>.tmp-<pid>-<8 hex>`）⇒ 那个交错前提消失，但**本函数保留**：收尾删除的
+ * ENOTEMPTY/EPERM 还有别的来源（后台写仍在飞、Windows 的瞬时占用），有界重试仍然是
+ * 「`assertion total` 必须自报」那条纪律的保险。
  *
  * 为什么重试是安全的：`force: true` 让「不存在」不算失败（幂等），重试只覆盖 Windows 的
  * ENOTEMPTY / EPERM 这一类**瞬时**状态；仍然失败就**放它抛**（与改前同一方向，不静默吞掉真问题）。
@@ -8767,22 +8772,27 @@ check("U1 文件后端: 落点目录在**全局** home 下（团队按名字全�
 	existsSync(TEAM_WS) && u1File.startsWith(u1Env.policyHome + path.sep) && !u1File.startsWith(TEAM_WS + path.sep)
 		&& !existsSync(path.join(TEAM_WS, "team-link")));
 
-// U2 —— 原子写：读只认 `policy.json`，半写的 `.tmp` 不参与。
+// U2 —— 原子写：读只认 `policy.json`，半写的临时文件不参与。
+// ★ 批 L 改写（同一份判断、改的是临时文件的**名字口径**）：批 L 起临时名是**每次写唯一**的
+// `policy.json.tmp-<pid>-<8 hex>`（固定名正是 2026-10-13 撕裂事故的根因），所以夹具种下的这份
+// 「别人崩在中间留下的半写临时文件」不能再叫 `policy.json.tmp`（那个名字插件**再也不会**产生、
+// 更不会消费它）。判据的本意一字未动：**读只认 `policy.json`** ∧ **一次成功写入之后不留自己的残骸**。
 const u2Env = setup({ sessions: [], selfCwd: TEAM_WS });
 const u2Dir = path.join(u2Env.policyHome, "team-link");
 mkdirSync(u2Dir, { recursive: true });
-const u2Stray = path.join(u2Dir, "policy.json.tmp");
+const u2Stray = path.join(u2Dir, "policy.json.tmp-999999-deadbeef");
 writeFileSync(u2Stray, "{\"schema\":1,\"policy\":{\"teams\":[{\"name\":\"HALF-WRITTEN", "utf8");
 const u2Roster = u2Env.tool("team_link_roster");
 const u2Seed = await u2Roster.execute({ action: "upsert-team", team: "night-shift" }, execFor(u2Env.senderAgent));
 const u2File = path.join(u2Dir, "policy.json");
 let u2Doc = null;
 try { u2Doc = JSON.parse(await readFile(u2File, "utf8")); } catch { u2Doc = null; }
-check("U2 原子写: 半写的 policy.json.tmp 不影响读取 —— 读只认 policy.json（真值是完整的）",
+check("U2 原子写: 半写的临时文件（`.tmp-*` 形态的遗留）不影响读取 —— 读只认 policy.json（真值是完整的）",
 	u2Seed.includes("已创建团队 night-shift") && u2Doc !== null && u2Doc.policy.teams.length === 1
 		&& u2Doc.policy.teams[0].name === "night-shift"
 		&& !(await u2Roster.execute({ action: "get" }, execFor(u2Env.senderAgent))).includes("HALF-WRITTEN"));
-check("U2 原子写: 一次成功写入之后不留 .tmp 残骸（写完即 rename）", !existsSync(u2Stray));
+check("U2 原子写: 一次成功写入**只消费自己的**临时文件（写完即 rename）—— 目录里的 `.tmp-*` 只剩夹具种下的那一份**别人的**遗留（插件不认领、也不删别人的残骸，D6「不做启动清扫」），插件自己的一个都不留",
+	readdirSync(u2Dir).filter((name) => name.includes(".tmp")).sort().join(",") === path.basename(u2Stray));
 
 // U7 —— 路径解析的三支：DSH_HOME → homedir → 内存 + warn。
 const u7FromEnv = __testing.resolvePolicyFilePath({ env: { DSH_HOME: "C:/dsh-home" }, homedir: () => "C:/Users/whoever" });
@@ -9150,13 +9160,18 @@ for (let i = 0; i < 500 && h1Env.log.lines.warn.filter((line) => line.includes("
 // 文件里那一份），所以拿内容当「写过了」的证据会立刻假绿。
 // 代码评审第 3 轮实测补的守卫（夹具自身的竞速，不是插件缺陷）：轮询读与链尾回写在同一
 // 窗口并发时，Windows 会偶发把回写那次原子 `rename` 拒成 EPERM（目标文件正被本循环的
-// readFile 句柄持有）⇒ 回写被拒、`savedAt` 永不刷新、两条断言假红。所以**回写在飞
-// （`policy.json.tmp` 在场）时不打开目标文件**：先等 `.tmp` 出现、再等它消失，只在回写
-// 肯定不在飞的时候读（前 10 拍只 stat 不 open —— 回写紧跟「chain failed」那一行启动，
-// 那时它要么已在飞、要么已完成，两条都安全）。
+// readFile 句柄持有）⇒ 回写被拒、`savedAt` 永不刷新、两条断言假红。所以**回写在飞时不打开
+// 目标文件**：先等临时文件出现、再等它消失，只在回写肯定不在飞的时候读（前 10 拍只读目录
+// （`readdirSync`，不 stat、不 open 目标）—— 回写紧跟「chain failed」那一行启动，那时它要么
+// 已在飞、要么已完成，两条都安全）。
+// ★ 批 L 改写（守卫的**判据**随临时名口径改，语义一字未动）：临时名从固定名改成
+// `policy.json.tmp-<pid>-<8 hex>`（每次写唯一）⇒ 「在飞」的读数从「那个固定名在场」改成
+// 「目录里有以 `policy.json.tmp-` 开头的条目」。**这层守卫仍然是必需的**：唯一名消除的是
+// 「两个写者互相截断」，不是「读句柄持有目标时 rename 被拒」。
+const h1TempEntries = () => readdirSync(path.dirname(h1File)).filter((name) => name.startsWith(`${path.basename(h1File)}.tmp-`));
 let h1SawTmp = false;
 for (let i = 0; i < 500; i += 1) {
-	if (existsSync(`${h1File}.tmp`)) {
+	if (h1TempEntries().length > 0) {
 		h1SawTmp = true;
 		await tick();
 		continue;
@@ -13433,9 +13448,11 @@ const fkDoc = async (env, bootId = undefined) => JSON.parse(await readFile(path.
  * 宽：本次 activation 的首拍是 fire-and-forget（`apply` 收尾的 `void forensics.start()`），
  * 而它会在两次 `await`（`diskReading()` / `writePolicyFileAtomic`）上让出控制权 ⇒ 本函数若
  * 只看 `existsSync` 就返回，紧接着的那个写（`patrol()` 的巡逻拍 / `fallbackTick`）
- * 会**与首拍那次写并发**，两者用**同一个** `${heartbeatFile}.tmp` 交错 ⇒ 其中一次的字节被
- * 覆盖（实测：盘上剩 `{"seq":2,"who":"patrol"}on"}` 这类半截 JSON ⇒ 读不出来 ⇒ 拍号永远
- * 追不上期望值）。详见 {@link fkWaitSeq} 的注释与「定位读数」。
+ * 会**与首拍那次写并发**，两次写在同一份目标上交错 ⇒ 其中一次的字节被覆盖（实测：盘上剩
+ * `{"seq":2,"who":"patrol"}on"}` 这类半截 JSON ⇒ 读不出来 ⇒ 拍号永远追不上期望值）。那条
+ * 「交错」的**物理前提**（批 L 之前：所有写入者共用同一个固定名临时文件）已由批 L 消除
+ * （临时名改成每次写唯一）—— 但本等待面**原样保留**：它等的是「已落定」这个 I/O 事实，
+ * 与谁和谁并发无关。详见 {@link fkWaitSeq} 的注释与「定位读数」。
  *
  * 语义**逐字保留**：仍在「文件在场且那一次首拍已落定」时返回 `true`；到不了 ⇒ `false`
  * （U1 照旧按它红：没有首拍 ⇒ 等不到 ⇒ `false`）。返回 `true` 时**不**顺带断言什么。
@@ -13464,19 +13481,22 @@ const fkSameBeat = (left, right) => left !== null && right !== null
  * 本次 activation 的首拍是 **fire-and-forget**（`apply` 收尾的 `void forensics.start()`），而
  * `start()` 在 `readPreviousForensics()` / `writeHeartbeat()`（内含 `diskReading()` 与
  * `writePolicyFileAtomic`）上各让出一次控制权。夹具只要在 `fkWaitBeat` **之后**立刻触发一次写
- * （`patrol()` 的巡逻拍 / `fallbackTick`），**两次 `writeHeartbeat` 就并发在飞**，而它们用
- * **同一个** `${heartbeatFile}.tmp` 作临时名（`lib/index.js:1815` 的固定名）⇒ 后开的那个句柄
- * 与先开的句柄指向同一份内容，两次 `writeFile` 互相覆盖，最后一次 `rename` 把**混合字节**推上
- * 目标文件。本轮实测到的两种后果（`node host-half.test.mjs`，6 并发跑 1 轮 ⇒ **1/6 红**，
+ * （`patrol()` 的巡逻拍 / `fallbackTick`），**两次 `writeHeartbeat` 就并发在飞** —— 而**批 L
+ * 之前**它们用**同一个固定名**临时文件（`writePolicyFileAtomic` 里写死的那个名字）⇒ 后开的
+ * 句柄与先开的句柄指向同一份内容，两次 `writeFile` 互相覆盖，最后一次 `rename` 把**混合字节**
+ * 推上目标文件。**批 L 已消除该前提**（临时名每次写唯一，`renameThroughSeam` 那一层还补了
+ * 有界重试）；下面这条定位读数因此是**批 L 之前的现场**，保留它是为了说明**等待面为什么存在**。
+ * 当时实测到的两种后果（`node host-half.test.mjs`，6 并发跑 1 轮 ⇒ **1/6 红**，
  * 红的正是 `U14`；前一轮同样 6 并发另 1 次红在 `U2`+`U3`）：
  *   · ① `U14` A 档：盘上停在**上一拍**（`seq=1`）—— 那一拍**丢了** ⇒ `fkWaitSeq(fkU14, 2)` 追不到
  *     期望值、把旧那一份交回 ⇒ `fkU14SeqBefore === 1`，红（证据：`[FK-U14-DIAG2]` 的那一行）；
  *   · ② `U2`/`U3`：`fkU2First|Second` 拿到的是 `null`（读不出可解析的那一份）⇒ `U2` 红；`U3` 同一
  *     夹具红在「目录里**恰有**一个条目 / 写前写后都解析得动」（`readdir` 那一刻目录里不止一个
  *     条目，或那一份不是合法 JSON）—— 两者同源。
- * 确定性复现（逐字展开 `writePolicyFileAtomic` 的语句、只控制「谁先 open」）：
+ * 确定性复现（**批 L 之前**的实现：逐字展开 `writePolicyFileAtomic` 的语句、只控制「谁先 open」）：
  * 交错 ⇒ 目标文件里剩下一段**接错位**的字节（第一次 `JSON.parse` 直接抛 `SyntaxError`；
  * 逐字形态见本轮报告，此处不把那段坏串写进源码）；同样的两次写改成**串行** ⇒ 干净的最后一份。
+ * （批 L 落码后这条复现路径**不再成立** —— 判据侧的红相读数由 Aw2/Aw3② 承接，见本档末尾的「批 L」块。）
  *
  * ——— 所以本函数等的是**「已落定」**，而不是「等几个 tick 大概写完了」—————————
  * 三步，全部 I/O 驱动、有界 tick、**零墙钟**：
@@ -13852,6 +13872,201 @@ check("批 K · U15 空串 action 的口径＝「空串视为省略」且与参�
 		&& !fkU15Empty.includes("状态卡读取失败") && !fkU15Empty.includes("崩溃现场")
 		&& fkU15EmptyHeaders.every((index, position) => index >= 0 && (position === 0 || index > fkU15EmptyHeaders[position - 1]))
 		&& fkU7BadAction.includes("状态卡读取失败") && !fkU7BadAction.includes("--- 团队与角色（"));
+
+// ===========================================================================
+// 批 L · 名册文件的并发写保护（FR-L1…FR-L3）
+// 归属：docs/2026-10-13-policy-atomic-write-design.md §8（判据 Aw1–Aw8）· §9（边界）；
+//       需求档 docs/2026-10-13-policy-atomic-write-requirements.md（NF-L1…NF-L5 · §五 非目标）。
+// 标识符一律 `Aw` 中缀（`aw` 前缀 + `AW_` 常量）：顶格声明重名会让整档解析失败。
+// 每条文案都按「去掉哪一处实现 ⇒ 本条按哪个子句变红」写明红相（仓规 §一）。
+// ★ 判据读的是**真源码**（`hostSource` ＝ `lib/index.js` 全文，本档上部已读一次）与**真文件**，
+//   不抄一份进测试；注入改名失败走 `__testing.setRenameThroughSeam`（FR-L2 的那条缝）。
+// ★ 事故场景（本批要消灭的那一格）：所有写入者共用**一个固定名**临时文件 ⇒ 甲写完的完整
+//   JSON（841,905 字节）被乙从字符偏移 834,315 起追加 73 个字符 ⇒ **整份解析不动**。
+//   Aw1/Aw2 锁「名字唯一」，Aw3 锁「行为面不再撕裂」，Aw4/Aw5 锁「失败方向」。
+// ★ 红相复现（宿主用；本档的判据作者没有 shell，两次实测读数由宿主执行 —— 见交付报告）：
+//   ① `lib/index.js` 的 `writePolicyFileAtomic` 就地变异成**批 L 之前**那一版（临时名写死 +
+//      直调 `rename` 不重试、去掉 `renameThroughSeam` 分支）⇒ 期望 Aw1/Aw2/Aw4/Aw5/Aw8 红；
+//   ② 只去掉重试循环（保留唯一名）⇒ 期望 Aw4（失败计数 2、文件最终内容）与 Aw5 红；
+//   ③ 只去掉 `rm(tmp, …)` 清理那一句 ⇒ 期望 Aw5 的 ③（零残留）红。三次变异都要**就地还原**
+//      并以 `sha256` 自证（`certutil -hashfile lib/index.js SHA256`）。
+// ===========================================================================
+
+/** FR-L1 的反向锁针：**固定名**那一个模板字面量（连首尾两个反引号一起）。
+ *  ★ 必须带反引号一起匹配：批 L 之后的实现是「目标路径 + `.tmp-` + pid + `-` + 8 位 hex」，
+ *  它含 `${file}.tmp` **这个前缀、但不含紧跟反引号的形态** —— 只匹配前缀会把**唯一名**也判红。
+ *  ★ 用单引号串写（普通字符串，不是模板）：`${…}` 在这里是**字面量**，不会被求值。 */
+const AW_FIXED_TMP = '`${file}.tmp`';
+
+/** 取模块级函数的源码体（声明行 → 列 0 的那一个 `}`；本仓顶格闭括号的格式约定）。 */
+function awFunctionBody(source, name) {
+	const lines = source.split(/\r?\n/u);
+	const start = lines.findIndex((line) => line.startsWith(`async function ${name}(`) || line.startsWith(`function ${name}(`));
+	if (start === -1) return "";
+	let end = start;
+	for (let i = start + 1; i < lines.length; i += 1) { if (lines[i] === "}") { end = i; break; } }
+	return lines.slice(start, end + 1).join("\n");
+}
+const AW_WRITE_BODY = awFunctionBody(hostSource, "writePolicyFileAtomic");
+const AW_SEAM_BODY = awFunctionBody(hostSource, "renameThroughSeam");
+/** FR-L2 注入面的两条读法（Y7 纪律：缝缺席 ⇒ 可断言的哨兵，不让整跑打崩在 TypeError 上）。 */
+const awSetSeam = (fn) => {
+	if (typeof __testing.setRenameThroughSeam !== "function") return false;
+	__testing.setRenameThroughSeam(fn);
+	return true;
+};
+const awSeamIsDefault = () => typeof __testing.renameThroughSeamIsDefault === "function" && __testing.renameThroughSeamIsDefault() === true;
+/** 注入用的错误对象：**带 errno**（Aw4④/Aw5④ 读的就是它原样到达留痕，而不是被吞成 undefined）。 */
+const awInjectedError = (code, message) => Object.assign(new Error(message), { code });
+
+// --- Aw1: 唯一临时名（正向；FR-L1）------------------------------------------
+check("批 L · Aw1 唯一临时名（正向；红相＝把实现回退成那一个固定名 ⇒ 本条红）: `writePolicyFileAtomic` 的函数体内 ① 含 `process.pid` ② 含一次哈希调用（`createHash(…).digest(\"hex\")` 取出后缀）③ **不含**固定名那一个模板字面量（连反引号一起判 —— 见 `AW_FIXED_TMP` 的注释：只匹配前缀会把唯一名也误杀）",
+	AW_WRITE_BODY.includes("process.pid")
+		&& /createHash\(/u.test(AW_WRITE_BODY) && /\.digest\("hex"\)/u.test(AW_WRITE_BODY)
+		&& AW_WRITE_BODY.includes(".tmp-")
+		&& !AW_WRITE_BODY.includes(AW_FIXED_TMP));
+
+// --- Aw2: 固定名不在场（反向锁；★ 评审 🔵#5 —— 作用域＝**全文件**）-------------
+check("批 L · Aw2 固定名不在场（反向锁，**全文件**作用域；红相＝把实现回退成固定名 ⇒ 本条红）: `lib/index.js` 全文对固定名那一个模板字面量**零命中** —— 与 Aw1 的第三子句互为冗余锁（两条的**范围不同**：Aw1 限函数体，本条是全文件 ⇒ 换到别处重启一个固定名、或只是在注释里重写一遍那个字面量，同样会被抓住）",
+	!hostSource.includes(AW_FIXED_TMP));
+
+// --- Aw3: 重复写不撕裂（行为面；US-L1 / NF-L3）------------------------------
+// ① 连续两次 `policy.update` ⇒ 文件**恰等于**第二次的序列化；
+// ② `Promise.all` 双写者并发（贴住事故场景）⇒ 文件仍是**其中一份完整文档**、可解析、且目录里
+//    没有残留 `.tmp-*`；③ 同一 home 上**另起一个 store**（等价「下一个进程读回」）⇒ 判不损坏且十键齐。
+const AW3_HOME = path.join(TEST_ROOT, "policy", "aw3");
+mkdirSync(AW3_HOME, { recursive: true });
+const aw3Env = setup({ sessions: [], selfCwd: TEAM_WS, policyHomeDir: AW3_HOME });
+const aw3File = path.join(AW3_HOME, "team-link", "policy.json");
+const aw3Dir = path.dirname(aw3File);
+const aw3Store = __testing.policyFor(aw3Env.ctx);
+await aw3Store.update({ teams: [teamRow({ name: "aw3-a" })] });
+await aw3Store.update({ teams: [teamRow({ name: "aw3-b" })] });
+// ★ 视图必须在**第二次写完那一刻**取：后面那对并发写会把内存态推到 aw3-c/aw3-d。
+const aw3SeqView = aw3Store.get();
+let aw3SeqDoc = null;
+try { aw3SeqDoc = JSON.parse(await readFile(aw3File, "utf8")); } catch { aw3SeqDoc = null; }
+await Promise.all([
+	aw3Store.update({ teams: [teamRow({ name: "aw3-c" })] }),
+	aw3Store.update({ teams: [teamRow({ name: "aw3-d" })] }),
+]);
+let aw3RaceDoc = null;
+try { aw3RaceDoc = JSON.parse(await readFile(aw3File, "utf8")); } catch { aw3RaceDoc = null; }
+// ★ 竞态那一格的可核反面（也是本批「修复前必红」的**确定性**红相）：批 L 之前两个写者共用一个
+// 临时文件 ⇒ 先 rename 的那个把临时文件**消费掉**，后一个的 rename 只能 ENOENT ⇒ 那一次写被
+// 判失败（`persistPolicyFile` 回 false）⇒ 落点行翻成 ⚠。批 L 之后每个写者 rename **自己的**
+// 临时文件 ⇒ 两次都算落盘成功 ⇒ 落点行仍是「存储：文件 …」。
+const aw3RacePlacement = aw3Store.placementLine();
+const aw3RaceName = aw3RaceDoc === null ? "（读不出来）" : String(at(aw3RaceDoc.policy?.teams, 0, {}).name);
+const aw3Leftovers = readdirSync(aw3Dir).filter((name) => name.includes(".tmp"));
+// ③ 等价新进程读回：同一个 home 上另起一个 store（它走既有的载入路径读那份文件）。
+const aw3FreshEnv = setup({ sessions: [], selfCwd: TEAM_WS, policyHomeDir: AW3_HOME });
+const aw3FreshLines = (await aw3FreshEnv.tool("team_link_roster").execute({ action: "get" }, execFor(aw3FreshEnv.senderAgent))).split("\n");
+let aw3FreshDoc = null;
+try { aw3FreshDoc = JSON.parse(await readFile(aw3File, "utf8")); } catch { aw3FreshDoc = null; }
+// 红相那一跑要看得出**它到底读到了什么**（同批 K 的 `[FK-U14-DIAG2]` 规）。
+console.log(`[AW3-DIAG] ${JSON.stringify({ seqTeams: aw3SeqDoc === null ? null : (aw3SeqDoc.policy?.teams ?? []).map((team) => team.name), raceName: aw3RaceName, leftovers: aw3Leftovers, freshFirstLine: at(aw3FreshLines, 0, ""), freshTeams: aw3FreshDoc === null ? null : (aw3FreshDoc.policy?.teams ?? []).map((team) => team.name) })}`);
+check("批 L · Aw3 重复写不撕裂（红相①＝把实现回退成「两个写者共用一个固定名临时文件」⇒ 先 rename 的那个把临时文件消费掉、后一个只能 ENOENT ⇒ ② 的那次写被判失败（落点行翻 ⚠）⇒ 本条红；文件真被写出交错字节时 `JSON.parse` 当场抛 ⇒ 同样红；红相②＝读回缺键 / 判损坏 ⇒ ③ 红）: ① 连续两次 `policy.update` ⇒ 文件内容**恰等于第二次**那一份（队名 = aw3-b，且与那一刻的内存视图逐字相同）② `Promise.all` 双写者并发 ⇒ 文件仍可解析、仍是**其中一个**写者的**完整**文档（队名 ∈ {aw3-c, aw3-d}、长度恰 1，不是两者交错的字节）、目录里零 `.tmp-*` 残留、且**两次写都算落盘成功**（落点行仍是「存储：文件 …」，不是 ⚠）③ 等价新进程读回（同一 home 另起一个 store）⇒ 落点行是「存储：文件 …」（**不判损坏**）、名册里看得见那一份、且 `policy` 恰是既有的**十键**",
+	aw3SeqDoc !== null && (aw3SeqDoc.policy?.teams ?? []).length === 1 && at(aw3SeqDoc.policy?.teams, 0, {}).name === "aw3-b"
+		&& sameJson(aw3SeqDoc.policy, aw3SeqView)
+		&& aw3RaceDoc !== null && (aw3RaceDoc.policy?.teams ?? []).length === 1 && aw3RaceName !== "（读不出来）" && ["aw3-c", "aw3-d"].includes(aw3RaceName)
+		&& aw3Leftovers.length === 0
+		&& aw3RacePlacement === `存储：文件 ${aw3File}`
+		&& aw3FreshDoc !== null && at(aw3FreshLines, 0, "") === `存储：文件 ${aw3File}`
+		&& aw3FreshLines.some((line) => line.startsWith(`- ${aw3RaceName} `))
+		&& typeof aw3FreshDoc.policy === "object" && aw3FreshDoc.policy !== null
+		&& sameJson(Object.keys(aw3FreshDoc.policy).sort(), U19_POLICY_KEYS));
+
+// --- Aw4: rename 失败 ⇒ 有界重试（经 `renameThroughSeam` 注入；FR-L2）------------
+const aw4Env = setup({ sessions: [], selfCwd: TEAM_WS });
+const aw4File = path.join(aw4Env.policyHome, "team-link", "policy.json");
+const aw4Store = __testing.policyFor(aw4Env.ctx);
+await aw4Env.tool("team_link_roster").execute({ action: "upsert-team", team: "aw4-before" }, execFor(aw4Env.senderAgent));
+let aw4SeamCalls = 0;
+let aw4Injected = 0;
+const aw4SeamInstalled = awSetSeam(async (tmp, file) => {
+	aw4SeamCalls += 1;
+	if (aw4SeamCalls <= 2) { aw4Injected += 1; throw awInjectedError("EPERM", "批 L Aw4 注入的改名失败"); }
+	await rename(tmp, file);                       // 第 3 次放行：这一次是**真**改名
+});
+try { await aw4Store.update({ teams: [teamRow({ name: "aw4-first" })] }); }
+finally { awSetSeam(null); }
+let aw4Doc = null;
+try { aw4Doc = JSON.parse(await readFile(aw4File, "utf8")); } catch { aw4Doc = null; }
+const aw4RetryWarns = aw4Env.log.lines.warn.filter((line) => line.includes("原子改名失败"));
+const aw4DowngradeWarns = aw4Env.log.lines.warn.filter((line) => line.includes("policy file write failed"));
+// FR-L2 的循环形状（★ 这两句是**墙钟判不了**的设计条款，只能读源码）：`attempt < 3` ⇒ **末次不再
+// 多等**；`sleep(25)` ⇒ 间隔 25ms。行为面的「最多 3 次（含首次）」由 Aw5 的 `aw5SeamCalls === 6`
+// （两次写 × 3 次尝试）钉住 —— 那里走的是**直接 `policy.update`**，一次调用恰一次原子写 ⇒ 等值可靠。
+const AW4_LOOP_SHAPE = AW_WRITE_BODY.includes("attempt < 3") && AW_WRITE_BODY.includes("sleep(25)");
+check("批 L · Aw4 rename 失败有重试且**修好即落盘**（红相①＝去掉重试 ⇒ 文件停在调用前那一版（内容与落点都对不上）⇒ 本条红；红相②＝每次失败都留一行（段内不重复被破）⇒ ③ 红；红相③＝留痕缺三要素任一项 ⇒ ③ 红）: 经 `renameThroughSeam` 注入「前两次抛、第 3 次放行」⇒ ① 目标文件最终**恰为**本次写入（队名 = aw4-first、与内存视图逐字相同），落点行仍是「存储：文件 …」② **恰 2 次**注入失败、接缝**被调用 ≥ 3 次**且第 3 次即放行（「每次写恰 3 次尝试」由 Aw5 的 `6 ＝ 2 写 × 3` 与下面 ④ 的循环形状一起钉住；这里不用等值，是因为写入路径上游还可能再发起别的写）③ 留痕**恰一行**且**三要素齐**（目标文件路径 + 错误码 `EPERM` + 写入者函数名 `writePolicyFileAtomic`），且这一次**没有**落点降级行；④ 另钉住循环形状（`attempt < 3` 与 `sleep(25)` —— 见上行注释）",
+	aw4SeamInstalled
+		&& aw4Doc !== null && (aw4Doc.policy?.teams ?? []).length === 1 && at(aw4Doc.policy?.teams, 0, {}).name === "aw4-first"
+		&& sameJson(aw4Doc.policy, aw4Store.get())
+		&& aw4Store.placementLine() === `存储：文件 ${aw4File}`
+		&& aw4Injected === 2 && aw4SeamCalls >= 3
+		&& aw4RetryWarns.length === 1 && aw4DowngradeWarns.length === 0
+		&& at(aw4RetryWarns, 0, "").includes(aw4File) && at(aw4RetryWarns, 0, "").includes("EPERM") && at(aw4RetryWarns, 0, "").includes("writePolicyFileAtomic")
+		&& AW4_LOOP_SHAPE);
+
+// --- Aw5: 重试耗尽后的失败方向（FR-L2 D5 / FR-L3；NF-L4 / US-L3）---------------
+const aw5Env = setup({ sessions: [], selfCwd: TEAM_WS });
+const aw5File = path.join(aw5Env.policyHome, "team-link", "policy.json");
+const aw5Dir = path.dirname(aw5File);
+const aw5Store = __testing.policyFor(aw5Env.ctx);
+const aw5Roster = aw5Env.tool("team_link_roster");
+await aw5Store.update({ teams: [teamRow({ name: "aw5-before" })] });
+const aw5BeforeBytes = await readFile(aw5File, "utf8");
+const aw5WarnFloor = aw5Env.log.lines.warn.length;
+let aw5SeamCalls = 0;
+const aw5SeamInstalled = awSetSeam(async () => { aw5SeamCalls += 1; throw awInjectedError("EBUSY", "批 L Aw5 注入的恒失败"); });
+try {
+	// 两次写**同属一段失败**（中间没有成功）⇒ 两道门各自只准放一行出来。
+	await aw5Store.update({ teams: [teamRow({ name: "aw5-after" })] });
+	await aw5Store.update({ teams: [teamRow({ name: "aw5-after-2" })] });
+} finally { awSetSeam(null); }
+const aw5AfterBytes = await readFile(aw5File, "utf8");
+const aw5ReadLines = (await aw5Roster.execute({ action: "get" }, execFor(aw5Env.senderAgent))).split("\n");
+const aw5SegmentWarns = aw5Env.log.lines.warn.slice(aw5WarnFloor);
+const aw5RetryWarns = aw5SegmentWarns.filter((line) => line.includes("原子改名失败"));
+const aw5DowngradeWarns = aw5SegmentWarns.filter((line) => line.includes("policy file write failed"));
+const aw5Leftovers = readdirSync(aw5Dir).filter((name) => name.includes(".tmp"));
+console.log(`[AW5-DIAG] ${JSON.stringify({ seamCalls: aw5SeamCalls, retryWarns: aw5RetryWarns.length, downgradeWarns: aw5DowngradeWarns.length, leftovers: aw5Leftovers, placement: at(aw5ReadLines, 0, ""), seamRestored: awSeamIsDefault() })}`);
+check("批 L · Aw5 重试耗尽后的失败方向（红相①＝去掉临时文件清理 ⇒ ③ 红；红相②＝把错误吞成 `undefined` / 换成新错误 ⇒ ④ 红（留痕里读不到注入的那个 errno 与原句）；红相③＝同一段里重复告警 ⇒ ⑤ 红）: 注入「改名恒抛 `EBUSY`」并**连写两次**（同一失败段，各 3 次尝试 ⇒ 接缝恰被调用 **6** 次）⇒ ① 状态**没有被假装写成功**：落点行降级为 `⚠ … 文件不可写`（＝ `persistPolicyFile` 回 `false` 的可核后果之一，返回值本身不在对外面上），内存态照常可读（该队仍在名册里）② 磁盘上那份文件**逐字节未动**（rename 从未成功 ⇒ 目标从未被碰）③ 目录里**零** `.tmp-*` 残留（best-effort 清理生效）④ 留痕里读得到**原始** errno 与**注入时的原句**（`EBUSY` + 那句 message ⇒ 错误对象是原样传下来的，没有被吞掉或替换）⑤ 两行**各受自己的门**：重试那一行恰 1（两次写同段）、落点降级那一行恰 1；重试行**三要素齐**（路径 + errno + 写入者函数名）；另自证接缝**已还原**（否则后面的判据会在一个坏掉的接缝上跑出假绿）",
+	aw5SeamInstalled
+		&& at(aw5ReadLines, 0, "") === "⚠ 存储：仅进程内存（重启即失）—— 原因：文件不可写"
+		&& aw5ReadLines.some((line) => line.startsWith("- aw5-after-2 "))
+		&& sameJson((aw5Store.get().teams ?? []).map((team) => team.name), ["aw5-after-2"])
+		&& aw5AfterBytes === aw5BeforeBytes
+		&& aw5Leftovers.length === 0
+		&& aw5SeamCalls === 6
+		&& aw5RetryWarns.length === 1 && aw5DowngradeWarns.length === 1
+		&& at(aw5RetryWarns, 0, "").includes(aw5File) && at(aw5RetryWarns, 0, "").includes("EBUSY") && at(aw5RetryWarns, 0, "").includes("writePolicyFileAtomic")
+		&& at(aw5RetryWarns, 0, "").includes("批 L Aw5 注入的恒失败")
+		&& at(aw5DowngradeWarns, 0, "").includes("EBUSY")
+		&& awSeamIsDefault());
+
+// --- Aw6: 零 schema / 零形状变更（NF-L2 的另一半）-----------------------------
+check("批 L · Aw6 零 schema / 零形状变更（红相＝顺手往 `policy.json` 加一格键 / 把 schema 常量改掉 ⇒ 本条红）: 写出来的文件里 `policy` 的键集与既有的**十键**逐字一致（权威读数 `U19_POLICY_KEYS`，不手抄一份），`schema` 仍是 `1`，且源码里的声明 `const POLICY_FILE_SCHEMA = 1;` 逐字未动",
+	aw3FreshDoc !== null
+		&& typeof aw3FreshDoc.policy === "object" && aw3FreshDoc.policy !== null
+		&& sameJson(Object.keys(aw3FreshDoc.policy).sort(), U19_POLICY_KEYS)
+		&& aw3FreshDoc.schema === 1
+		&& /const POLICY_FILE_SCHEMA = 1;/u.test(hostSource));
+
+// --- Aw7: 零新依赖（条数锁；NF-L1）------------------------------------------
+const awImportLines = hostSource.split(/\r?\n/u).filter((line) => line.startsWith("import "));
+const awImportSpecs = awImportLines.map((line) => (/from\s+"([^"]+)"/u.exec(line) ?? [])[1]);
+check("批 L · Aw7 零新依赖（红相＝新增第二条 import 行 / 换掉任一说明符 ⇒ 本条红）: `lib/index.js` 顶层 `^import` 仍**恰 8 条**、八条说明符逐字是白名单那一份（`HOST_IMPORTS`，与 `U19 日志事件` 同一份真读数）。★ 口径如实：本批**一个新名字都没加** —— 随机后缀用既有的 `createHash`（`node:crypto`）、残留清理用既有的 `rm`（批 K 已加进 `node:fs/promises` 那一行的解构列表）⇒ 设计档留的那条「确需 `unlink` 时只加在既有解构行里」的退路**最终没有用到**，`import` 面一个字符未动",
+	awImportLines.length === 8 && sameJson(awImportSpecs, HOST_IMPORTS));
+
+// --- Aw8: 负向锁（NF-L2 不退化：必经接缝、且不直接写目标）----------------------
+const awSeamStatementLines = AW_SEAM_BODY.split("\n").slice(1, -1).filter((line) => line.trim() !== "");
+check("批 L · Aw8 负向锁（红相①＝实现绕过接缝直接改名 / 直接写目标文件 ⇒ 本条红；红相②＝接缝体内长出第二句（缝不再是「一层薄接缝」）⇒ 本条红）: `writePolicyFileAtomic` 体内 ① **必经** `renameThroughSeam(tmp, file)` ② **不含**直接的 `await rename(…)` 调用形态 ③ **不含**对**目标文件**的直接写（`open(file` / `writeFile(file`）—— 即「临时文件 → 写 → fsync → 改名」这条原子性契约没有被降级成「直接覆盖目标」；且接缝 `renameThroughSeam` 的体内**恰一句** `await rename(tmp, file);`",
+	AW_WRITE_BODY.includes("renameThroughSeam(tmp, file)")
+		&& !/await\s+rename\s*\(/u.test(AW_WRITE_BODY)
+		&& !/\b(open|writeFile)\s*\(\s*file\b/u.test(AW_WRITE_BODY)
+		&& awSeamStatementLines.length === 1 && at(awSeamStatementLines, 0, "").trim() === "await rename(tmp, file);");
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
