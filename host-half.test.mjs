@@ -14074,8 +14074,9 @@ check("批 L · Aw8 负向锁（红相①＝实现绕过接缝直接改名 / 直
 //   §7（状态与 schema：**零持久化变更**，两个去抖 Map 只在进程内）· §8（U1/U2/U3）· §9（边界）；
 //   需求档 docs/2026-10-13-coordinator-signal-requirements.md §三（US-J1/US-J4）·
 //   §四（NF-J1 零新依赖 / NF-J2 自己的去抖与限量 / NF-J3 反走私 / NF-J4 可核）。
-// ★ 本单**只做 FR-J1**：压力告警（FR-J2）、事实源指路落宪章与摘要脚注（FR-J3）、文档面收口（FR-J4）
-//   留给后两单 ⇒ 本块**恰 3 条判据**（U1/U2/U3），标识符统一 `Cj` 中缀（设计档 §0 的纪律）。
+// ★ 分批（设计档 §10 末尾的拆单）：**J-1 = FR-J1 ⇒ U1/U2/U3**（已交付）；**J-2 = FR-J2 ⇒ U4**
+//   （2026-10-13 追加在本块末尾）；事实源指路落宪章与摘要脚注（FR-J3）、文档面收口（FR-J4）留给 J-3
+//   ⇒ 本块**恰 4 条判据**（U1/U2/U3/U4），标识符统一 `Cj` 中缀（设计档 §0 的纪律）。
 // ★ 时钟面（与「批 G」同一条理由）：行一律种在**锚真墙钟**的 `CJ_NOW = Date.now()` 上。种在 2023 的
 //   假时钟上，attach 后置链的 `ensureTeamAutoWatchdogs` 会先把它们当「已过期」原地刷新一遍
 //   （`expiresAt` 改写成墙钟 + 12h）⇒ 本块读的时序全被遮住。
@@ -14206,6 +14207,99 @@ check("批 J · U3 与既有摘要**互不抑制**（设计档 §4 D2 的被否�
 		&& at(cjBothDigests, 0, { content: [{ text: "" }] }).content[0].text !== at(cjBothAlerts, 0, { content: [{ text: "" }] }).content[0].text
 		&& at(cjBothDigests, 0, { content: [{ text: "" }] }).content[0].text.includes("工作台（读数 ")
 		&& !at(cjBothAlerts, 0, { content: [{ text: "" }] }).content[0].text.includes("[workbench]"));
+
+// --- U4：协调者**自身**上下文压力告警（FR-J2）--------------------------------------
+// 归属：设计档 §5 FR-J2 · §6（机制伪代码 ＋ §10-9 的「实施首步确认返回形状」）· §9（边界：
+//   「读不到压力投影 ⇒ 不说」）· §10-1（**阈值 = 50，用户裁定**）· §10-7（🔵 压力档位取**上升沿**）·
+//   §8 U4；需求档 §三 US-J2/US-J4 · §四 NF-J3（正文只由插件常量拼成、过消毒出口）。
+// ★ 形状结论（设计档 §10-9 要求的实施首步）：伪代码写的 `renderResourceContext(...).percent`
+//   **不成立** —— 那个函数返回的是**渲染好的字符串**（`wellFormed(renderResourceLine(...))`）。
+//   同一条投影路径的**对象**出口是 `readSessionUsage(ctx, sessionId)`（`.percent` 在那里），实现按
+//   真形状取它；本判据断言的是**行为**，不锁函数名。
+/** 本档的取数器：只有它认 `[pressure-warn]` 开场（另三条通道各有各的取数器）。 */
+const cjPressureOf = (env) => env.senderCalls.followedup.filter((message) => message.content[0].text.startsWith(__testing.WATCHDOG_PRESSURE_ALERT_LABEL));
+/** `contextPressure` 投影的读数（与批 C / 批 3 的夹具同一个 key 形状）：percent% ⇒ `percent × 10_000` 个 token（窗口 1.00M）。 */
+const cjPressureReading = (percent) => ({ contextWindow: 1_000_000, pressureTokens: Math.round(percent * 10_000), surfaceTokens: 200_000 });
+/** 把压力读数种进投影桩（key 级、全局 —— 与 :10227 那处既有夹具同一条缝）。 */
+const cjSetPressure = (env, percent) => { env.projections.readings.contextPressure = cjPressureReading(percent); };
+
+// ③ 阈值 ＋ ⑤ 档位/上升沿：一条注册连着巡逻七次（每次先把读数换成下一步那一档）。
+const cjPressureEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(CJ_NOW - 120_000) } },
+	teams: [cjTeam("cj-pressure")],
+	// 静默阈值抬到 1000min（与 U2 同一条夹具纪律）：本判据的时间线跨 55 分钟，默认 10min 会让目标
+	// 在中途迁进 `silent-idle`（那是夹具的人为漂移，不是被测量）。
+	watchdogs: [cjRow({ id: "wd-cj-pressure", team: "cj-pressure", targets: ["session-peer"], silentMinutes: 1000 })],
+});
+await waitForChain(cjPressureEnv, 1);
+cjSetPressure(cjPressureEnv, 50);                                    // 恰在阈值上（≥ ⇒ 投），档位 5
+await cjPressureEnv.watchdog.patrol({ now: CJ_NOW });
+const cjPressureFirstText = at(cjPressureOf(cjPressureEnv), 0, { content: [{ text: "" }] }).content[0].text;
+/** 一次压力巡逻（先换读数），返回**累计**投出的本档条数。 */
+const cjPressurePatrol = async (at_, percent) => {
+	cjSetPressure(cjPressureEnv, percent);
+	await cjPressureEnv.watchdog.patrol({ now: at_ });
+	return cjPressureOf(cjPressureEnv).length;
+};
+const cjP1 = cjPressureOf(cjPressureEnv).length;                                                  // 50.0% 档 5 ⇒ 1
+const cjP2 = await cjPressurePatrol(CJ_NOW + CJ_DEBOUNCE_MS + 60_000, 55);                        // 同档 5（窗口外）⇒ 不重投
+const cjP3 = await cjPressurePatrol(CJ_NOW + 2 * CJ_DEBOUNCE_MS + 120_000, 65);                   // ★ 上升沿 5→6 ⇒ 再投
+const cjP4 = await cjPressurePatrol(CJ_NOW + 3 * CJ_DEBOUNCE_MS + 180_000, 55);                   // 档位回落 ⇒ 不投
+const cjP5 = await cjPressurePatrol(CJ_NOW + 4 * CJ_DEBOUNCE_MS + 240_000, 65);                   // 回到刚报过的那一档 ⇒ 仍不投（判的是「不比上次大」，不是「同档不同次」）
+const cjP6 = await cjPressurePatrol(CJ_NOW + 5 * CJ_DEBOUNCE_MS + 300_000, 75);                   // ★ 7 > 6 ⇒ 再投
+const cjP7 = await cjPressurePatrol(CJ_NOW + 5 * CJ_DEBOUNCE_MS + 360_000, 85);                   // 8 > 7 但距上一条仅 1min ⇒ 去抖窗挡住
+const cjPressureSeq = [cjP1, cjP2, cjP3, cjP4, cjP5, cjP6, cjP7].join(",");
+
+// 反相：压力**低于**阈值 ⇒ 零投递（同一次巡逻的摘要照投 —— 负相自证，不是巡逻早退）。
+const cjUnderEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(CJ_NOW - 120_000) } },
+	teams: [cjTeam("cj-under")],
+	watchdogs: [cjRow({ id: "wd-cj-under", team: "cj-under", targets: ["session-peer"] })],
+});
+await waitForChain(cjUnderEnv, 1);
+cjSetPressure(cjUnderEnv, 49.9);                                     // 差 0.1 个百分点
+await cjUnderEnv.watchdog.patrol({ now: CJ_NOW });
+
+// ★ 角色门：同一条读数（90%）、同一条注册形状，**只换现任协调者** ⇒ 零投递（摘要仍照投）。
+const cjPressureForeignEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(CJ_NOW - 120_000) } },
+	teams: [cjTeam("cj-pressure-foreign", "session-other")],
+	watchdogs: [cjRow({ id: "wd-cj-pressure-foreign", team: "cj-pressure-foreign", targets: ["session-peer"] })],
+});
+await waitForChain(cjPressureForeignEnv, 1);
+cjSetPressure(cjPressureForeignEnv, 90);
+await cjPressureForeignEnv.watchdog.patrol({ now: CJ_NOW });
+
+// 读不到压力投影 ⇒ **不说**（绝不编造一个百分比）；同一条注册紧接着补上读数 ⇒ 当场会响
+// （负相自证：那次的「零投递」不是夹具推不动，而是读数真的读不出来）。
+const cjBlindEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(CJ_NOW - 120_000) } },
+	teams: [cjTeam("cj-pressure-blind")],
+	watchdogs: [cjRow({ id: "wd-cj-pressure-blind", team: "cj-pressure-blind", targets: ["session-peer"] })],
+});
+await waitForChain(cjBlindEnv, 1);
+await cjBlindEnv.watchdog.patrol({ now: CJ_NOW });                    // 投影桩是空表 ⇒ `contextPressure` 读不出来
+const cjBlindBefore = cjPressureOf(cjBlindEnv).length;
+cjSetPressure(cjBlindEnv, 90);
+await cjBlindEnv.watchdog.patrol({ now: CJ_NOW + 60_000 });
+const cjBlindAfter = cjPressureOf(cjBlindEnv).length;
+
+// 读数可见性（本文件既有惯例 `[CJ-U2-DIAG]` 那一类）：七个累计条数一旦走偏，FAIL 那一行旁边就摆着
+// **它偏在哪一步**（期望 1,1,2,2,2,3,3 —— 依次是首投 / 同档 / 升档 / 落档 / 回档 / 再升档 / 窗口内升档）。
+console.log(`[CJ-U4-DIAG] ${JSON.stringify({ p1: cjP1, p2: cjP2, p3: cjP3, p4: cjP4, p5: cjP5, p6: cjP6, p7: cjP7, under: cjPressureOf(cjUnderEnv).length, foreign: cjPressureOf(cjPressureForeignEnv).length, blind: [cjBlindBefore, cjBlindAfter], threshold: __testing.LIAISON_PRESSURE_WARN_PERCENT })}`);
+check("批 J · U4 协调者**自身**上下文压力告警（★ 只发给现任协调者 · 阈值 = 具名常量 50 · 同一档不重复 · ★ 上升沿：档位变小后回到同档**不重投**、档位变大才再投 · 读不到压力投影 ⇒ **不说**）（红相①＝去掉阈值判断 ⇒ 49.9% 那条反相红；红相②＝去掉档位判断 ⇒ 第 2 步同档多投一条 ⇒ 红；红相③＝把上升沿写成设计档 §6 字面的 `bucket === last.bucket` 等值判断 ⇒ 第 4 步（65% → 55%）多投一条 ⇒ 红；红相④＝去掉去抖窗 ⇒ 第 7 步（85%，距上一条 1min）多投一条 ⇒ 红；红相⑤＝去掉 `isIncumbentCoordinator` 那道门 ⇒ 非现任协调者那条红；红相⑥＝去掉读数门（`percent` 读不出来也往下走）⇒ 「投影不可读」那半红）: ① 恰在阈值上（50.0%）⇒ **恰投一条**，正文以插件常量 `[pressure-warn]` 开场、含读数与**点名后果**那句（「再读别人的会话历史会把你自己的窗口读满」）；② 49.9% ⇒ **零投递**，而同一次巡逻的摘要照投；③ 七个累计条数恰 `1,1,2,2,2,3,3`（首投 / 同档不重投 / 升档再投 / 落档不投 / 回到同档仍不投 / 再升档再投 / 升档但窗口内不投）；④ 同一读数（90%）下**只换现任协调者** ⇒ **零投递**，摘要仍照投；⑤ 投影读不出来 ⇒ **零投递**，补上读数后**当场**投一条（负相自证）；⑥ 阈值读的是**具名常量真值**（50）而不是抄一份进测试，档位函数 `bucketOf` 也是真函数（50→5 / 59.9→5 / 60→6）",
+	__testing.LIAISON_PRESSURE_WARN_PERCENT === 50
+		&& typeof __testing.WATCHDOG_PRESSURE_ALERT_LABEL === "string" && __testing.WATCHDOG_PRESSURE_ALERT_LABEL !== ""
+		&& __testing.bucketOf(50) === 5 && __testing.bucketOf(59.9) === 5 && __testing.bucketOf(60) === 6
+		&& cjP1 === 1
+		&& cjPressureFirstText.startsWith(__testing.WATCHDOG_PRESSURE_ALERT_LABEL)
+		&& cjPressureFirstText.includes("你自己的上下文压力 50.0%")
+		&& cjPressureFirstText.includes("再读别人的会话历史会把你自己的窗口读满")
+		&& digestOf(cjPressureEnv).length === 1
+		&& cjPressureSeq === "1,1,2,2,2,3,3"
+		&& cjPressureOf(cjUnderEnv).length === 0 && digestOf(cjUnderEnv).length === 1
+		&& cjPressureOf(cjPressureForeignEnv).length === 0 && digestOf(cjPressureForeignEnv).length === 1
+		&& cjBlindBefore === 0 && cjBlindAfter === 1 && digestOf(cjBlindEnv).length === 1);
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
