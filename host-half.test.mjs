@@ -1112,6 +1112,12 @@ function setup({
 	lateConnection = false,
 	omitAgentsCreate = false,
 	policyHome = undefined,
+	/** ★ 批 K 的夹具缝：**显式**指定本夹具的私有 DSH_HOME（`policyHome` 那个名字已被「三态开关」
+	 *  占用 —— 它只判 `=== false`）。省略 ⇒ 历史行为（`TEST_ROOT/policy/<自增号>`，逐字不变）。
+	 *  为什么需要它：批 K 的判据要把「**上一次启动**的现场目录」在 `apply` **之前**落盘（FR-K3 的
+	 *  读发生在 activation 内），而自动编号只有 `setup` 自己知道；显式给一个路径是唯一不必
+	 *  反向抄内部计数器的做法。传进来的目录必须落在本进程的 `TEST_ROOT` 之下（本套件的清理纪律）。 */
+	policyHomeDir = undefined,
 	policySeed = undefined
 } = {}) {
 	const ctx = new Context();
@@ -1295,7 +1301,8 @@ function setup({
 	// 目录落在本进程独有的 `TEST_ROOT/policy/` 下，随本套件末尾的 `rmSync(TEST_ROOT)` 一起清掉；
 	// `policyHome: false` 是 U7 的第三支：既无 DSH_HOME 也无 homedir ⇒ 路径解析失败。
 	policyHomeSeq += 1;
-	const policyDir = policyHome === false ? null : path.join(TEST_ROOT, "policy", String(policyHomeSeq));
+	// ★ 批 K：`policyHomeDir` 给了就用它（历史路径一个字节未动 —— 那个分支只在给了显式路径时走）。
+	const policyDir = policyHome === false ? null : (typeof policyHomeDir === "string" && policyHomeDir !== "" ? policyHomeDir : path.join(TEST_ROOT, "policy", String(policyHomeSeq)));
 	// 守卫判 **`policyDir`** 而不是入参 `policyHome`（代码评审修复轮 🔵#6）：`policyHome: false`
 	// 时 `policyDir` 才是 null，而旧守卫 `policyHome !== null` 在这一支是**真**（`false !== null`），
 	// 于是「既无路径又给了种子」会一路走到 `path.join(null, …)` 抛 TypeError。现在两种输入在
@@ -8860,8 +8867,17 @@ check("U5 落点行: 落点不是设置服务时，段①**不再**说「来源�
 // U6 —— 只写一处：服务在场时文件**一个字节都不动**（不读、不写、不建）。
 const u6Env = setup({ sessions: [], useSettings: true, selfCwd: TEAM_WS });
 await u6Env.tool("team_link_roster").execute({ action: "upsert-team", team: "service-only" }, execFor(u6Env.senderAgent));
-check("U6 只写一处: 设置服务在场时**不建** team-link 目录、不建 policy.json（状态只在设置服务）",
-	!existsSync(path.join(u6Env.policyHome, "team-link")) && u6Env.settings.namespaces.get("team-link") !== undefined);
+// ★ 批 K 同批改准（改写不是删除）：原来判的是「`<home>/team-link` 目录**不存在**」，而批 K 把
+// 崩溃现场心跳写在**同一个根**下（`<home>/team-link/forensics/<bootId>/`，设计档 D1 ⇒ 目录必然存在）。
+// 该条的**本意**是「状态**落点**（policy.json 与它的归档）在设置服务在场时一个都不建」——
+// 所以改成**点名条目集**（比原来的布尔判断更强：除了 forensics 根，多任何一个条目都红）。
+const u6Entries = existsSync(path.join(u6Env.policyHome, "team-link"))
+	? readdirSync(path.join(u6Env.policyHome, "team-link")).sort()
+	: [];
+check("U6 只写一处: 设置服务在场时**不建** policy.json、不建任何 superseded 归档（状态只在设置服务；`forensics/` 是批 K 的自家心跳根，不是状态落点）",
+	!u6Entries.includes("policy.json") && !u6Entries.some((name) => name.startsWith("policy.superseded-"))
+		&& u6Entries.every((name) => name === "forensics")
+		&& u6Env.settings.namespaces.get("team-link") !== undefined);
 const u6Env2 = setup({
 	sessions: [],
 	useSettings: true,
@@ -8943,7 +8959,9 @@ check("U9 迁移可核: 落点行 = 「存储：文件 <绝对路径>」，两�
 	u9Roster[0] === `存储：文件 ${u9File}` && u9Status[0] === `存储：文件 ${u9File}` && existsSync(u9File));
 check("U9 迁移可核: 仅仅**导入**不产生任何写 —— 磁盘上仍是人工放进去的那一份（savedAt 一字未动）",
 	JSON.parse(await readFile(u9File, "utf8")).savedAt === u9SeedDoc.savedAt
-		&& (await readdirSync(path.join(u9Env.policyHome, "team-link"))).length === 1);
+		// ★ 批 K 同批改准（改写不是删除）：`<home>/team-link` 下现在还有批 K 的心跳根 `forensics/`
+		//   （设计档 D1 把它钉在与 policy.json **同级**的位置）⇒ 原判据「条目数 === 1」改为**点名条目集**。
+		&& (await readdirSync(path.join(u9Env.policyHome, "team-link"))).sort().join(",") === "forensics,policy.json");
 
 // U10 —— **快路径折叠**（分歧审计修复轮 🟡#5；设计档 §3.1 档 4 + §4）。
 // 现象：`loadPolicyFile()` 过去只有一处调用（`if (scope === null)`），所以设置服务在
@@ -13325,6 +13343,329 @@ const biRegressOut = await biRegress.send.execute({ targetSessionId: BI_PEER, me
 check("批 I · U10 不回归（红相＝顺手改了门序 / 让配对压过屏蔽 / 动了提问形状 ⇒ 本条红）: ① 屏蔽仍**优先于配对快路径** —— 同一对既在 `pairs` 又在旧名单里 ⇒ 仍拒收、那一条陈旧配对按既有行为被清掉、且**一个对话框都不弹**（屏蔽检查在两道门之前，与改前逐字相同）；② 未屏蔽路径上的两道门提问顺序与 id 逐字未动（`send-confirm` → `receive-confirm`）",
 	biRegressOut.includes("已屏蔽") && biRegress.uq.requests.length === 0 && (biRegress.ns.data.pairs ?? []).length === 0
 		&& biWrite.uq.requests.length === 2 && biWrite.uq.requests.map((request) => request.questions[0].id).join(",") === "send-confirm,receive-confirm");
+
+// ===========================================================================
+// 批 K · 崩溃现场留证（心跳，FR-K1…FR-K5）
+// 归属：docs/2026-10-13-crash-forensics-design.md §8（判据 U1–U13）· §9（边界）；
+//       需求档 docs/2026-10-13-crash-forensics-requirements.md（NF-K1…NF-K5 · §五 非目标）。
+// 标识符一律 `Fk` 中缀（`fk` 前缀 + `FK_` 常量）：顶格声明重名会让整档解析失败。
+// 每条文案都按「去掉哪一处实现 ⇒ 本条按哪个子句变红」写明红相（仓规 §一）。
+// ★ 判据读的是**真控制器**（`__testing.forensicsFor(ctx)`）与**真文件**，不抄一份进测试。
+// ===========================================================================
+const FK_FORENSICS = "forensics";
+const FK_HEARTBEAT = "heartbeat.json";
+/** 注入时钟：只用来驱动巡逻那一拍与兜底那一拍（activation 的首拍走真墙钟）。 */
+const FK_T1 = Date.parse("2026-10-13T02:00:00.000Z");
+const FK_T2 = FK_T1 + 600000;
+const FK_T3 = FK_T1 + 1200000;
+const FK_T4 = FK_T1 + 1800000;
+/** 宿主那半个仪表的目录名 —— **分两段拼**：本仓纪律是这个名字在源码里零出现（U13 的负向锁），
+ * 判据自己当然也不该把它整串写进测试。 */
+const fkBannedDir = ["death", "forensics"].join("-");
+
+const fkRootOfHome = (home) => path.join(home, "team-link", FK_FORENSICS);
+const fkHomeDir = (name) => path.join(TEST_ROOT, "policy", `fk-${name}`);
+
+/**
+ * 批 K 的夹具工厂：**先**把「上一次启动」的现场目录种进一个**显式**的 DSH_HOME，**再** `setup`
+ * —— FR-K3 的「读上一次」发生在 activation（`apply` 内部），种子晚一步就只能读到空。
+ * 显式 home 走 `setup` 的 `policyHomeDir` 缝（本批新增；省略时行为逐字不变）。
+ */
+function fkEnv({
+	name,
+	previous = [],
+	watchdogs = undefined,
+	seed = {},
+	policySeed = undefined,
+	useSettings = true,
+	sessions = [],
+	selfCwd = TEAM_WS,
+} = {}) {
+	const home = fkHomeDir(name);
+	mkdirSync(fkRootOfHome(home), { recursive: true });
+	for (const row of previous) {
+		mkdirSync(path.join(fkRootOfHome(home), row.bootId), { recursive: true });
+		writeFileSync(path.join(fkRootOfHome(home), row.bootId, FK_HEARTBEAT), typeof row.bytes === "string" ? row.bytes : JSON.stringify(row.doc), "utf8");
+	}
+	const nsSeed = { ...seed, ...(watchdogs === undefined ? {} : { watchdogs }) };
+	const env = setup({
+		sessions, selfCwd, useSettings, policySeed, policyHomeDir: home,
+		...(Object.keys(nsSeed).length === 0 ? {} : { settingsSeed: { "team-link": nsSeed } }),
+	});
+	return {
+		...env,
+		fkHome: home,
+		fkRoot: fkRootOfHome(home),
+		ns: env.settings?.namespaces?.get("team-link"),
+		ctl: () => __testing.forensicsFor(env.ctx),
+		watchdog: () => __testing.watchdogFor(env.ctx),
+	};
+}
+/** 现场根下的 bootId 目录名（排序）。 */
+const fkBootDirs = (env) => (existsSync(env.fkRoot) ? readdirSync(env.fkRoot).sort() : []);
+/** 读某一拍（不传 bootId ⇒ 本次那一拍）。 */
+const fkDoc = async (env, bootId = undefined) => JSON.parse(await readFile(path.join(env.fkRoot, bootId ?? env.ctl().bootId, FK_HEARTBEAT), "utf8"));
+/** 等首拍落地（异步原子写的等待面；**不拿墙钟当判据**，只等 I/O）。 */
+async function fkWaitBeat(env) {
+	const file = env.ctl().heartbeatFile;
+	for (let i = 0; i < 500 && !existsSync(file); i += 1) await tick();
+	return existsSync(file);
+}
+/** 等 activation 的**整条启动序列**落定（`start()` 三步：读上一次 → 首拍 → 保留清理）。
+ *  `fkWaitBeat` 只保证**首拍**在场，而清理是它**后面**那一步 ⇒ 起飞前读目录数会读到「一份都没清」
+ *  的那一档（实测：`fkWaitBeat` 返回后立刻读 = 13，300ms 后 = 10 —— 首拍与清理之间有一次
+ *  `await`）。**I/O 驱动、零墙钟**：轮询到期望目录数即返回；到不了就原样交回
+ *  （清理那条红相「不做清理」时这里超时，目录数仍是 13 ⇒ 判据照旧红，红相不被这条等待抹掉）。 */
+async function fkWaitBootDirs(env, expected) {
+	for (let i = 0; i < 500 && fkBootDirs(env).length !== expected; i += 1) await tick();
+	return fkBootDirs(env).length === expected;
+}
+/** 状态卡的 forensics 动作（工具缺席 / 参数被拒 ⇒ 返回可断言的哨兵串，不把整跑打崩 —— Y7 纪律）。 */
+async function fkForensicsCall(env, args = { action: "forensics" }) {
+	const tool = env.tool("team_link_status");
+	if (tool === undefined) return "【状态卡工具未注册】";
+	try { return String(await tool.execute(args, execFor(env.senderAgent))); }
+	catch (error) { return `【参数被拒：${String(error?.message ?? error)}】`; }
+}
+/** 递归树快照（绝对路径 → 内容）：U6 / U13 的「只动了哪些路径」差分面。 */
+async function fkTree(dir) {
+	const rows = new Map();
+	if (!existsSync(dir)) return rows;
+	const walk = async (current) => {
+		for (const entry of readdirSync(current).sort()) {
+			const full = path.join(current, entry);
+			const info = await stat(full);
+			if (info.isDirectory()) { rows.set(full, "（目录）"); await walk(full); }
+			else rows.set(full, await readFile(full, "utf8"));
+		}
+	};
+	await walk(dir);
+	return rows;
+}
+/** 两份快照的差异（新增 / 删除 / 内容改动三种都算「动过」）。 */
+function fkTreeDiff(before, after) {
+	const changed = [];
+	for (const [key, value] of after) if (!before.has(key) || before.get(key) !== value) changed.push(key);
+	for (const key of before.keys()) if (!after.has(key)) changed.push(key);
+	return changed.sort();
+}
+
+// --- U1: 首拍在场（FR-K1；US-K1）------------------------------------------
+const fkU1 = fkEnv({ name: "u1" });
+const fkU1Ctl = fkU1.ctl();
+const fkU1Ready = await fkWaitBeat(fkU1);
+const fkU1Doc = fkU1Ready ? await fkDoc(fkU1) : null;
+check("批 K · U1 首拍在场（红相＝去掉「建本次 bootId 目录」或「写首拍」任一步 ⇒ 本条红）: activation 之后 `<DSH_HOME>/team-link/forensics/<本次 bootId>/heartbeat.json` 存在、`JSON.parse` 通过、`bootId`/`pid` 与本次一致（**目录名恰等于 bootId**）、`schema=1` 且首拍 `seq=1`；三个公开路径（root / dir / heartbeatFile）全在**自家根**之下，且根本身就在 `<policyHome>/team-link/` 里（与 policy.json 同级，D1）",
+	fkU1Ready && fkU1Doc !== null
+		&& fkU1Doc.bootId === fkU1Ctl.bootId && fkU1Doc.pid === process.pid && fkU1Doc.schema === 1 && fkU1Doc.seq === 1
+		&& path.basename(path.dirname(fkU1Ctl.heartbeatFile)) === fkU1Ctl.bootId
+		&& fkU1Ctl.root === fkU1.fkRoot && fkU1Ctl.dir === path.join(fkU1.fkRoot, fkU1Ctl.bootId)
+		&& fkU1Ctl.heartbeatFile === path.join(fkU1.fkRoot, fkU1Ctl.bootId, FK_HEARTBEAT)
+		&& fkU1Ctl.heartbeatFile.startsWith(fkU1.fkRoot + path.sep)
+		&& typeof fkU1Doc.startedAt === "string" && Number.isFinite(Date.parse(fkU1Doc.startedAt))
+		&& fkU1.fkRoot === path.join(fkU1.policyHome, "team-link", FK_FORENSICS));
+
+// --- U2: 周期心跳（FR-K2；US-K1）------------------------------------------
+const fkU2 = fkEnv({ name: "u2", watchdogs: [] });
+const fkU2Ctl = fkU2.ctl();
+await fkWaitBeat(fkU2);
+await fkU2.watchdog().patrol({ now: FK_T1 });
+const fkU2First = await fkDoc(fkU2);
+await fkU2.watchdog().patrol({ now: FK_T2 });
+const fkU2Second = await fkDoc(fkU2);
+check("批 K · U2 周期心跳（红相①＝每一拍新建一个目录 ⇒ 目录数 > 1；红相②＝巡逻不写第二拍 ⇒ seq 不增、lastBeatAt 不变）: 注入时钟跑**两轮巡逻** ⇒ `seq` 每轮**递增 1**、`lastBeatAt` 更新到注入的那一拍、且**仍是同一个 bootId 目录**（不新开目录）",
+	fkU2First.seq === 2 && fkU2Second.seq === 3
+		&& fkU2First.lastBeatAt === new Date(FK_T1).toISOString() && fkU2Second.lastBeatAt === new Date(FK_T2).toISOString()
+		&& fkBootDirs(fkU2).length === 1 && fkBootDirs(fkU2)[0] === fkU2Ctl.bootId);
+
+// --- U3: 原子性（不留 .tmp 残渣；任何时刻可解析）---------------------------
+const fkU3Required = ["schema", "bootId", "pid", "startedAt", "lastBeatAt", "seq", "uptimeSeconds", "memory", "disk", "sessions", "watchdogs"];
+check("批 K · U3 原子写（红相＝改成非原子写 / 写一半 ⇒ 目录里出现 `.tmp` 残渣或某一刻读到半截 JSON ⇒ 本条红）: 心跳目录里**恰有** `heartbeat.json` 一个条目（零 `.tmp*`、零中间文件），**写前**读的那一拍与**写后**读的那一拍都能 `JSON.parse`，字段十一格齐（`memory`/`disk`/`sessions` 各是对象、`lastBeatAt` 是 ISO 串）",
+	readdirSync(path.dirname(fkU2Ctl.heartbeatFile)).length === 1
+		&& readdirSync(path.dirname(fkU2Ctl.heartbeatFile))[0] === FK_HEARTBEAT
+		&& fkU3Required.every((key) => Object.prototype.hasOwnProperty.call(fkU2First, key))
+		&& typeof fkU2First.memory === "object" && fkU2First.memory !== null
+		&& typeof fkU2First.disk === "object" && fkU2First.disk !== null
+		&& typeof fkU2First.sessions === "object" && fkU2First.sessions !== null
+		&& fkU2First.lastBeatAt === new Date(FK_T1).toISOString() && fkU2Second.seq === fkU2First.seq + 1
+		&& fkBootDirs(fkU2).every((name) => readdirSync(path.join(fkU2.fkRoot, name)).every((file) => !file.includes(".tmp"))));
+
+// --- U4: 死亡窗口（FR-K3；US-K2）------------------------------------------
+const FK_PREV_BOOT = "2026-10-13T00-18-52-000Z-4242";
+const FK_PREV_DOC = {
+	schema: 1, bootId: FK_PREV_BOOT, pid: 4242,
+	startedAt: "2026-10-13T00:18:00.000Z", lastBeatAt: "2026-10-13T00:18:52.000Z",
+	seq: 47, uptimeSeconds: 5000,
+	memory: { rss: 111, heapUsed: 222, heapTotal: 333 },
+	disk: { free: 444, total: 555 },
+	sessions: { live: 3, roster: 2 },
+	watchdogs: 1,
+};
+const fkU4 = fkEnv({ name: "u4", previous: [{ bootId: FK_PREV_BOOT, doc: FK_PREV_DOC }] });
+await fkWaitBeat(fkU4);
+const fkU4Ctl = fkU4.ctl();
+const fkU4Out = await fkForensicsCall(fkU4);
+check("批 K · U4 死亡窗口（红相①＝不去读旧目录 ⇒ 窗口算不出来；红相②＝端点取错（拿本次最后一拍 / 拿目录 mtime 当代替）⇒ 本条红）: 预置一份「上一次」目录 ⇒ 窗口 = **[其 `lastBeatAt`, 本次 `startedAt`]** —— 两个端点逐字出现在输出里，且 `inspect().previous` 读到的就是那一份（`bootId` 与 `lastBeatAt` 都对得上）",
+	fkU4Ctl.inspect().previous !== null && fkU4Ctl.inspect().previous.bootId === FK_PREV_BOOT && fkU4Ctl.inspect().previous.lastBeatAt === FK_PREV_DOC.lastBeatAt
+		&& fkU4Out.includes("死亡窗口") && fkU4Out.includes(FK_PREV_DOC.lastBeatAt) && fkU4Out.includes(fkU4Ctl.startedAt)
+		&& fkU4Out.includes(FK_PREV_BOOT) && !fkU4Out.includes("无（首次运行"));
+
+const fkU4First = fkEnv({ name: "u4-first" });
+await fkWaitBeat(fkU4First);
+const fkU4FirstOut = await fkForensicsCall(fkU4First);
+check("批 K · U4 负相「无（首次运行）」（红相＝没有旧目录时**编造**一个窗口 ⇒ 本条红）: 一个旧目录都没有 ⇒ 如实说「无（首次运行）」，且输出里**没有**任何 `- 窗口：` 行（不编造端点、不拿本次自己的 `startedAt` 凑一个）",
+	fkU4First.ctl().inspect().previous === null && fkU4FirstOut.includes("无（首次运行") && !/^- 窗口：/mu.test(fkU4FirstOut));
+
+// --- U5: 保留上限（D5 / NF-K3；US-K4）-------------------------------------
+const fkU5Old = Array.from({ length: 12 }, (_, index) => {
+	const hour = 10 + Math.floor(index / 6);
+	const minute = (index % 6) * 10;
+	const isoDate = `2026-10-12T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00.000Z`;
+	const bootId = `2026-10-12T${String(hour).padStart(2, "0")}-${String(minute).padStart(2, "0")}-00-000Z-${9000 + index}`;
+	return { bootId, doc: { schema: 1, bootId, pid: 9000 + index, startedAt: "2026-10-12T09:00:00.000Z", lastBeatAt: isoDate, seq: 3, uptimeSeconds: 1, memory: { rss: 1, heapUsed: 1, heapTotal: 1 }, disk: { free: 1, total: 1 }, sessions: { live: 1, roster: 1 }, watchdogs: 0 } };
+});
+const fkU5 = fkEnv({ name: "u5", previous: fkU5Old.map((row) => ({ bootId: row.bootId, doc: row.doc })) });
+await fkWaitBeat(fkU5);
+await fkWaitBootDirs(fkU5, 10);          // 等「保留清理」落定再读目录集（红相①不做清理 ⇒ 这里超时、下面照旧读到 13）
+const fkU5Dirs = fkBootDirs(fkU5);
+const fkU5KeptOld = fkU5Dirs.filter((name) => name !== fkU5.ctl().bootId);
+check("批 K · U5 保留上限（红相①＝不清理 ⇒ 目录数 13；红相②＝把**本次**也删了 / 删错最旧的那一份 ⇒ 保留下来的集合对不上）: 预置 12 份旧目录 + 本次 ⇒ 清理后**恰 10 份**、删掉的恰是**最旧的 3 份**（按心跳内嵌 `lastBeatAt` 排序，不是目录 mtime）、**本次目录永不在被删之列**、最新的那一份旧目录**仍在**（上一拍的现场没被清掉）",
+	fkU5Dirs.length === 10 && fkU5Dirs.includes(fkU5.ctl().bootId)
+		&& sameJson(fkU5KeptOld, fkU5Old.slice(3).map((row) => row.bootId).sort())
+		&& fkU5.ctl().inspect().previous !== null && fkU5.ctl().inspect().previous.bootId === fkU5Old[11].bootId
+		&& !fkU5Dirs.includes(fkU5Old[0].bootId) && !fkU5Dirs.includes(fkU5Old[1].bootId) && !fkU5Dirs.includes(fkU5Old[2].bootId)
+		&& existsSync(fkU5.ctl().heartbeatFile));
+
+// --- U6: 只读合同（不写、不缓存、不新增持久状态；US-K3）--------------------
+const fkU6 = fkEnv({ name: "u6", seed: { teams: [teamRow({ name: "fk-team", workspace: TEAM_WS })] } });
+await fkWaitBeat(fkU6);
+const fkU6Ns = fkU6.settings.namespaces.get("team-link");
+const fkU6TreeBefore = await fkTree(fkU6.policyHome);
+const fkU6SettingsBefore = JSON.stringify(fkU6Ns.data);
+const fkU6SeqBefore = fkU6.ctl().inspect().seq;
+const fkU6Out = await fkForensicsCall(fkU6);
+const fkU6TreeAfter = await fkTree(fkU6.policyHome);
+check("批 K · U6 只读合同（红相＝让该动作顺手写点东西（顺手补一拍 / 顺手跑一次清理 / 顺手补一条状态）⇒ 本条红）: `action=forensics` 调用前后 —— settings 命名空间**逐字节不变**、磁盘**递归快照逐字节不变**（含心跳自己的内容）、`seq` 不前进、bootId 目录数不变",
+	fkU6Out.includes("崩溃现场") && JSON.stringify(fkU6Ns.data) === fkU6SettingsBefore
+		&& fkTreeDiff(fkU6TreeBefore, fkU6TreeAfter).length === 0
+		&& fkU6.ctl().inspect().seq === fkU6SeqBefore && fkBootDirs(fkU6).length === 1);
+
+// --- U7: 输出面（不带 action 逐字不变 / 带 action 含窗口与四类读数）--------
+const fkU7Default = await fkForensicsCall(fkU6, {});
+const fkU7Headers = ["--- 团队与角色（", "--- 换届 pending（", "--- 看门狗（", "--- 会话面（", "--- 活性（", "--- 台账尾（", "--- 形态（", "--- 资源/预算（"];
+const fkU7Order = fkU7Headers.map((header) => fkU7Default.indexOf(header));
+check("批 K · U7 输出面①（红相＝把崩溃现场那几行插进**默认**输出 / 动了既有段 ⇒ 本条红）: **不带** `action` 时输出与改前同形 —— 首行仍是落点行、八个段头**按序**在场，且**零**崩溃现场痕迹（「崩溃现场」/「死亡窗口」/`forensics` 都不出现）",
+	fkU7Default.split("\n")[0] === "存储：设置服务（team-link 命名空间）"
+		&& fkU7Order.every((index, position) => index >= 0 && (position === 0 || index > fkU7Order[position - 1]))
+		&& !fkU7Default.includes("崩溃现场") && !fkU7Default.includes("死亡窗口") && !fkU7Default.includes("forensics"));
+const fkU7BadAction = await fkForensicsCall(fkU6, { action: "nope" });
+check("批 K · U7 输出面①b（参数误用**不静默生效**；红相＝闭集外的 action 静默退回默认卡 ⇒ 本条红）: `action` 给了闭集外的值 ⇒ 如实拒绝、首行仍是落点行、并点名唯一支持的那一个值（不是静默忽略、也不是静默出默认卡）",
+	fkU7BadAction.includes("状态卡读取失败") && fkU7BadAction.includes("forensics")
+		&& fkU7BadAction.split("\n")[0] === "存储：设置服务（team-link 命名空间）"
+		&& !fkU7BadAction.includes("--- 团队与角色（"));
+check("批 K · U7 输出面②（红相①＝不带窗口 / 不带四类读数 ⇒ 本条红；红相②＝把「在飞作业」那一格加进来 ⇒ 本条红）: 带 `action=forensics` 时**含**死亡窗口与**四类读数**（内存 / 磁盘 / 会话 / 看门狗）与保留份数，且**不含**「在飞作业」这一格（本批读不到宿主的作业服务 —— 诚实边界，不用猜测的 0 冒充）",
+	fkU4Out.includes("死亡窗口") && fkU4Out.includes("内存：") && fkU4Out.includes("磁盘：") && fkU4Out.includes("会话：") && fkU4Out.includes("看门狗=")
+		&& fkU4Out.includes("保留：") && fkU4Out.includes("上限 10 份")
+		&& !fkU4Out.includes("在飞作业") && !fkU4Out.includes("jobs"));
+
+// --- U8: 失败方向（fail-open；NF-K4）-------------------------------------
+const fkU8Home = fkHomeDir("u8");
+mkdirSync(path.join(fkU8Home, "team-link"), { recursive: true });
+// 把**现场根本身**占成一个普通文件 ⇒ 建目录、写心跳、清理三处全部失败（最狠的那一档不可写）。
+writeFileSync(path.join(fkU8Home, "team-link", FK_FORENSICS), "占位：这个路径本该是目录\n", "utf8");
+const fkU8 = setup({ sessions: [], selfCwd: TEAM_WS, policyHomeDir: fkU8Home });
+await tick();
+await tick();
+const fkU8HeartbeatWarns = () => fkU8.log.lines.warn.filter((line) => line.includes("心跳写失败"));
+let fkU8Threw = null;
+try { await __testing.watchdogFor(fkU8.ctx).patrol({ now: FK_T1 }); } catch (error) { fkU8Threw = error; }
+const fkU8Out = await fkForensicsCall(fkU8, {});
+check("批 K · U8 失败方向（红相①＝让异常冒泡出巡逻 ⇒ 本条红；红相②＝每次失败刷一行 warn ⇒ 本条红）: 目标不可写（现场根被占成一个**文件**）⇒ 首拍失败、巡逻**不抛**、心跳失败**只留一行** warn（单行门），其余读面**照常可用**（默认状态卡照出八段、团队段照在、首行仍说得出落点）",
+	fkU8Threw === null && fkU8HeartbeatWarns().length === 1 && fkU8Out.includes("团队状态卡")
+		&& fkU8Out.includes("--- 团队与角色（") && fkU8Out.split("\n")[0].includes("存储："));
+check("批 K · U8 失败方向（负相自证）: 同一档夹具里**确实**失败过（心跳一个都没落盘、拍号停在 0）—— 否则上面那条会在「其实根本没尝试写」上假绿",
+	!existsSync(path.join(fkU8Home, "team-link", FK_FORENSICS, FK_HEARTBEAT)) && __testing.forensicsFor(fkU8.ctx).inspect().seq === 0);
+
+// --- U9: 零新依赖 / 零 schema（NF-K1；仍是十键）---------------------------
+const fkLibSource = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
+const fkImportLines = fkLibSource.split(/\r?\n/u).filter((line) => line.startsWith("import "));
+const fkImportSpecs = fkImportLines.map((line) => (/from\s+"([^"]+)"/u.exec(line) ?? [])[1]);
+const fkU9 = fkEnv({ name: "u9", useSettings: false, watchdogs: [] });
+await fkU9.tool("team_link_roster").execute({ action: "upsert-team", team: "fk-team" }, execFor(fkU9.senderAgent));
+const fkU9PolicyDoc = JSON.parse(await readFile(path.join(fkU9.policyHome, "team-link", "policy.json"), "utf8"));
+check("批 K · U9 零新依赖 + 零 schema（红相＝新增一条 import 行、或往 policy.json 的 schema/键集里加一格 ⇒ 本条红）: `lib/index.js` 顶层 `^import` 仍**恰 8 条**、八条说明符逐字是白名单那一份（本批用到的 `statfs` / `rm` 只加在既有 `node:fs/promises` 那一行的**解构列表**里 ⇒ 条数与说明符都没变）；且 `policy.json` 仍是**十键**（心跳写在**它自己的目录**里，一个字节都没进策略档）",
+	fkImportLines.length === 8
+		&& fkImportSpecs.slice().sort().join(",") === ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "node:crypto", "node:fs", "node:fs/promises", "node:os", "node:path", "schemastery"].join(",")
+		&& sameJson(Object.keys(fkU9PolicyDoc.policy).sort(), U19_POLICY_KEYS)
+		&& existsSync(path.join(fkU9.fkRoot, fkU9.ctl().bootId, FK_HEARTBEAT)));
+
+// --- U10: 磁盘读不到的诚实路径（★ 评审 🟡#3①）----------------------------
+let fkU10Doc = null;
+let fkU10Out = "";
+__testing.setDiskSpaceReader(async () => { throw new Error("statfs 桩：拒绝（U10 的红相构造）"); });
+try {
+	const fkU10 = fkEnv({ name: "u10" });
+	await fkWaitBeat(fkU10);
+	fkU10Doc = await fkDoc(fkU10);
+	fkU10Out = await fkForensicsCall(fkU10);
+} finally {
+	__testing.setDiskSpaceReader(null);      // ★ 必须还原：否则后面的判据会在一个坏掉的读盘器上跑出假绿
+}
+check("批 K · U10 磁盘诚实路径（红相＝用 0 / 估算值 / 任何数字冒充 ⇒ 本条红）: `statfs` 桩成 **reject** ⇒ 心跳里的 `disk.free` / `disk.total` **恰为 `null`**（**不是数字、不是 0**）、`disk` 仍恰两格；心跳照常写出（不抛）；输出里那两格如实说「读不到（不编造）」",
+	fkU10Doc !== null && fkU10Doc.disk.free === null && fkU10Doc.disk.total === null
+		&& typeof fkU10Doc.disk.free !== "number" && typeof fkU10Doc.disk.total !== "number"
+		&& Object.keys(fkU10Doc.disk).sort().join(",") === "free,total"
+		&& fkU10Doc.seq === 1 && fkU10Out.includes("读不到（不编造）")
+		&& __testing.diskSpaceReaderIsDefault());
+
+// --- U11: 免责声明在场（★ 评审 🟡#3②；US-K3）-----------------------------
+check("批 K · U11 免责句（红相＝删掉那句 / 只说「可能崩溃」不说同形 ⇒ 本条红）: `action=forensics` 的输出含「**非正常退出不单独归因**」，并说清**正常退出与崩溃在这份数据上同形**、区分二者需**由人**结合宿主的 `crash.log`（本插件不读那个目录）",
+	fkU4Out.includes("非正常退出不单独归因") && fkU4Out.includes("正常退出与崩溃") && fkU4Out.includes("同形")
+		&& fkU4Out.includes("crash.log") && fkU4Out.includes("需由人"));
+
+// --- U12: 零注册兜底（★ FR-K5；评审 🟡#1）双向 ----------------------------
+const fkU12 = fkEnv({ name: "u12", watchdogs: [] });
+const fkU12Ctl = fkU12.ctl();
+await fkWaitBeat(fkU12);
+const fkU12ArmedAtActivation = fkU12Ctl.inspect().fallbackArmed;
+const fkU12Seq0 = (await fkDoc(fkU12)).seq;
+const fkU12FirstTick = await fkU12Ctl.fallbackTick(FK_T1);
+const fkU12AfterFirst = await fkDoc(fkU12);
+const fkU12SecondTick = await fkU12Ctl.fallbackTick(FK_T2);
+const fkU12AfterSecond = await fkDoc(fkU12);
+check("批 K · U12① 零注册 ⇒ 兜底定时器在场且心跳仍**周期更新**（红相＝去掉 FR-K5 ⇒ 零注册时心跳静默停在首拍 —— 本条红）: `policy.watchdogs === []` ⇒ 兜底定时器**存在**（`fallbackArmed`），并由**它自己那条缝**驱动两拍 ⇒ `seq` 递增两次、`lastBeatAt` 跟着两拍走",
+	fkU12ArmedAtActivation === true && fkU12Seq0 === 1
+		&& fkU12FirstTick === true && fkU12AfterFirst.seq === 2 && fkU12AfterFirst.lastBeatAt === new Date(FK_T1).toISOString()
+		&& fkU12SecondTick === true && fkU12AfterSecond.seq === 3 && fkU12AfterSecond.lastBeatAt === new Date(FK_T2).toISOString());
+// ② 一旦出现一条注册（巡逻开始跑）⇒ 兜底**退场**，且它此后再 tick **不写**（不双写）。
+fkU12.ns.data.watchdogs = [{
+	id: "wd-fk-u12", team: null, watcherSession: "session-self", targets: [],
+	silentMinutes: 10, intervalMinutes: 5, expiresAt: FK_T3 + 3600000, createdAt: FK_T3 - 1000, origin: "manual",
+}];
+await fkU12.watchdog().patrol({ now: FK_T3 });
+const fkU12AfterPatrol = await fkDoc(fkU12);
+const fkU12Disarmed = fkU12Ctl.inspect().fallbackArmed === false;
+const fkU12LateTick = await fkU12Ctl.fallbackTick(FK_T4);
+const fkU12Final = await fkDoc(fkU12);
+check("批 K · U12② 出现注册 ⇒ 兜底**停掉**、不双写（红相＝出现注册后不停兜底 ⇒ 同一窗口里 `seq` 增二 ⇒ 本条红）: 种进一条注册并让巡逻跑起来 ⇒ 兜底定时器**已退场**；巡逻那一拍把 `seq` 只推进 **1**；退场后再 tick 兜底 ⇒ 它返回 `false` 且**一个字节都不写**（`lastBeatAt` / `seq` 都停在巡逻那一拍）",
+	fkU12Disarmed && fkU12LateTick === false
+		&& fkU12AfterPatrol.seq === fkU12AfterSecond.seq + 1 && fkU12AfterPatrol.lastBeatAt === new Date(FK_T3).toISOString()
+		&& fkU12Final.seq === fkU12AfterPatrol.seq && fkU12Final.lastBeatAt === fkU12AfterPatrol.lastBeatAt);
+
+// --- U13: 写面只落在自家根下（★ 评审 🔵#6 的负向锁）-----------------------
+const fkU13 = fkEnv({ name: "u13", watchdogs: [] });
+await fkWaitBeat(fkU13);
+const fkU13Before = await fkTree(fkU13.policyHome);
+await fkU13.watchdog().patrol({ now: FK_T1 });
+await fkU13.ctl().pruneForensics();
+await fkU13.ctl().writeHeartbeat(FK_T2);
+const fkU13After = await fkTree(fkU13.policyHome);
+const fkU13Changed = fkTreeDiff(fkU13Before, fkU13After);
+check("批 K · U13 写面只在自家根下（红相①＝把写目标 / 删除面挪到别处（宿主的目录、工作区、policy.json 旁边）⇒ 变更路径里出现非 forensics 的路径 ⇒ 本条红；红相②＝代码里出现宿主那个目录名 ⇒ 本条红）: 一次「首拍 + 巡逻 + 清理 + 再写一拍」之后，**新增或改动的路径全部**落在 `<DSH_HOME>/team-link/forensics/` 之下（且**确实**动过 —— 非空集，否则本条是空真）；`lib/index.js` 对宿主的那个目录名**零命中**；清理面同样只在自家根下（没有越过根去删任何东西）",
+	fkU13Changed.length > 0 && fkU13Changed.every((full) => full.startsWith(fkU13.fkRoot + path.sep))
+		&& fkU13Changed.includes(path.join(fkU13.fkRoot, fkU13.ctl().bootId, FK_HEARTBEAT))
+		&& !fkLibSource.includes(fkBannedDir)
+		&& !fkU13Changed.some((full) => full.includes("policy.json")) && fkU13.ctl().root === fkU13.fkRoot);
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。

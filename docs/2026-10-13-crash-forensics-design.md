@@ -1,5 +1,8 @@
 # 批 K · 崩溃现场留证（心跳） —— 设计档
 
+> **实施状态（2026-10-13，批 K 落码）**：**已实施** —— 落点 `lib/index.js` 的新模块区「批 K · 崩溃现场留证（心跳）」（`FORENSICS_KEEP_BOOTS` / `FORENSICS_FALLBACK_INTERVAL_MS` / `FORENSICS_BOOT_DIR_PATTERN` / `readDiskSpaceFromStatfs` ＋ 注入缝 `diskSpaceReader` / `createForensics`（内含 `writeHeartbeat` · `pruneForensics` · `patrolBeat` · `readPreviousForensics` · `renderForensicsReport` · `armForensicsFallback` / `disarmForensicsFallback` / `fallbackTick` / `inspect` / `dispose`）· `writePolicyFileAtomic` **原样上提**到模块级 · 巡逻尾部挂钩（`createWatchdog(… , forensics)` 的 `patrol()` 末尾）· `team_link_status` 的可选 `action=forensics`（＋ `__testing` 的 `forensicsFor` / `setDiskSpaceReader` / `diskSpaceReaderIsDefault` / 两个具名常量））；判据 **18 条**在 `host-half.test.mjs` 的「批 K」块（标识符 `Fk` 中缀，U1–U13 逐条落地，含 U10 磁盘诚实路径 · U11 免责句 · **U12 零注册兜底双向** · U13 写面只落在自家根下），另**同批改写 2 处既有判据**（`U6 只写一处` 与 `U9 迁移可核`：`<home>/team-link` 下条目数 ⇒ **点名条目集**，因为本档 D1 把心跳根钉在 `policy.json` **同级**、那个目录从此必然存在）；`node:fs/promises` 的既有解构列表新增 **`statfs`** 与 **`rm`** 两个名字（**顶层 `import` 条数与说明符不变**）。★ **三处实施口径（如实登记；第 ③ 条是修复轮补记）**：① **首拍调用点在 `apply` 收尾、不在 `policy.onAttach` 的后置链**（§5 FR-K1 括号里那句落点猜测）—— 本部署是 `no-register` ⇒ 文件后端，而 `onAttach` 链的三个 `notifyAttached()` 全被 `scope !== null` 门住，**文件为空 / 无文件时它一次都不会跑** ⇒ 首拍挂在那里等于静默零心跳；② §6 伪代码写 `pruneForensics` 用 `unlink`，实施改用 **`rm(…, { recursive: true, force: true })`**（`unlink` 删不掉目录，而 §9「清理越界」要求删的是 `forensics/<bootId>/` **目录**）；③ **心跳的两处政策读数走 `policy.peek()`（非附着只读）而不是 §6 伪代码写的 `policy.get()`**（`watchdogCount` / `writeHeartbeat`）—— 理由：`get()` 的首行是 §9.1.3 ③ 的**惰性附着重试**（`attachFrom`），于是**一次后台观测会自发把晚挂的 settings 拉上来**（后端切换 + 内存窗口折叠 + 后置链 + `policy.json` 回写）⇒ 与 NF-K4「心跳是观测、不是功能」冲突，且**既有判据 `host-half.test.mjs` 的 `U11 前置` 因此变红**（修复轮实测：工作树 lib ⇒ FAIL、HEAD lib ⇒ PASS）。`peek()` 是 store 的**新增只读面**（不跑 `attachFrom`、不补 `settleAttachNotice`；已附着时读数与 `get()` 逐字相同）—— 一并计入「新增符号」。★ 另：修复轮**同批改写第 3 处既有判据面**（批 K 块「U5 保留上限」的谓词 `slice(2) → slice(3)` + 补第 3 份删除检查 + 新增 I/O 驱动的 `fkWaitBootDirs` 等待面）。
+**宿主实测回执已回填（2026-10-13，父侧实跑）**：`node host-half.test.mjs` ⇒ **`ALL PASS / assertion total: 1664 (failed: 0)`**（退出码 0）· `node client-half.test.mjs` ⇒ **`310 (failed: 0)`**（退出码 0）。构成：**1664 = 1646（批 I 收口的宿主实测值）＋ 18（批 K 判据）**。
+
 > **规格档**。需求档 [`docs/2026-10-13-crash-forensics-requirements.md`](2026-10-13-crash-forensics-requirements.md)。
 > 行号一律 as-of **2026-10-13 工作树（commit `f24f167`）**，实施按**符号名**定位。
 > ★ 本档全文不写出框定 token 的原串（批 E 立的仓规）；新测试标识符统一用 **`Fk` 中缀**。
@@ -78,7 +81,7 @@ DSH 自带 `~/.dsh/death-forensics/` 已有半个仪表（`crash.log` / `heartbe
 
 | FR | 内容 | 落点（符号名 · 行号 as-of） |
 | --- | --- | --- |
-| **FR-K1** | **开一次启动的现场目录**：activation 时算 `bootId`（`<ISO>-<pid>` 形态，与宿主同形）、建 `forensics/<bootId>/`、写首拍 | 新函数（模块级）· 调用点：attach 后置链（与既有 `runPatrolEnsure` 同链，`:14443` 邻近） |
+| **FR-K1** | **开一次启动的现场目录**：activation 时算 `bootId`（`<ISO>-<pid>` 形态，与宿主同形）、建 `forensics/<bootId>/`、写首拍 | 新函数（模块级）· 调用点：**`apply` 收尾**（`void forensics.start()`；★ 原写「attach 后置链」，实施勘误见 §6 末的 ②） |
 | **FR-K2** | **周期心跳**：每次巡逻写一拍（原子覆盖 `heartbeat.json`）；内容见 §7 | `patrol()`（`:3485-3503`）循环体末尾，与 `runPatrolEnsure`（`:3495`）并列 |
 | **FR-K3** | **启动时算死亡窗口**：扫描 `forensics/*/`，取**非本次**目录里 `lastBeatAt` 最大的那份 ⇒ 与本次 `startedAt` 一起渲染 | 同上新模块；读数缓存在进程内（activation 一次） |
 | **FR-K4** | **读面**：`team_link_status` 新增可选参数 `action=forensics` ⇒ 输出「本次启动 + 上一次的死亡窗口 + 死前读数 + 保留份数」；**不带该参数时输出逐字不变** | `team_link_status` 的 handler（`:13408` 注册 · 渲染在 `:13485` 邻近） |
@@ -140,6 +143,17 @@ function readPreviousForensics() { /* 扫描 forensics/*/heartbeat.json，取 la
  */
 async function pruneForensics(keep = FORENSICS_KEEP_BOOTS) { /* 纯读目录 + unlink；越界不删；永不删本次 */ }
 ```
+
+> ★ **§6 两处实施勘误（2026-10-13 落码时如实登记，代码为准）**：
+> ① 上面 `pruneForensics` 那行注解里的 **`unlink`** 是笔误 —— `unlink` 删不掉**目录**，而 §9「清理越界」要删的正是
+> `forensics/<bootId>/` **目录**本身；实现用 **`rm(path, { recursive: true, force: true })`**（`rm` 加在既有
+> `node:fs/promises` 解构列表里，**顶层 `import` 条数与说明符不变**，NF-K1 仍成立）。
+> ② `writeHeartbeat` 的调用点：§5 FR-K1 写的「attach 后置链（与既有 `runPatrolEnsure` 同链）」是**落点猜测**，
+> 实施改在 **`apply` 收尾**（`void forensics.start()`）。理由（可 grep）：本部署是 `no-register` ⇒ 文件后端，而
+> `onAttach` 后置链的三个 `notifyAttached()` 调用点**全被 `scope !== null` 门住**（`lib/index.js` 的 `onAttach`
+> JSDoc 与 §3.5 的注释逐字写着这一点），**文件为空 / 无文件时那条链一次都不会跑** ⇒ 首拍挂在那里等于
+> **静默零心跳**（正是本批要消灭的失效形态）。「activation 之后心跳在场」这条验收口径（U1）两处都满足，
+> 但只有 `apply` 收尾这一处**在任何部署形态下都成立**。
 
 **新增符号（★ 评审 🔵#4：与既有助手分开列，避免实施者以为是既有）**
 - **本批新增**：`bootId` · `forensicsRoot` · `writeHeartbeat` · `readPreviousForensics` · `pruneForensics` · `renderForensicsReport` · `armForensicsFallback` / `disarmForensicsFallback`（FR-K5）· 具名常量 `FORENSICS_KEEP_BOOTS = 10` 与 `FORENSICS_FALLBACK_INTERVAL_MS = 600000` · 心跳状态的进程内 `beatSeq`（计数器）。

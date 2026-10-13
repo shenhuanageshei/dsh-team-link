@@ -131,3 +131,10 @@
 - **本部署的状态事实源是 `policy.json`，不是设置 UI 的 `teams` 键**：宿主没有可用的 `settings.register()`（落点行原因码 `no-register`），
   插件的状态落在 `<DSH_HOME>/team-link/policy.json`。**改团队状态请用工具**（`team_link_roster` 等）；
   **在设置 UI 里改 `teams` 键不会生效**（插件不读宿主配置）。roster 的恢复梯子里那句「设置 UI 直接改 teams 键」在本部署**不可用**。
+- **★ `fs.rmSync(dir, { recursive: true })` 会跟随目录 junction，删掉链接目标的内容**（2026-10-13 实测事故，代价 = 本仓 `node_modules` 被清空）：
+  本仓既有做法（`docs/verification-log.md:1068` 记录的「`%TEMP%` 临时副本 + junction 指回仓内 `node_modules`」）**必须补上这一条规避** ——
+  **删除含 junction 的目录之前，先把那些 junction 本身拆掉**（对链接路径单独 `rmSync`，或**建副本时就直接用真副本**而不是 junction）。
+  事故现场：`eng_coder` 为「旧实现 × 新测试」对照在 `%TEMP%` 建 6 份副本、每份用 junction 指回仓内，收尾 `rmSync(recursive)` **顺着 junction 清空了仓自己的 `node_modules`**
+  （无 lockfile、被 gitignore ⇒ **逐字节无法还原**）；受控复核（临时目录放 junction 再删父目录）`targetSurvived=false` 坐实机制。
+  处置：按 Node 的解析报错**迭代重建导入闭包**（全部真副本、零 junction），两套件在真 node 下全绿 ⇒ **功能等价、但不是字节级还原**。
+  ⇒ 规矩：**在 `%TEMP%` 建副本做对照实验时，`node_modules` 一律用真副本；任何含 junction 的树在删除前先拆链接。**
