@@ -13346,7 +13346,7 @@ check("批 I · U10 不回归（红相＝顺手改了门序 / 让配对压过屏
 
 // ===========================================================================
 // 批 K · 崩溃现场留证（心跳，FR-K1…FR-K5）
-// 归属：docs/2026-10-13-crash-forensics-design.md §8（判据 U1–U13）· §9（边界）；
+// 归属：docs/2026-10-13-crash-forensics-design.md §8（判据 U1–U15）· §9（边界）；
 //       需求档 docs/2026-10-13-crash-forensics-requirements.md（NF-K1…NF-K5 · §五 非目标）。
 // 标识符一律 `Fk` 中缀（`fk` 前缀 + `FK_` 常量）：顶格声明重名会让整档解析失败。
 // 每条文案都按「去掉哪一处实现 ⇒ 本条按哪个子句变红」写明红相（仓规 §一）。
@@ -13420,6 +13420,53 @@ async function fkWaitBootDirs(env, expected) {
 	for (let i = 0; i < 500 && fkBootDirs(env).length !== expected; i += 1) await tick();
 	return fkBootDirs(env).length === expected;
 }
+/**
+ * ★ 修复轮 #2（`U14` 偶发红）：**等盘上的拍号追上期望值**，再让判据去断言它。
+ *
+ * 治的是什么（父侧复跑 21 次红 3 次 · 本机并发复跑 6 并发抓到 5/36，读数见下）：一次
+ * `await patrol(...)` / `await fallbackTick(...)` **返回之后**，用新句柄读同一个
+ * `heartbeat.json`，仍可能读到**上一拍**的内容 —— 实测三格同拍读数（`host-half` 的临时探针）：
+ * `{mem: 2, entries: "heartbeat.json", disk: 1}` —— 内存拍号已推进（⇒ 原子写的 `rename` 已
+ * resolve、`seq += 1` 已跑）、目录里**没有 `.tmp`**（⇒ 临时文件已被换走），而读到的还是旧那一份；
+ * 失败 warn 数为 **0**（⇒ 不是「写失败被吞」）。⇒ 这是**读者侧的可见性滞后**，不是心跳状态机
+ * 的问题：「写已落定」与「下一个读者的 `readFile` 已能看见它」之间还有一个窗口，**负载下才显形**
+ * （空闲时 13/13 绿；6 并发复跑 36 行里红 5）。
+ *
+ * 所以本函数等的是**盘上的读数追平期望拍号**，而不是「等几个 tick 大概写完了」——
+ * 与 `fkWaitBeat` / `fkWaitBootDirs` **同规**：I/O 驱动、有界 tick、**零墙钟**。
+ * 判据**一个字都不放宽**：本函数只把「读到的那一份还没追上来」等掉，等不到就把**最后一次读数**
+ * 原样交回（`seq` 没到期望值、或根本没有心跳文件 ⇒ 下面照旧红）。
+ *
+ * 为什么判据是 `seq >= expected`（而不是 `===`）：读者只可能**落后**于最后一次写，不可能超前
+ * —— 所以「追平」就是「已落定」的充分读数。反过来，`>=` 也让**多写**照样可抓：若实现多写了一拍
+ * （U12② 的红相），读到的 `seq` 会比期望值**大** ⇒ 追平判定立刻返回，而下面的等值断言当场红。
+ *
+ * @returns 盘上最后读到的那一份心跳文档（到不了期望值 ⇒ 返回最后读到的那一份；读不到 ⇒ `null`）。
+ */
+async function fkWaitSeq(env, expected, tries = 500) {
+	let doc = null;
+	for (let i = 0; i < tries; i += 1) {
+		try { doc = await fkDoc(env); } catch { doc = null; }
+		if (doc !== null && typeof doc.seq === "number" && doc.seq >= expected) return doc;
+		await tick();
+	}
+	return doc;
+}
+/**
+ * ★ 修复轮 #2（同一个等待面）：等**兜底定时器的在场状态**变成期望值再断言。
+ *
+ * U14/U12 的两条状态变化（「最后一条注册消失 ⇒ 兜底重挂」「出现注册 ⇒ 兜底退场」）在实现里是
+ * **同步**落定的（`armForensicsFallback` / `disarmForensicsFallback` 都是同步函数），本函数因此
+ * 通常在**第一拍**就返回；它在这里的作用与 `fkWaitSeq` 同规 —— 把「读得太早」这一类不确定性
+ * 从判据里拿掉。**判据不放宽**：状态永远到不了期望值 ⇒ 轮询到上限，返回**最后一次读数**⇒ 红。
+ *
+ * @returns 最后观察到的 `fallbackArmed` 布尔读数（到不了期望值就是那个不是期望值的读数）。
+ */
+async function fkWaitArmed(env, expected, tries = 500) {
+	let armed = env.ctl().inspect().fallbackArmed;
+	for (let i = 0; i < tries && armed !== expected; i += 1) { await tick(); armed = env.ctl().inspect().fallbackArmed; }
+	return armed;
+}
 /** 状态卡的 forensics 动作（工具缺席 / 参数被拒 ⇒ 返回可断言的哨兵串，不把整跑打崩 —— Y7 纪律）。 */
 async function fkForensicsCall(env, args = { action: "forensics" }) {
 	const tool = env.tool("team_link_status");
@@ -13470,9 +13517,9 @@ const fkU2 = fkEnv({ name: "u2", watchdogs: [] });
 const fkU2Ctl = fkU2.ctl();
 await fkWaitBeat(fkU2);
 await fkU2.watchdog().patrol({ now: FK_T1 });
-const fkU2First = await fkDoc(fkU2);
+const fkU2First = await fkWaitSeq(fkU2, 2);
 await fkU2.watchdog().patrol({ now: FK_T2 });
-const fkU2Second = await fkDoc(fkU2);
+const fkU2Second = await fkWaitSeq(fkU2, 3);
 check("批 K · U2 周期心跳（红相①＝每一拍新建一个目录 ⇒ 目录数 > 1；红相②＝巡逻不写第二拍 ⇒ seq 不增、lastBeatAt 不变）: 注入时钟跑**两轮巡逻** ⇒ `seq` 每轮**递增 1**、`lastBeatAt` 更新到注入的那一拍、且**仍是同一个 bootId 目录**（不新开目录）",
 	fkU2First.seq === 2 && fkU2Second.seq === 3
 		&& fkU2First.lastBeatAt === new Date(FK_T1).toISOString() && fkU2Second.lastBeatAt === new Date(FK_T2).toISOString()
@@ -13592,6 +13639,7 @@ const fkImportLines = fkLibSource.split(/\r?\n/u).filter((line) => line.startsWi
 const fkImportSpecs = fkImportLines.map((line) => (/from\s+"([^"]+)"/u.exec(line) ?? [])[1]);
 const fkU9 = fkEnv({ name: "u9", useSettings: false, watchdogs: [] });
 await fkU9.tool("team_link_roster").execute({ action: "upsert-team", team: "fk-team" }, execFor(fkU9.senderAgent));
+await fkWaitBeat(fkU9);                           // 首拍是异步原子写 ⇒ 读它之前先等 I/O 落定（见 fkWaitBeat）
 const fkU9PolicyDoc = JSON.parse(await readFile(path.join(fkU9.policyHome, "team-link", "policy.json"), "utf8"));
 check("批 K · U9 零新依赖 + 零 schema（红相＝新增一条 import 行、或往 policy.json 的 schema/键集里加一格 ⇒ 本条红）: `lib/index.js` 顶层 `^import` 仍**恰 8 条**、八条说明符逐字是白名单那一份（本批用到的 `statfs` / `rm` 只加在既有 `node:fs/promises` 那一行的**解构列表**里 ⇒ 条数与说明符都没变）；且 `policy.json` 仍是**十键**（心跳写在**它自己的目录**里，一个字节都没进策略档）",
 	fkImportLines.length === 8
@@ -13606,7 +13654,7 @@ __testing.setDiskSpaceReader(async () => { throw new Error("statfs 桩：拒绝�
 try {
 	const fkU10 = fkEnv({ name: "u10" });
 	await fkWaitBeat(fkU10);
-	fkU10Doc = await fkDoc(fkU10);
+	fkU10Doc = await fkWaitSeq(fkU10, 1);
 	fkU10Out = await fkForensicsCall(fkU10);
 } finally {
 	__testing.setDiskSpaceReader(null);      // ★ 必须还原：否则后面的判据会在一个坏掉的读盘器上跑出假绿
@@ -13627,12 +13675,12 @@ check("批 K · U11 免责句（红相＝删掉那句 / 只说「可能崩溃」
 const fkU12 = fkEnv({ name: "u12", watchdogs: [] });
 const fkU12Ctl = fkU12.ctl();
 await fkWaitBeat(fkU12);
-const fkU12ArmedAtActivation = fkU12Ctl.inspect().fallbackArmed;
-const fkU12Seq0 = (await fkDoc(fkU12)).seq;
+const fkU12ArmedAtActivation = await fkWaitArmed(fkU12, true);
+const fkU12Seq0 = (await fkWaitSeq(fkU12, 1)).seq;
 const fkU12FirstTick = await fkU12Ctl.fallbackTick(FK_T1);
-const fkU12AfterFirst = await fkDoc(fkU12);
+const fkU12AfterFirst = await fkWaitSeq(fkU12, 2);
 const fkU12SecondTick = await fkU12Ctl.fallbackTick(FK_T2);
-const fkU12AfterSecond = await fkDoc(fkU12);
+const fkU12AfterSecond = await fkWaitSeq(fkU12, 3);
 check("批 K · U12① 零注册 ⇒ 兜底定时器在场且心跳仍**周期更新**（红相＝去掉 FR-K5 ⇒ 零注册时心跳静默停在首拍 —— 本条红）: `policy.watchdogs === []` ⇒ 兜底定时器**存在**（`fallbackArmed`），并由**它自己那条缝**驱动两拍 ⇒ `seq` 递增两次、`lastBeatAt` 跟着两拍走",
 	fkU12ArmedAtActivation === true && fkU12Seq0 === 1
 		&& fkU12FirstTick === true && fkU12AfterFirst.seq === 2 && fkU12AfterFirst.lastBeatAt === new Date(FK_T1).toISOString()
@@ -13643,10 +13691,10 @@ fkU12.ns.data.watchdogs = [{
 	silentMinutes: 10, intervalMinutes: 5, expiresAt: FK_T3 + 3600000, createdAt: FK_T3 - 1000, origin: "manual",
 }];
 await fkU12.watchdog().patrol({ now: FK_T3 });
-const fkU12AfterPatrol = await fkDoc(fkU12);
-const fkU12Disarmed = fkU12Ctl.inspect().fallbackArmed === false;
+const fkU12AfterPatrol = await fkWaitSeq(fkU12, 4);
+const fkU12Disarmed = (await fkWaitArmed(fkU12, false)) === false;
 const fkU12LateTick = await fkU12Ctl.fallbackTick(FK_T4);
-const fkU12Final = await fkDoc(fkU12);
+const fkU12Final = await fkWaitSeq(fkU12, 4);
 check("批 K · U12② 出现注册 ⇒ 兜底**停掉**、不双写（红相＝出现注册后不停兜底 ⇒ 同一窗口里 `seq` 增二 ⇒ 本条红）: 种进一条注册并让巡逻跑起来 ⇒ 兜底定时器**已退场**；巡逻那一拍把 `seq` 只推进 **1**；退场后再 tick 兜底 ⇒ 它返回 `false` 且**一个字节都不写**（`lastBeatAt` / `seq` 都停在巡逻那一拍）",
 	fkU12Disarmed && fkU12LateTick === false
 		&& fkU12AfterPatrol.seq === fkU12AfterSecond.seq + 1 && fkU12AfterPatrol.lastBeatAt === new Date(FK_T3).toISOString()
@@ -13659,6 +13707,7 @@ const fkU13Before = await fkTree(fkU13.policyHome);
 await fkU13.watchdog().patrol({ now: FK_T1 });
 await fkU13.ctl().pruneForensics();
 await fkU13.ctl().writeHeartbeat(FK_T2);
+await fkWaitSeq(fkU13, 3);                        // 巡逻那一拍 + 上面这一拍 ⇒ 3（读盘前先追平，见 fkWaitSeq）
 const fkU13After = await fkTree(fkU13.policyHome);
 const fkU13Changed = fkTreeDiff(fkU13Before, fkU13After);
 check("批 K · U13 写面只在自家根下（红相①＝把写目标 / 删除面挪到别处（宿主的目录、工作区、policy.json 旁边）⇒ 变更路径里出现非 forensics 的路径 ⇒ 本条红；红相②＝代码里出现宿主那个目录名 ⇒ 本条红）: 一次「首拍 + 巡逻 + 清理 + 再写一拍」之后，**新增或改动的路径全部**落在 `<DSH_HOME>/team-link/forensics/` 之下（且**确实**动过 —— 非空集，否则本条是空真）；`lib/index.js` 对宿主的那个目录名**零命中**；清理面同样只在自家根下（没有越过根去删任何东西）",
@@ -13666,6 +13715,82 @@ check("批 K · U13 写面只在自家根下（红相①＝把写目标 / 删除
 		&& fkU13Changed.includes(path.join(fkU13.fkRoot, fkU13.ctl().bootId, FK_HEARTBEAT))
 		&& !fkLibSource.includes(fkBannedDir)
 		&& !fkU13Changed.some((full) => full.includes("policy.json")) && fkU13.ctl().root === fkU13.fkRoot);
+
+// --- U14: 兜底双向②（中途归零必须重挂；★ 交付评审 🟡#1 的第二半）-------------
+// 两个夹具 × 三条子断言（同一条判据里跑完）：
+//   A「删掉」路径 —— 最后一条注册由 `removeWatchdog` 收掉（clear 工具 / 名册门）；
+//   B「过期」路径 —— 最后一条注册**由巡逻自己**收掉（TTL 自清扫）⇒ 同一轮里 `patrolBeat`
+//     刚把兜底收掉、而本轮又刚把最后一条注册删了 —— 这正是「静默冻结」最容易漏掉的那个入口
+//     （只在 `removeWatchdog` / `cancel` / `rearm` 里重挂而不在巡逻末尾复核 ⇒ B 红：巡逻结束时
+//      兜底不在场、`timers` 归零 ⇒ 心跳从此停在这一拍）。
+const FK_U14_WD = "wd-fk-u14";
+const fkU14Row = (id, expiresAt) => ({
+	id, team: null, watcherSession: "session-self", targets: [],
+	silentMinutes: 10, intervalMinutes: 5, expiresAt, createdAt: FK_T1 - 1000, origin: "manual",
+});
+const fkU14 = fkEnv({ name: "u14", watchdogs: [fkU14Row(FK_U14_WD, FK_T4 + 3600000)] });
+const fkU14Ctl = fkU14.ctl();
+await fkWaitBeat(fkU14);
+const fkU14ArmedAtActivation = await fkWaitArmed(fkU14, false);
+await fkU14.watchdog().patrol({ now: FK_T1 });
+const fkU14ArmedWhilePatrolling = await fkWaitArmed(fkU14, false);     // 前提：巡逻在跑 ⇒ 兜底已退场
+const fkU14SeqBefore = (await fkWaitSeq(fkU14, 2)).seq;                // 首拍 1 + 本轮巡逻那一拍 ⇒ 2
+await fkU14.watchdog().removeWatchdog(FK_U14_WD);                     // ← 最后一条注册消失
+const fkU14ArmedAfterZero = await fkWaitArmed(fkU14, true);
+const fkU14Tick = await fkU14Ctl.fallbackTick(FK_T2);
+const fkU14AfterTick = await fkWaitSeq(fkU14, 3);
+// ③ 幂等：再触发一次「归零」路径（`rearm` 空跑）＋ 再显式挂一次 —— 都**不许**挂出第二个定时器。
+const fkU14RearmReading = fkU14.watchdog().rearm();
+const fkU14ArmAgain = fkU14Ctl.armForensicsFallback();
+const fkU14ArmedStill = await fkWaitArmed(fkU14, true);
+const fkU14Tick2 = await fkU14Ctl.fallbackTick(FK_T3);
+const fkU14AfterTick2 = await fkWaitSeq(fkU14, 4);
+// B：过期路径 —— 到期点落在注入时钟**之前** ⇒ 巡逻自己把最后一条注册收掉。
+const fkU14b = fkEnv({ name: "u14b", watchdogs: [fkU14Row("wd-fk-u14b", FK_T1 - 60000)] });
+await fkWaitBeat(fkU14b);
+const fkU14bRowsAtActivation = Array.isArray(fkU14b.ns.data.watchdogs) ? fkU14b.ns.data.watchdogs.length : null;
+await fkU14b.watchdog().patrol({ now: FK_T1 });
+const fkU14bRowsAfterPatrol = Array.isArray(fkU14b.ns.data.watchdogs) ? fkU14b.ns.data.watchdogs.length : null;
+const fkU14bTimersAfterPatrol = fkU14b.watchdog().timers.size;
+const fkU14bArmedAfterPatrol = await fkWaitArmed(fkU14b, true);
+const fkU14bSeqAfterPatrol = (await fkWaitSeq(fkU14b, 2)).seq;
+const fkU14bTick = await fkU14b.ctl().fallbackTick(FK_T2);
+const fkU14bSeqAfterTick = (await fkWaitSeq(fkU14b, 3)).seq;
+console.log("[FK-U14-DIAG2] " + JSON.stringify({
+	aArmedAtAct: fkU14ArmedAtActivation, aArmedPatrol: fkU14ArmedWhilePatrolling,
+	aSeqBefore: fkU14SeqBefore, aArmedAfterZero: fkU14ArmedAfterZero, aTick: fkU14Tick,
+	aAfterTickSeq: fkU14AfterTick.seq, aAfterTickAt: fkU14AfterTick.lastBeatAt, aT2: new Date(FK_T2).toISOString(),
+	aMem: fkU14Ctl.inspect().seq, aArmedNow: fkU14Ctl.inspect().fallbackArmed,
+	aRearm: fkU14RearmReading, aArmAgain: fkU14ArmAgain, aArmedStill: fkU14ArmedStill,
+	aTick2: fkU14Tick2, aAfterTick2Seq: fkU14AfterTick2.seq, aMemNow: fkU14Ctl.inspect().seq,
+	bRowsAct: fkU14bRowsAtActivation, bRowsPatrol: fkU14bRowsAfterPatrol, bTimers: fkU14bTimersAfterPatrol,
+	bArmed: fkU14bArmedAfterPatrol, bSeqP: fkU14bSeqAfterPatrol, bTick: fkU14bTick, bSeqT: fkU14bSeqAfterTick,
+	bMem: fkU14b.ctl().inspect().seq, bArmedNow: fkU14b.ctl().inspect().fallbackArmed,
+}));
+check("批 K · U14 兜底双向②「中途归零必须重挂」（红相①＝只在 activation 挂兜底、中途归零不管 ⇒ A 的兜底不在场、心跳静默冻结在删注册之前那一拍；红相②＝重挂点漏了**巡逻末尾**那一处 ⇒ B 在巡逻结束时兜底不在场、`timers` 归零、心跳从此停住；红相③＝重挂不幂等（挂了第二个定时器）⇒ `armForensicsFallback()` 第二次仍返回 `true`）: 预置**一条**注册 ⇒ 巡逻在跑、兜底已退场（A/B 两档的前提）⇒ ① 把最后一条注册**删掉**（A：`removeWatchdog`）/**让它过期**（B：巡逻自清扫）之后，兜底**重新挂上**（`inspect().fallbackArmed === true`、B 档另证 `timers.size === 0` 且名册已空）② 心跳**仍周期更新**（两档：首拍 1 ＋ 巡逻那一拍 ⇒ 盘上追平 **seq=2**；再各 tick 一拍 ⇒ 追平 **seq=3**、`lastBeatAt` 走到注入的那一拍 —— 不冻结。★ 这两格与下面一切「状态变化 ⇒ 读盘」的读数一律先经 **I/O 驱动的等待面** `fkWaitSeq` / `fkWaitArmed`（同 `fkWaitBeat` / `fkWaitBootDirs` 规：有界 tick、零墙钟）再断言 —— 见那两个助手的注释；等待面**不放宽判据**：追不上就把最后一次读数原样交回，本条照旧红）③ **幂等**：再触发一次归零路径（`rearm()`）与再显式挂一次，`armForensicsFallback()` 都返回 `false`（**没有第二个定时器**）而兜底仍在场，再 tick 一拍 `seq` 仍只 **+1**",
+	fkU14ArmedAtActivation === false && fkU14ArmedWhilePatrolling === false
+		&& fkU14ArmedAfterZero === true && fkU14Tick === true
+		&& fkU14SeqBefore === 2 && fkU14AfterTick.seq === 3 && fkU14AfterTick.lastBeatAt === new Date(FK_T2).toISOString()
+		&& fkU14RearmReading.armed === 0 && fkU14RearmReading.sweepTimer === false
+		&& fkU14ArmAgain === false && fkU14ArmedStill === true
+		&& fkU14Tick2 === true && fkU14AfterTick2.seq === 4
+		&& fkU14bRowsAtActivation === 1 && fkU14bRowsAfterPatrol === 0 && fkU14bTimersAfterPatrol === 0
+		&& fkU14bArmedAfterPatrol === true && fkU14bTick === true
+		&& fkU14bSeqAfterPatrol === 2 && fkU14bSeqAfterTick === 3);
+
+// --- U15: 空串 action 的口径（★ 交付评审 🔵#2：代码与参数描述必须逐字一致）-------
+// 口径取「**空串视为省略**」（交付评审的推荐支）：`""` 在很多壳里就等于「没填」，按误用拒绝会打击
+// 一个没有任何歧义的输入；而**闭集外**的真值（`"nope"`）照旧不静默生效。这条判据同时咬住两侧：
+// 参数描述里必须有那句口径（从**注册过的工具**上读，不抄一份进测试），而代码必须真的走那一支。
+const fkU15Desc = String(fkU6.tool("team_link_status")?.parameters?.properties?.action?.description ?? "");
+const fkU15Empty = await fkForensicsCall(fkU6, { action: "" });
+const fkU15EmptyHeaders = fkU7Headers.map((header) => fkU15Empty.indexOf(header));
+check("批 K · U15 空串 action 的口径＝「空串视为省略」且与参数描述**逐字一致**（红相①＝把参数描述里那句口径删掉 / 换了措辞 ⇒ 本条红；红相②＝代码把 `\"\"` 拿去走拒绝支（描述与实现打架）⇒ 本条红；红相③＝闭集外的 `\"nope\"` 静默退回默认卡 ⇒ 本条红）: 工具 `team_link_status` 的 `action` **参数描述**逐字含「空串视为省略」；`\"\"` ⇒ 与省略**同形**（首行仍是落点行、八个段头按序在场、**零**崩溃现场痕迹、**没有**任何拒绝行）；闭集外的 `\"nope\"` ⇒ 仍如实拒绝（与 U7①b 同一支）",
+	fkU15Desc.includes("空串视为省略")
+		&& fkU15Empty.split("\n")[0] === "存储：设置服务（team-link 命名空间）"
+		&& !fkU15Empty.includes("状态卡读取失败") && !fkU15Empty.includes("崩溃现场")
+		&& fkU15EmptyHeaders.every((index, position) => index >= 0 && (position === 0 || index > fkU15EmptyHeaders[position - 1]))
+		&& fkU7BadAction.includes("状态卡读取失败") && !fkU7BadAction.includes("--- 团队与角色（"));
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
