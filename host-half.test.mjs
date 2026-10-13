@@ -61,6 +61,27 @@ const TEST_ROOT = mkdtempSync(path.join(tmpdir(), "dsh-team-link-test-"));
 // 临时根（本轮调试期实测留了 8 份）。挂一个 exit 钩子：正常退出与 uncaught 崩溃都会走到它。
 process.on("exit", () => { try { rmSync(TEST_ROOT, { recursive: true, force: true }); } catch { /* 收尾不许再抛 */ } });
 
+/**
+ * ★ 修复轮 #3：临时根的收尾删除**带一次有界重试**（语义逐字不变：仍然只删本进程的 `TEST_ROOT`）。
+ *
+ * 治的是什么（本轮实测）：8 并发跑套件时抓到 1/8 次 `Error: ENOTEMPTY, Directory not empty:
+ * <TEST_ROOT>` —— 抛在套件**末尾**那一次 `rmSync` 上，于是那一次跑**连 `assertion total` 都没
+ * 打出来**（退出码 1、零行断言汇总），而套件自己的纪律（`assertion total` 必须自报）正是靠那一行。
+ * 成因与 U14 的那个偶发红同族：`writePolicyFileAtomic` 的临时名是固定的 `${file}.tmp`，两次并发写
+ * 交错时会有一次 `rename` 落空（或先把 `.tmp` 换走），而**心跳的写是常驻后台**的
+ * （兜底定时器 / 巡逻定时器在套件跑着的时候仍可能补一拍）⇒ 删 `TEST_ROOT` 的那一瞬间目录里可能
+ * 正躺着 `.tmp`。
+ *
+ * 为什么重试是安全的：`force: true` 让「不存在」不算失败（幂等），重试只覆盖 Windows 的
+ * ENOTEMPTY / EPERM 这一类**瞬时**状态；仍然失败就**放它抛**（与改前同一方向，不静默吞掉真问题）。
+ */
+function rmTestRoot() {
+	for (let attempt = 0; ; attempt += 1) {
+		try { rmSync(TEST_ROOT, { recursive: true, force: true }); return; }
+		catch (error) { if (attempt >= 8) throw error; }
+	}
+}
+
 /** Per-fixture policy-home counter (see setup): every fixture gets its own DSH_HOME so
  * the file backend can never leak one fixture's roster into the next. */
 let policyHomeSeq = 0;
@@ -13405,11 +13426,22 @@ function fkEnv({
 const fkBootDirs = (env) => (existsSync(env.fkRoot) ? readdirSync(env.fkRoot).sort() : []);
 /** 读某一拍（不传 bootId ⇒ 本次那一拍）。 */
 const fkDoc = async (env, bootId = undefined) => JSON.parse(await readFile(path.join(env.fkRoot, bootId ?? env.ctl().bootId, FK_HEARTBEAT), "utf8"));
-/** 等首拍落地（异步原子写的等待面；**不拿墙钟当判据**，只等 I/O）。 */
+/**
+ * 等首拍落地（异步原子写的等待面；**不拿墙钟当判据**，只等 I/O）。
+ *
+ * ★ 修复轮 #3：委托给 {@link fkWaitSeq} —— 「文件在场」比「首拍那次异步原子写已经**落定**」
+ * 宽：本次 activation 的首拍是 fire-and-forget（`apply` 收尾的 `void forensics.start()`），
+ * 而它会在两次 `await`（`diskReading()` / `writePolicyFileAtomic`）上让出控制权 ⇒ 本函数若
+ * 只看 `existsSync` 就返回，紧接着的那个写（`patrol()` 的巡逻拍 / `fallbackTick`）
+ * 会**与首拍那次写并发**，两者用**同一个** `${heartbeatFile}.tmp` 交错 ⇒ 其中一次的字节被
+ * 覆盖（实测：盘上剩 `{"seq":2,"who":"patrol"}on"}` 这类半截 JSON ⇒ 读不出来 ⇒ 拍号永远
+ * 追不上期望值）。详见 {@link fkWaitSeq} 的注释与「定位读数」。
+ *
+ * 语义**逐字保留**：仍在「文件在场且那一次首拍已落定」时返回 `true`；到不了 ⇒ `false`
+ * （U1 照旧按它红：没有首拍 ⇒ 等不到 ⇒ `false`）。返回 `true` 时**不**顺带断言什么。
+ */
 async function fkWaitBeat(env) {
-	const file = env.ctl().heartbeatFile;
-	for (let i = 0; i < 500 && !existsSync(file); i += 1) await tick();
-	return existsSync(file);
+	return (await fkWaitSeq(env, 1)) !== null;
 }
 /** 等 activation 的**整条启动序列**落定（`start()` 三步：读上一次 → 首拍 → 保留清理）。
  *  `fkWaitBeat` 只保证**首拍**在场，而清理是它**后面**那一步 ⇒ 起飞前读目录数会读到「一份都没清」
@@ -13420,34 +13452,63 @@ async function fkWaitBootDirs(env, expected) {
 	for (let i = 0; i < 500 && fkBootDirs(env).length !== expected; i += 1) await tick();
 	return fkBootDirs(env).length === expected;
 }
+/** 两份心跳读数**逐字段同拍**？（稳定性判据只认这三格：拍号 + 那一拍的时刻 + 启动身份。）*/
+const fkSameBeat = (left, right) => left !== null && right !== null
+	&& left.seq === right.seq && left.lastBeatAt === right.lastBeatAt && left.bootId === right.bootId;
+
 /**
- * ★ 修复轮 #2（`U14` 偶发红）：**等盘上的拍号追上期望值**，再让判据去断言它。
+ * ★ 修复轮 #3（`U14` 偶发红的**确定性**等待面）：**等盘上的拍号追上期望值、并且读到的那一拍
+ * 已经稳定下来**，再让判据去断言它。
  *
- * 治的是什么（父侧复跑 21 次红 3 次 · 本机并发复跑 6 并发抓到 5/36，读数见下）：一次
- * `await patrol(...)` / `await fallbackTick(...)` **返回之后**，用新句柄读同一个
- * `heartbeat.json`，仍可能读到**上一拍**的内容 —— 实测三格同拍读数（`host-half` 的临时探针）：
- * `{mem: 2, entries: "heartbeat.json", disk: 1}` —— 内存拍号已推进（⇒ 原子写的 `rename` 已
- * resolve、`seq += 1` 已跑）、目录里**没有 `.tmp`**（⇒ 临时文件已被换走），而读到的还是旧那一份；
- * 失败 warn 数为 **0**（⇒ 不是「写失败被吞」）。⇒ 这是**读者侧的可见性滞后**，不是心跳状态机
- * 的问题：「写已落定」与「下一个读者的 `readFile` 已能看见它」之间还有一个窗口，**负载下才显形**
- * （空闲时 13/13 绿；6 并发复跑 36 行里红 5）。
+ * ——— 治的是什么（本轮实测定位，不是推断）———————————————
+ * 本次 activation 的首拍是 **fire-and-forget**（`apply` 收尾的 `void forensics.start()`），而
+ * `start()` 在 `readPreviousForensics()` / `writeHeartbeat()`（内含 `diskReading()` 与
+ * `writePolicyFileAtomic`）上各让出一次控制权。夹具只要在 `fkWaitBeat` **之后**立刻触发一次写
+ * （`patrol()` 的巡逻拍 / `fallbackTick`），**两次 `writeHeartbeat` 就并发在飞**，而它们用
+ * **同一个** `${heartbeatFile}.tmp` 作临时名（`lib/index.js:1815` 的固定名）⇒ 后开的那个句柄
+ * 与先开的句柄指向同一份内容，两次 `writeFile` 互相覆盖，最后一次 `rename` 把**混合字节**推上
+ * 目标文件。本轮实测到的两种后果（`node host-half.test.mjs`，6 并发跑 1 轮 ⇒ **1/6 红**，
+ * 红的正是 `U14`；前一轮同样 6 并发另 1 次红在 `U2`+`U3`）：
+ *   · ① `U14` A 档：盘上停在**上一拍**（`seq=1`）—— 那一拍**丢了** ⇒ `fkWaitSeq(fkU14, 2)` 追不到
+ *     期望值、把旧那一份交回 ⇒ `fkU14SeqBefore === 1`，红（证据：`[FK-U14-DIAG2]` 的那一行）；
+ *   · ② `U2`/`U3`：`fkU2First|Second` 拿到的是 `null`（读不出可解析的那一份）⇒ `U2` 红；`U3` 同一
+ *     夹具红在「目录里**恰有**一个条目 / 写前写后都解析得动」（`readdir` 那一刻目录里不止一个
+ *     条目，或那一份不是合法 JSON）—— 两者同源。
+ * 确定性复现（逐字展开 `writePolicyFileAtomic` 的语句、只控制「谁先 open」）：
+ * 交错 ⇒ 目标文件里剩下一段**接错位**的字节（第一次 `JSON.parse` 直接抛 `SyntaxError`；
+ * 逐字形态见本轮报告，此处不把那段坏串写进源码）；同样的两次写改成**串行** ⇒ 干净的最后一份。
  *
- * 所以本函数等的是**盘上的读数追平期望拍号**，而不是「等几个 tick 大概写完了」——
- * 与 `fkWaitBeat` / `fkWaitBootDirs` **同规**：I/O 驱动、有界 tick、**零墙钟**。
- * 判据**一个字都不放宽**：本函数只把「读到的那一份还没追上来」等掉，等不到就把**最后一次读数**
- * 原样交回（`seq` 没到期望值、或根本没有心跳文件 ⇒ 下面照旧红）。
+ * ——— 所以本函数等的是**「已落定」**，而不是「等几个 tick 大概写完了」—————————
+ * 三步，全部 I/O 驱动、有界 tick、**零墙钟**：
+ *   ① 读到的 `seq >= expected`（写已发布 —— 与修复轮 #2 同一条判据）；
+ *   ② 那之后**连续 `FK_STABLE_READS` 次读到的还是同一拍**（`seq` + `lastBeatAt` + `bootId`
+ *      逐字段相同）—— `seq` 的推进发生在原子写**之后**（`lib/index.js:3030`），所以「一直是
+ *      同一拍」等价于「没有谁还在写」⇒ 紧接着由**判据自己**发起的那个写不会再与谁交错。
+ *   ③ 到不了就把**最后一次读数**原样交回（`seq` 没到期望值、或根本没有心跳文件 ⇒ 下面照旧红）。
  *
- * 为什么判据是 `seq >= expected`（而不是 `===`）：读者只可能**落后**于最后一次写，不可能超前
- * —— 所以「追平」就是「已落定」的充分读数。反过来，`>=` 也让**多写**照样可抓：若实现多写了一拍
- * （U12② 的红相），读到的 `seq` 会比期望值**大** ⇒ 追平判定立刻返回，而下面的等值断言当场红。
+ * 判据**一个字都不放宽**：本函数只把「还没落定」等掉，一个期望值都不改。`>=`（而不是 `===`）
+ * 同样两向：读者只可能**落后**于最后一次写、不可能超前；而**多写**照样可抓 —— 实现多写一拍
+ * （U12② 的红相）时读到的 `seq` 比期望值**大** ⇒ 立刻通过等待面，下面的**等值**断言当场红。
  *
- * @returns 盘上最后读到的那一份心跳文档（到不了期望值 ⇒ 返回最后读到的那一份；读不到 ⇒ `null`）。
+ * @returns 稳定下来（且 `seq >= expected`）的那一份心跳文档；到不了期望值 ⇒ 最后读到的那一份；
+ *          读不到 ⇒ `null`。
+ *
+ * ★ 上限取 **200**（红相轮实测校准）：本函数在**红相**夹具里必然跑满上限（心跳被砍掉之后拍号
+ * 永远追不上），而每一拍都要真读一次盘 ⇒ 上限越大，**红相那一跑的墙钟**越长。修复轮 #3 先试
+ * 3000 ⇒ 「砍掉中途重挂」的红相整跑从 ~13s 涨到 >120s（判据本身的语义没变，纯粹是等待面的代价）；
+ * 200 在「等得到」的那一侧已远超任何一次原子写（实测常态是**第 1 拍**就追平 —— 稳定的那几拍也
+ * 只是再读 4 次），而在「等不到」的那一侧把红相那一跑拉回可跑的时长。
  */
-async function fkWaitSeq(env, expected, tries = 500) {
+const FK_STABLE_READS = 4;
+async function fkWaitSeq(env, expected, tries = 200) {
 	let doc = null;
+	let stable = 0;
 	for (let i = 0; i < tries; i += 1) {
+		const previous = doc;
 		try { doc = await fkDoc(env); } catch { doc = null; }
-		if (doc !== null && typeof doc.seq === "number" && doc.seq >= expected) return doc;
+		stable = fkSameBeat(doc, previous) ? stable + 1 : 0;
+		const caughtUp = doc !== null && typeof doc.seq === "number" && doc.seq >= expected;
+		if (caughtUp && stable >= FK_STABLE_READS) return doc;
 		await tick();
 	}
 	return doc;
@@ -13794,7 +13855,9 @@ check("批 K · U15 空串 action 的口径＝「空串视为省略」且与参�
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
-rmSync(TEST_ROOT, { recursive: true, force: true });
+// ★ 修复轮 #3：改用带**有界重试**的 `rmTestRoot()`（见它的 JSDoc）—— 8 并发下实测过 1/8 次
+//   `ENOTEMPTY` 抛在这一行、把 `assertion total` 那一行整个吞掉。
+rmTestRoot();
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
 // §9.6 ⑧: the run states its own assertion total, so the README figure (and any
