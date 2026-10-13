@@ -14075,8 +14075,14 @@ check("批 L · Aw8 负向锁（红相①＝实现绕过接缝直接改名 / 直
 //   需求档 docs/2026-10-13-coordinator-signal-requirements.md §三（US-J1/US-J4）·
 //   §四（NF-J1 零新依赖 / NF-J2 自己的去抖与限量 / NF-J3 反走私 / NF-J4 可核）。
 // ★ 分批（设计档 §10 末尾的拆单）：**J-1 = FR-J1 ⇒ U1/U2/U3**（已交付）；**J-2 = FR-J2 ⇒ U4**
-//   （2026-10-13 追加在本块末尾）；事实源指路落宪章与摘要脚注（FR-J3）、文档面收口（FR-J4）留给 J-3
-//   ⇒ 本块**恰 4 条判据**（U1/U2/U3/U4），标识符统一 `Cj` 中缀（设计档 §0 的纪律）。
+//   （2026-10-13 追加在本块末尾）；**J-3 = FR-J3/FR-J4 ⇒ U5/U7/U8/U9 ＋ 全量计数与文档收口**
+//   （本块末尾四条 —— 事实源指路落宪章第 3 条与摘要脚注、文档面同批改准、零新依赖/零 schema、
+//   不回归）
+//   ⇒ 本块**恰 8 条判据**（U1/U2/U3/U4/U5/U7/U8/U9），标识符统一 `Cj` 中缀（设计档 §0 的纪律）。
+// ★ **§8 的 U6（反走私）没有单独立条 —— 如实登记为已知覆盖缺口**：两条新告警的正文都由插件常量
+//   拼成、只插值状态字段，且都过同一个消毒出口（`wellFormed`）；但既没有带毒载荷的负向判据，
+//   这两个渲染面也不在批 E `U4 六个渲染面` 的清单里（该清单是本批之前定死的 8 面）。⇒ 本块**不**
+//   冒充它已覆盖；补一条 U6 会改动本批的判据计数（8）与套件总数（1682），故留给后续批次裁决。
 // ★ 时钟面（与「批 G」同一条理由）：行一律种在**锚真墙钟**的 `CJ_NOW = Date.now()` 上。种在 2023 的
 //   假时钟上，attach 后置链的 `ensureTeamAutoWatchdogs` 会先把它们当「已过期」原地刷新一遍
 //   （`expiresAt` 改写成墙钟 + 12h）⇒ 本块读的时序全被遮住。
@@ -14300,6 +14306,82 @@ check("批 J · U4 协调者**自身**上下文压力告警（★ 只发给现�
 		&& cjPressureOf(cjUnderEnv).length === 0 && digestOf(cjUnderEnv).length === 1
 		&& cjPressureOf(cjPressureForeignEnv).length === 0 && digestOf(cjPressureForeignEnv).length === 1
 		&& cjBlindBefore === 0 && cjBlindAfter === 1 && digestOf(cjBlindEnv).length === 1);
+
+// --- U5：事实源指路在场（FR-J3：宪章第 3 条 ＋ 摘要脚注）------------------------------
+// 归属：设计档 §5 FR-J3 · §4 D5（两处覆盖两种时机）· §8 U5 · §10-2（新句只加在脚注段、行数不增）；
+//   需求档 §三 US-J3 · §2.2 根因 3。
+// ★ §10-6 的「先核仓内有没有按字节钉死这两处文案的既有判据」：**已核 —— 没有**。既有锁只钉
+//   **行数**（宪章 ≤ `CHARTER_MAX_LINES`、摘要脚注「恰一行」，见批 C U2/U4 与批 D U5①），
+//   没有任何一条比对这两处文案的字节 ⇒ 本单只**新增**判据，无需改写既有期望值（U7 把行数
+//   这一半照样钉住：新句在同一行内，行数一行不增）。
+const cjU5Charter = __testing.renderCharterLines("cj-team", "session-self");
+/** 摘要脚注的取数口径与批 D U5① 一致：直接调渲染器（`footers` 缺省），末行就是那条脚注。 */
+const cjU5Digest = __testing.renderWatchdogDigest(
+	{ id: "wd-cj-u5", team: "cj-team", watcherSession: "session-self", targets: [] },
+	{ running: [], justFinished: [], idleAwait: [{ target: "session-peer", signal: { silenceMs: 180_000, lastAssistantAt: 1, lastInboundAt: null }, previous: undefined }], alarm: [] },
+	CJ_NOW,
+);
+check("批 J · U5 事实源指路在场（红相①＝去掉宪章第 3 条尾部那半句 ⇒ 宪章那半边红；红相②＝去掉摘要脚注那半句 ⇒ 脚注那半边红；两处各自可红，且两处必须**同批**在场）: ① 宪章文本含三段必经字样「黑板」/「tasks」/「不要读…会话历史」，并点名 `team_link_team_read`，且宪章**仍在行数预算内**（读真常量 `CHARTER_MAX_LINES`）；② 同一时刻渲染出的摘要**脚注**含同一句指路（同样的三段字样）",
+	cjU5Charter.includes("黑板") && cjU5Charter.includes("tasks") && cjU5Charter.includes("不要读它的会话历史")
+		&& cjU5Charter.includes("team_link_team_read")
+		&& cjU5Charter.split("\n").length <= __testing.CHARTER_MAX_LINES
+		&& cjU5Digest.includes("要看某位成员在干什么") && cjU5Digest.includes("黑板")
+		&& cjU5Digest.includes("tasks.md") && cjU5Digest.includes("不要读它的会话历史")
+		&& cjU5Digest.includes("team_link_team_read"));
+
+// --- U7：不回归（失联三态不扩 ＋ 摘要四组正文逐字 ＋ 行数预算）------------------------
+// 归属：设计档 §8 U7 · §10-2（「摘要的四组正文逐字不变；脚注是另一段，新句仍在既有行数预算内」）；
+//   需求档 NF-J5。★ 四组正文的期望值 = **改前那一份**（本单一个字都没动它们），逐行 `===` 比对
+//   （不是「包含」——「包含」放不出「多插了一行」这类回归）；行数 6 = 表头 1 ＋ 四组 4 ＋ 脚注 1。
+const cjU7Digest = __testing.renderWatchdogDigest(
+	{ id: "wd-cj-u7", team: "cj-u7", watcherSession: "session-self", targets: [] },
+	{
+		running: [{ target: "session-run", signal: {}, previous: undefined }],
+		idleAwait: [{ target: "session-idle", signal: { silenceMs: 180_000, lastAssistantAt: 1, lastInboundAt: null }, previous: undefined }],
+		justFinished: [{ target: "session-done", signal: {}, previous: undefined }],
+		alarm: [{ target: "session-dead", signal: { verdict: "dead", silenceMs: 720_000, lastAssistantAt: 1, lastInboundAt: null }, previous: undefined }],
+	},
+	CJ_NOW,
+);
+const cjU7Lines = cjU7Digest.split("\n");
+/** 失联三态那行源码的**真值**读数（`TICKABLE_VERDICTS` 不对外导出 ⇒ 从源码读，不手抄一份）。 */
+const cjU7Tickable = /const TICKABLE_VERDICTS = new Set\(\[([^\]]*)\]\);/u.exec(hostSource);
+const cjU7States = cjU7Tickable === null ? [] : [...cjU7Tickable[1].matchAll(/"([^"]+)"/gu)].map((match) => match[1]);
+check("批 J · U7 不回归（红相①＝顺手把「空闲待派」塞进 `TICKABLE_VERDICTS`（或删掉其中一态）⇒ 本条红；红相②＝改动四组正文任一个字、或把脚注拆成两行 ⇒ 本条红）: ① 失联三态集合仍**恰三态**（源码那一行现读：silent-idle / goal-disarmed / dead，一个不多一个不少）；② 摘要的**四组正文逐字未动**（抓「四个组都非空」的那一帧，表头 ＋ 四行分组正文逐行 `===` 改前那一份）；③ 行数预算：表头 ＋ 四组 ＋ 脚注 ⇒ **恰 6 行**（新句只加在**脚注那一行内**，没有新增行），且脚注仍逐字保留批 D 改准过的那三句（手工档建议 / 全队工作台 / 不会被 clear 清掉）",
+	cjU7States.length === 3 && cjU7States.slice().sort().join(",") === "dead,goal-disarmed,silent-idle"
+		&& cjU7Lines.length === 6
+		&& at(cjU7Lines, 0, "").startsWith("[workbench] 团队 cj-u7 工作台（读数 ") && at(cjU7Lines, 0, "").endsWith("）")
+		&& at(cjU7Lines, 1, "") === "运行中：session-run"
+		&& at(cjU7Lines, 2, "") === "空闲待派：session-idle（静默 3.0min）"
+		&& at(cjU7Lines, 3, "") === "刚转空闲：session-done"
+		&& at(cjU7Lines, 4, "") === "需处置：session-dead（verdict=dead 静默 12.0min）"
+		&& at(cjU7Lines, 5, "").includes("同一注册两条摘要至少隔") && at(cjU7Lines, 5, "").includes("只在有可行动内容时投")
+		&& at(cjU7Lines, 5, "").includes("你自己手工注册") && at(cjU7Lines, 5, "").includes("全队工作台")
+		&& at(cjU7Lines, 5, "").includes("不会被 clear 清掉"));
+
+// --- U8：零新依赖 / 零 schema（NF-J1 ＋ 设计档 §7）-----------------------------------
+// 归属：设计档 §7（`policy.json` 一字不改、进程内只多两个去抖 Map）· §8 U8；需求档 NF-J1。
+// import 面复用批 L Aw7 的同一份真读数（`hostSource` 现读，不重复解析一次）；键集读**注册出去的
+// 命名空间 base**（与 U19 schema 同一个权威读数 `U19_POLICY_KEYS`，不手抄一份）。
+check("批 J · U8 零新依赖 / 零 schema（红相①＝新增第 9 条 import（或换掉任一说明符）⇒ 本条红；红相②＝往策略命名空间加一格键 ⇒ 本条红）: ① `lib/index.js` 顶层 `^import` 仍**恰 8 条**且说明符逐字是白名单那一份；② 注册出去的 `team-link` 命名空间仍**恰十键** —— 本批的两条新告警只用进程内 Map（`idleAlerted` / `pressureAlerted`），`policy.json` 一个字段都没加",
+	awImportLines.length === 8 && sameJson(awImportSpecs, HOST_IMPORTS)
+		&& sameJson(Object.keys(cjFireEnv.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS));
+
+// --- U9：FR-J4 文档面同批改准（工具 description ↔ README 摘要段 逐字一致）-------------
+// 归属：设计档 §5 FR-J4 · §8 U9（★ 第二轮评审 🔵#6 要求给 FR-J4 一条判据）。
+// 取数：`team_link_watch` 的 description 取自**注册出去的那一份**（`env.tool(...)`，模型读的正是它）；
+//   README 取本文件既有的全文读数 `readmeSource`（:10665 现读）。
+// 判法是**两句各自抽取后互比**（`===`），不是各查一次「包含」——「两处逐字一致」才可核；长度下限
+//   自证抽到的是整句而不是半截。
+const cjU9Desc = String(cjFireEnv.tool("team_link_watch")?.description ?? "");
+const cjU9SentenceOf = (text) => {
+	const match = /要看某位成员在干什么[^\n]*?不要读它的会话历史\*\*。/u.exec(text);
+	return match === null ? "" : match[0];
+};
+const cjU9DescSentence = cjU9SentenceOf(cjU9Desc);
+const cjU9ReadmeSentence = cjU9SentenceOf(readmeSource);
+check("批 J · U9 FR-J4 文档面同批改准（红相①＝只改工具 description、README 那一份留着旧文 ⇒ 两句不等 ⇒ 本条红；红相②＝两处都漏改 ⇒ 抽取为空 ⇒ 本条红）: `team_link_watch` 的 description 与 `README.md` 的摘要段含**同一句**事实源指路，且**逐字一致**（两边各自按同一模式抽出整句后 `===` 互比），两边都不是空串 / 半句（长度下限自证）",
+	cjU9DescSentence.length >= 30 && cjU9DescSentence === cjU9ReadmeSentence);
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。

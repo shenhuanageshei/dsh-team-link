@@ -3,6 +3,8 @@
 > **规格档**。需求档 [`docs/2026-10-13-coordinator-signal-requirements.md`](2026-10-13-coordinator-signal-requirements.md)。
 > 行号一律 as-of **2026-10-13 工作树（commit `f24f167`）**，实施按**符号名**定位。
 > ★ 本档全文不写出框定 token 的原串（批 E 立的仓规）；新测试标识符统一用 **`Cj` 中缀**。
+>
+> **实施状态（2026-10-13，批 J 三个小单全部落码）**：**已实施入库**，按 §10 末尾的拆单分三小单 —— **J-1 = FR-J1**（⇒ 判据 U1/U2/U3）· **J-2 = FR-J2**（⇒ U4）· **J-3 = FR-J3/FR-J4**（⇒ U5/U7/U8/U9 ＋ 全量计数与文档收口）。**判据共 8 条**（`host-half.test.mjs` 的「批 J」块，标识符 `Cj` 中缀；`grep -c '^check("批 J ·'` = **8**）。**本单实测**：`node host-half.test.mjs` ⇒ `ALL PASS / assertion total: 1682 (failed: 0)`（构成 `1682 = 1646 ＋ 20 ＋ 8 ＋ 8`）· `node client-half.test.mjs` ⇒ `310 (failed: 0)`；**修复前必红**的四次变异读数（含 `failed: 1` / `6` 两档）与逐字节还原自证见 [`CHANGELOG.md`](../CHANGELOG.md) 的「未发布 — 批 J」条目。★ **本档 §6 有两处就地自我更正**（J-2/J-3 落码实测）：压力读数的形状（`reading.percent` ⇒ `readSessionUsage(...).percent`）与档位判断（等值 ⇒ **上升沿**），逐条见 §6 末的「§6 实施勘误」表。
 
 ---
 
@@ -107,21 +109,33 @@ function deliverIdleAlert(entry, watcher, rows, now) {
 /** 压力告警：读 watcher **自身**的投影（★ 只发给现任协调者，评审 🟡#2）；同一档不重复。 */
 function deliverPressureAlert(entry, watcher, now) {
     if (!isIncumbentCoordinator(policy.get(), entry.team, entry.watcherSession)) return;  // ★ 角色门
-    const reading = renderResourceContext(ctx, ctx.agents.get(entry.watcherSession), () => {});  // ★ 真名（:3894）
+    const reading = readSessionUsage(ctx, entry.watcherSession);   // ★ 更正（J-2 实测，见 §6「实施勘误」）：
+                                                                  //   不是 renderResourceContext —— 那个函数返回的是**渲染好的字符串**
+                                                                  //   （wellFormed(renderResourceLine(...))），`.percent` 在**对象**读数
+                                                                  //   readSessionUsage(ctx, sessionId) 上；§10-9 要求的形状确认即此
     if (reading.percent === undefined || reading.percent < LIAISON_PRESSURE_WARN_PERCENT) return;
     const bucket = bucketOf(reading.percent);              // ★ = Math.floor(p / 10)（每 10% 一档，评审 🟡#3）
     const last = pressureAlerted.get(entry.id);
     if (last && now - last.at < WATCHDOG_DIGEST_DEBOUNCE_MS) return;
-    if (last && last.bucket === bucket) return;            // 同一档不重复
+    if (last && bucket <= last.bucket) return;             // ★ 更正（J-3，见 §6「实施勘误」）：与 §10-7 的**上升沿**对齐
+                                                           //   （等值判断会漏掉「落档后再回到刚报过的那一档」）
     watcher.followup(relayUserMessage(renderPressureAlert(reading, now), entry.watcherSession));
     pressureAlerted.set(entry.id, { at: now, bucket });
 }
 ```
 
-**新增符号**：`LIAISON_PRESSURE_WARN_PERCENT`（具名常量，建议 60）· **`IDLE_ALERT_MAX_PER_EPISODE`**（具名常量 = **3**）· **`bucketOf(percent) = Math.floor(percent / 10)`**（档粒度**写死**）· `deliverIdleAlert` / `deliverPressureAlert` · `renderIdleAlert` / `renderPressureAlert` · 两个去抖 Map（`idleAlerted` / `pressureAlerted`，与既有 `digested` 同姿态）。
-**既有符号（经回读确认的真名）**：`classifyWatchdogTargets`（`:3104`）· `renderResourceContext`（`:3894`，**不是** `readSessionResources` —— 那个名字不存在，评审 🟡#3 验出父侧写错）· `isIncumbentCoordinator`（`:4720` 邻近的既有判定）· `WATCHDOG_DIGEST_DEBOUNCE_MS`（`:294`）。
+**新增符号（★ 以下为 J-1/J-2/J-3 落码后的真名与真值，逐条经回读确认）**：
+**`WATCHDOG_IDLE_ALERT_LABEL = "[idle-unassigned]"`**（FR-J1 告警档的固定开场）· **`IDLE_ALERT_MAX_PER_EPISODE = 3`**（每段投递上限，评审 🔴#1 的限量）· **`WATCHDOG_PRESSURE_ALERT_LABEL = "[pressure-warn]"`**（FR-J2 告警档的固定开场）· **`LIAISON_PRESSURE_WARN_PERCENT = 50`**（★ 具名阈值，**用户 2026-10-13 裁定 = 50** —— 本节原文写的「建议 60」已被 §10-1 取代，落码取 **50**）· **`bucketOf(percent) = Math.floor(percent / 10)`**（档粒度**写死**）· `deliverIdleAlert` / `deliverPressureAlert` · `renderIdleAlert` / `renderPressureAlert` · 两个去抖 Map（`idleAlerted` / `pressureAlerted`，与既有 `digested` 同姿态）· **`readSessionUsage(ctx, sessionId)`**（压力读数的**对象出口**，见下面的实施勘误 ①）。
+**既有符号（经回读确认的真名）**：`classifyWatchdogTargets`（`:3104`）· `renderResourceContext`（`:3894`，**不是** `readSessionResources` —— 那个名字不存在，评审 🟡#3 验出父侧写错；★ 它返回的是**字符串**，不是对象）· `isIncumbentCoordinator`（`:4720` 邻近的既有判定）· `WATCHDOG_DIGEST_DEBOUNCE_MS`（`:294`）。
 **前置**：`entry.watcherSession` 是一个活代理（`patrolOne` 的 watcher 门已过）。
 **后置**：两条消息**都过既有消毒出口**（`wellFormed` / `noticeField`）；内存态 Map 有界（按 `entry.id`，注销即失）。
+
+### §6 实施勘误（J-2/J-3 落码时实测到的两处伪代码偏差，已在上面就地更正）
+
+| # | 本节原文（v1） | 落码真值 | 依据 |
+| --- | --- | --- | --- |
+| ① | `renderResourceContext(ctx, ctx.agents.get(entry.watcherSession), () => {})` 之后直接读 `.percent` | `readSessionUsage(ctx, entry.watcherSession).percent` —— **`renderResourceContext` 返回的是渲染好的字符串**（`wellFormed(renderResourceLine(...))`），`.percent` 不在它上面；同一条投影路径的**对象**出口是 `readSessionUsage` | §10-9 要求的「实施首步确认压力读数的返回形状」结论即此；`lib/index.js` 的两处调用点注释同批写明 |
+| ② | `if (last && last.bucket === bucket) return;`（同一档不重复） | `if (last && bucket <= last.bucket) return;`（**上升沿**：只有档位变大才再响） | §10-7 🔵 已裁定取上升沿（跨档振荡 59↔61 不重复打扰）；本节 v1 的等值判断与它不一致，**以 §10-7 为准**，已就地改写 |
 
 ---
 
@@ -189,5 +203,5 @@ function deliverPressureAlert(entry, watcher, now) {
 | 8 | 🔵 | **三处 `renderResourceContext` 锚点逐处标注**（调用点 / 投影区 / **定义** `lib/index.js:3894`） | §2 §5 §6 |
 | 9 | 🔵 | **实施首步：确认压力读数的返回形状**（对象 vs 渲染串）再写 `.percent`，结论写进报告 | 实施首步 |
 
-**判据总数（本批）**：**Cj U1 … U9 ＝ 9 条**。⇒ 实施必须**同批改准**所有计数声明。
+**判据总数（本批）**：落码 **8 条** —— **Cj U1 · U2 · U3 · U4 · U5 · U7 · U8 · U9**（`grep -c '^check("批 J ·'` = 8；J-1 ⇒ U1–U3 · J-2 ⇒ U4 · J-3 ⇒ U5/U7/U8/U9）。★ **本节原文写的「U1 … U9 ＝ 9 条」与落码不符，已按实测改正**：**U6（反走私）没有单独立条 —— 如实登记为已知覆盖缺口**（两条新告警的正文都由插件常量拼成、只插值状态字段，且都过同一个消毒出口 `wellFormed`，但既没有带毒载荷的负向判据，这两个渲染面也不在批 E「U4 六个渲染面」清单的 8 面之列）；补一条 U6 会改动本批的判据计数与套件总数（1682），**留给后续批次裁决**。⇒ 实施必须**同批改准**所有计数声明。
 ★ **实施分批（因通道 30 分钟墙钟，2026-10-13 父侧拆单）**：**J-1 = FR-J1 + U1/U2/U3** · **J-2 = FR-J2 + U4** · **J-3 = FR-J3/J4 + U5/U7/U8/U9 + 全量计数与文档同步**。每单只做自己那一份；**文档最后写、且只写实测到的读数**（上一单就是先写好「已实施 / 9 条 / 红相 1683」然后被掐 ⇒ 那批谎已被父侧回滚，作为反面先例记此）。

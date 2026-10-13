@@ -3,6 +3,8 @@
 > 本档只写**要解决什么**（三层：总体目标 / 功能用户故事 / 非功能标准）与**明确的非目标**。
 > **怎么做**在设计档 [`docs/2026-10-13-coordinator-signal-design.md`](2026-10-13-coordinator-signal-design.md)。
 > 行号一律 as-of **2026-10-13 工作树（commit `f24f167`）**，实施按**符号名**定位。
+>
+> **实施状态（2026-10-13，批 J 三个小单全部落码）**：**已实施入库** —— **US-J1…US-J4 / NF-J1…NF-J5 逐条落到 8 条宿主判据**（`host-half.test.mjs` 的「批 J」块，标识符 `Cj` 中缀：J-1 `FR-J1` ⇒ U1–U3 · J-2 `FR-J2` ⇒ U4 · J-3 `FR-J3`/`FR-J4` ⇒ U5/U7/U8/U9）。**本单实测**：`node host-half.test.mjs` ⇒ `ALL PASS / assertion total: 1682 (failed: 0)` · `node client-half.test.mjs` ⇒ `310 (failed: 0)`；**修复前必红**的四次变异读数见 [`CHANGELOG.md`](../CHANGELOG.md) 的「未发布 — 批 J」条目，落点与两处设计勘误见设计档头注与 §6。**§五 的五个非目标一条未破**：不拦「协调者自己干」· 不替它派工 · 不动失联三态（`TICKABLE_VERDICTS` 仍恰三态）· 不改阈值语义 · 不做零代码诊断页。
 
 ---
 
