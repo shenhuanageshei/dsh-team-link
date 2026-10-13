@@ -14068,6 +14068,145 @@ check("批 L · Aw8 负向锁（红相①＝实现绕过接缝直接改名 / 直
 		&& !/\b(open|writeFile)\s*\(\s*file\b/u.test(AW_WRITE_BODY)
 		&& awSeamStatementLines.length === 1 && at(awSeamStatementLines, 0, "").trim() === "await rename(tmp, file);");
 
+// ===========================================================================
+// 批 J · 协调者的派工信号加固 —— **第 1 小单**（FR-J1：「有活没派」独立告警档）
+// 归属：docs/2026-10-13-coordinator-signal-design.md §4（D1/D2）· §5 FR-J1 · §6（机制伪代码）·
+//   §7（状态与 schema：**零持久化变更**，两个去抖 Map 只在进程内）· §8（U1/U2/U3）· §9（边界）；
+//   需求档 docs/2026-10-13-coordinator-signal-requirements.md §三（US-J1/US-J4）·
+//   §四（NF-J1 零新依赖 / NF-J2 自己的去抖与限量 / NF-J3 反走私 / NF-J4 可核）。
+// ★ 本单**只做 FR-J1**：压力告警（FR-J2）、事实源指路落宪章与摘要脚注（FR-J3）、文档面收口（FR-J4）
+//   留给后两单 ⇒ 本块**恰 3 条判据**（U1/U2/U3），标识符统一 `Cj` 中缀（设计档 §0 的纪律）。
+// ★ 时钟面（与「批 G」同一条理由）：行一律种在**锚真墙钟**的 `CJ_NOW = Date.now()` 上。种在 2023 的
+//   假时钟上，attach 后置链的 `ensureTeamAutoWatchdogs` 会先把它们当「已过期」原地刷新一遍
+//   （`expiresAt` 改写成墙钟 + 12h）⇒ 本块读的时序全被遮住。
+// ★ 角色门夹具（本块每条都显式种 `teams`）：`isIncumbentCoordinator` 要求**名册里真有这支队伍、
+//   且现任协调者就是观察者**。不种名册 ⇒ 角色门恒假 ⇒ 三条判据全在假绿上跑（这正是它们的红相之一）。
+// ★ 每条判据都带**负相自证**（证明夹具真的推得动、不是恒真）：反相那几条同时断言「同一次巡逻里
+//   摘要照投」—— 于是「零投递」不是因为整个巡逻早退，而是因为那一门真的在判。
+// ★ 三条判据各自的**定向红相**写在标题里；「修复前必红 / 修复后全绿」两次实测读数见交付报告
+//   （红相配方 = 就地变异 → 跑 → **逐字节还原**并用 sha256 自证）。
+// ===========================================================================
+
+/** 本块注入时钟（锚真墙钟，理由见块头）。 */
+const CJ_NOW = Date.now();
+/** 与 `lib/index.js` 的 `WATCHDOG_DIGEST_DEBOUNCE_MS` 同一个值（10 分钟）；下面 U2 另有源码级锁钉住它。 */
+const CJ_DEBOUNCE_MS = 10 * 60000;
+/** 名册行：协调者 = 观察者 `session-self`，两名队员（`b5Team` / `wb2Role` 的既有形状，不另造一套）。 */
+const cjTeam = (name = "cj-team", coordinator = "session-self") =>
+	b5Team(name, TEAM_WS, [wb2Role("coordinator", coordinator), wb2Role("worker-a", "session-peer"), wb2Role("worker-b", "session-peer-2")]);
+/** 一条 auto 注册行（**落盘形状**；到期点相对本块的墙钟锚，恒未过期 ⇒ 走不到删除门）。 */
+const cjRow = ({ id = "wd-cj-0001", team = "cj-team", watcherSession = "session-self", targets = ["session-peer", "session-peer-2"], remainingMs = 12 * 3600000, silentMinutes = 10 } = {}) =>
+	({ id, team, watcherSession, targets, silentMinutes, intervalMinutes: 10, createdAt: CJ_NOW - 6 * 3600000, expiresAt: CJ_NOW + remainingMs, origin: "auto" });
+/** 本档的取数器：只有它认 `[idle-unassigned]` 开场（`[workbench]` / `[watchdog]` 各自另有取数器）。 */
+const cjAlertsOf = (env) => env.senderCalls.followedup.filter((message) => message.content[0].text.startsWith(__testing.WATCHDOG_IDLE_ALERT_LABEL));
+/** 就地换掉盘上那一行的 `targets` = 「有人开始跑 / 跑的人又闲下来」这条状态迁移的夹具缝。 */
+const cjRetarget = (env, targets) => { env.settings.namespaces.get("team-link").data.watchdogs = b5Watchdogs(env).map((entry) => ({ ...entry, targets })); };
+
+// --- U1：触发条件（正相 ＋ 两个反相）＋ ★ 角色门 --------------------------------
+const cjFireEnv = watchdogEnv({
+	targets: {
+		"session-peer": { events: oneShotSurface(CJ_NOW - 120_000) },
+		"session-peer-2": { events: oneShotSurface(CJ_NOW - 180_000) },
+	},
+	teams: [cjTeam("cj-fire")],
+	watchdogs: [cjRow({ id: "wd-cj-fire", team: "cj-fire" })],
+});
+await waitForChain(cjFireEnv, 1);
+await cjFireEnv.watchdog.patrol({ now: CJ_NOW });
+const cjFireAlerts = cjAlertsOf(cjFireEnv);
+const cjFireText = at(cjFireAlerts, 0, { content: [{ text: "" }] }).content[0].text;
+// 反相①：有人正在跑（同一个空闲成员还在场 ⇒ 摘要照投，证明「零投递」不是巡逻早退）。
+const cjRunningEnv = watchdogEnv({
+	targets: {
+		"session-peer": { events: oneShotSurface(CJ_NOW - 120_000) },
+		"session-busy": { events: oneShotSurface(CJ_NOW - 60_000), status: "running" },
+	},
+	teams: [cjTeam("cj-running")],
+	watchdogs: [cjRow({ id: "wd-cj-running", team: "cj-running", targets: ["session-peer", "session-busy"] })],
+});
+await waitForChain(cjRunningEnv, 1);
+await cjRunningEnv.watchdog.patrol({ now: CJ_NOW });
+// 反相②：没有任何空闲成员（唯一成员手上**在飞**：armed 的 active goal = 自续跑）；
+// 同一次巡逻另有一名失联成员 ⇒ 摘要照投（负相自证：巡逻真的读到了行、也真的投得出去）。
+const cjArmedEnv = watchdogEnv({
+	targets: {
+		"session-armed": { events: oneShotSurface(CJ_NOW - 60_000) },
+		"session-silent": { events: oneShotSurface(1) },
+	},
+	goals: { "session-armed": armedGoal() },
+	teams: [cjTeam("cj-armed")],
+	watchdogs: [cjRow({ id: "wd-cj-armed", team: "cj-armed", targets: ["session-armed", "session-silent"] })],
+});
+await waitForChain(cjArmedEnv, 1);
+await cjArmedEnv.watchdog.patrol({ now: CJ_NOW });
+// ★ 角色门：观察者**不是**该队的现任协调者（现任是 session-other）⇒ 零投递（摘要仍照投：它没有角色门）。
+const cjForeignEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(CJ_NOW - 120_000) } },
+	teams: [cjTeam("cj-foreign", "session-other")],
+	watchdogs: [cjRow({ id: "wd-cj-foreign", team: "cj-foreign", targets: ["session-peer"] })],
+});
+await waitForChain(cjForeignEnv, 1);
+await cjForeignEnv.watchdog.patrol({ now: CJ_NOW });
+check("批 J · U1 「有活没派」触发条件 ＋ ★ 角色门（红相①＝条件写成「只要空闲非空就投」⇒ 反相①红；红相②＝条件写成永不投 ⇒ 正相红；红相③＝去掉 `isIncumbentCoordinator` 那道门 ⇒ 非现任协调者那一条红）: ① 空闲非空 ∧ 运行中为空 ⇒ **恰投一条**，文案由插件常量拼成、只插值状态字段，点名团队与两名空闲成员并给出**事实源指路**（黑板 `tasks.md` / `team_link_team_read` / 「不要读它的会话历史」）；② 反相①（有人正在跑，空闲成员仍在场）⇒ **零投递**，而同一次巡逻的摘要**照投**（负相自证：不是巡逻早退）；③ 反相②（无空闲成员：唯一成员 armed 在飞）⇒ **零投递**，而同一次巡逻因另一名失联成员照投摘要；④ ★ 观察者**不是**现任协调者 ⇒ **零投递**（角色门），摘要仍照投 —— 四态同一条判据里各自可红",
+	cjFireAlerts.length === 1
+		&& cjFireText.startsWith(__testing.WATCHDOG_IDLE_ALERT_LABEL) && cjFireText.includes("团队 cj-fire：有活没派")
+		&& cjFireText.includes("没有成员在被派活") && cjFireText.includes("session-peer") && cjFireText.includes("session-peer-2")
+		&& cjFireText.includes("tasks.md") && cjFireText.includes("team_link_team_read") && cjFireText.includes("不要读它的会话历史")
+		&& cjAlertsOf(cjRunningEnv).length === 0 && digestOf(cjRunningEnv).length === 1
+		&& cjAlertsOf(cjArmedEnv).length === 0 && digestOf(cjArmedEnv).length === 1
+		&& cjAlertsOf(cjForeignEnv).length === 0 && digestOf(cjForeignEnv).length === 1);
+
+// --- U2：自己的去抖 / 窗口外复投 / 每段限量 / 条件转假即重置 ------------------------
+const cjDebounceEnv = watchdogEnv({
+	targets: {
+		"session-peer": { events: oneShotSurface(CJ_NOW - 120_000) },
+		"session-busy": { events: oneShotSurface(CJ_NOW - 60_000), status: "running" },
+	},
+	teams: [cjTeam("cj-debounce")],
+	// ★ 夹具纪律：这条时间线跨 45 分钟，而「静默阈值」默认 10 分钟 —— 目标一旦被判成 `silent-idle`
+	//   就落进 `alarm` 组（分类器一组一判、**alarm 优先**）⇒ `idleAwait` 当场空掉，本档零投递。
+	//   那是**夹具的人为漂移**，不是被测量。把该行的静默阈值抬到 1000 分钟，让目标在这条时间线上
+	//   恒为「空闲待派」（真正的失联迁移另有既有判据在管）。
+	watchdogs: [cjRow({ id: "wd-cj-debounce", team: "cj-debounce", targets: ["session-peer"], silentMinutes: 1000 })],
+});
+await waitForChain(cjDebounceEnv, 1);
+/** 一次巡逻（可选先换目标集合），返回**累计**投出的本档条数。 */
+const cjPatrol = async (at_, targets) => {
+	if (targets !== undefined) cjRetarget(cjDebounceEnv, targets);
+	await cjDebounceEnv.watchdog.patrol({ now: at_ });
+	return cjAlertsOf(cjDebounceEnv).length;
+};
+const cjAfter1 = await cjPatrol(CJ_NOW);                                            // 第 1 条
+const cjAfter2 = await cjPatrol(CJ_NOW + 60_000);                                   // 窗口内（距上一条 1min < 10min）
+const cjAfter3 = await cjPatrol(CJ_NOW + CJ_DEBOUNCE_MS + 60_000);                  // 窗口外 ⇒ 复投
+const cjAfter4 = await cjPatrol(CJ_NOW + 2 * CJ_DEBOUNCE_MS + 2 * 60_000);          // 复投第 2 次（本段第 3 条）
+const cjAfter5 = await cjPatrol(CJ_NOW + 3 * CJ_DEBOUNCE_MS + 3 * 60_000);          // 本段已投满 ⇒ 停
+const cjAfter6 = await cjPatrol(CJ_NOW + 4 * CJ_DEBOUNCE_MS + 4 * 60_000, ["session-peer", "session-busy"]);   // 有人开始跑（空闲成员仍在场）⇒ 条件转假（并重置本段）
+const cjAfter7 = await cjPatrol(CJ_NOW + 4 * CJ_DEBOUNCE_MS + 5 * 60_000, ["session-peer"]);   // 再恢复 ⇒ 新一段重新可投
+// 读数可见性（本文件既有惯例 `[AW5-DIAG]` 那一类）：U2 的七步累计条数一旦走偏，FAIL 那一行旁边
+// 就摆着**它偏在哪一步**（`c1`…`c7` 期望 1,1,2,3,3,3,4），不必回头重跑一遍才知道。
+console.log(`[CJ-U2-DIAG] ${JSON.stringify({ c1: cjAfter1, c2: cjAfter2, c3: cjAfter3, c4: cjAfter4, c5: cjAfter5, c6: cjAfter6, c7: cjAfter7, max: __testing.IDLE_ALERT_MAX_PER_EPISODE })}`);
+check("批 J · U2 自己的去抖 ＋ 窗口外复投 ＋ 每段限量 ＋ 条件转假即重置（红相①＝去掉去抖窗口 ⇒ 第 2 次巡逻就多投一条 ⇒ 本条红；红相②＝删掉窗口外复投整段（回到「同一状态永不重投」）⇒ 第 3 次起一条都不投 ⇒ 本条红；红相③＝去掉每段限量（`IDLE_ALERT_MAX_PER_EPISODE`）⇒ 第 5 次仍投 ⇒ 本条红；红相④＝条件转假时不删本段状态 ⇒ 恢复后仍被「本段已投满 3 次」挡住 ⇒ 末条红）: 同一签名连续巡逻 —— ① 首次投 1 条 ② 窗口内（1min）**零新增** ③ 窗口外（11min）**复投** ④ 再隔一个窗口**复投第 2 次** ⑤ 本段投满 `IDLE_ALERT_MAX_PER_EPISODE`(=3) 次后，窗口外也**不再投** ⑥ 有人开始跑（条件转假）⇒ 零投递并**重置本段** ⑦ 再恢复空闲 ⇒ **新一段重新可投**（恰再添 1 条）。★ 同批钉住去抖窗口就是既有的 `WATCHDOG_DIGEST_DEBOUNCE_MS`（源码级锁）与限量常量 = 3（设计档 §6 的具名常量，读真值不抄一份）",
+	__testing.IDLE_ALERT_MAX_PER_EPISODE === 3
+		&& /const WATCHDOG_DIGEST_DEBOUNCE_MS = 10 \* 60000;/u.test(hostSource)
+		&& cjAfter1 === 1 && cjAfter2 === 1 && cjAfter3 === 2 && cjAfter4 === 3 && cjAfter5 === 3 && cjAfter6 === 3 && cjAfter7 === 4);
+
+// --- U3：与既有摘要互不抑制（同一轮里各投一条）------------------------------------
+const cjBothEnv = watchdogEnv({
+	targets: { "session-peer": { events: oneShotSurface(CJ_NOW - 120_000) } },
+	teams: [cjTeam("cj-both")],
+	watchdogs: [cjRow({ id: "wd-cj-both", team: "cj-both", targets: ["session-peer"] })],
+});
+await waitForChain(cjBothEnv, 1);
+await cjBothEnv.watchdog.patrol({ now: CJ_NOW });
+const cjBothDigests = digestOf(cjBothEnv);
+const cjBothAlerts = cjAlertsOf(cjBothEnv);
+check("批 J · U3 与既有摘要**互不抑制**（设计档 §4 D2 的被否决备选：复用既有四组指纹 ⇒ 其中一条被吃掉；红相＝让本档写进 `digested` / 用 `watchdogDigestSignature` 当自己的签名 ⇒ 本条红）: **同一次巡逻**里「工作台摘要」与「有活没派」**各投一条**（观察者的收件箱**恰两封**，两封正文互不相同），且两封都不是对方：摘要照旧以 `[workbench]` 开场并含四组分组的既有形状，本档以 `[idle-unassigned]` 开场",
+	cjBothDigests.length === 1 && cjBothAlerts.length === 1 && cjBothEnv.senderCalls.followedup.length === 2
+		&& at(cjBothDigests, 0, { content: [{ text: "" }] }).content[0].text !== at(cjBothAlerts, 0, { content: [{ text: "" }] }).content[0].text
+		&& at(cjBothDigests, 0, { content: [{ text: "" }] }).content[0].text.includes("工作台（读数 ")
+		&& !at(cjBothAlerts, 0, { content: [{ text: "" }] }).content[0].text.includes("[workbench]"));
+
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
 // ★ 修复轮 #3：改用带**有界重试**的 `rmTestRoot()`（见它的 JSDoc）—— 8 并发下实测过 1/8 次
