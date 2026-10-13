@@ -58,7 +58,7 @@ flowchart TD
 
 | # | 决策 | 理由 | 被否决的备选 |
 | --- | --- | --- | --- |
-| **D1** | **「有活没派」提成独立告警档**，触发条件 = **空闲待派非空 ∧ 运行中为空** | 这个组合正是「**没人被派活**」的精确形态，而它今天与「刚转空闲」等同档处理。条件用**两个既有分组**算，不新增读数。 | ① 把空闲待派直接放进 `TICKABLE_VERDICTS`（会把它与「失联」混为一谈 —— 需求档非目标 3 禁止）· ② 每轮都投（会刷屏） |
+| **D1** | **「有活没派」提成独立告警档**，触发条件 = **空闲待派非空 ∧ 运行中为空** | 这个组合正是「**没人被派活**」的精确形态，而它今天与「刚转空闲」等同档处理。条件用**两个既有分组**算，不新增读数。★ **评审 🔵#5 要求点破的近似**：US-J1 字面上的「**协调者自己在干活**」**对插件不可观测**（那一步走宿主子代理工具，需求档非目标 1 已承认）⇒ 本档以**可测组合**近似（空闲非空 ∧ 无人在跑）。它会**包含**「团队确实没活干」这一超集 ⇒ 误报由**去抖 + 限量 + 文案**兜住（文案**陈述事实**「没有成员在被派活」，**不指控**）。 | ① 把空闲待派直接放进 `TICKABLE_VERDICTS`（会把它与「失联」混为一谈 —— 需求档非目标 3 禁止）· ② 每轮都投（会刷屏）· ③ 试图观测「协调者在干活」（做不到） |
 | **D2** | 新档**有自己的去抖窗口**（沿用 `WATCHDOG_DIGEST_DEBOUNCE_MS`，`lib/index.js:294`），**不与既有摘要共用指纹** | 既有指纹是「四组 id 序列」（`watchdogDigestSignature`，`:3121`）—— 新档要与它分开，否则其中之一的变化会抑制另一个。 | 复用既有指纹（互相抑制） |
 | **D3** | **只警告、不自动派活** | 插件的既有红线：机械动作要么有门、要么只读。自动派活要替协调者做决策，超出本批。 | 自动派工（越权 + 无法回滚） |
 | **D4** | **压力告警的阈值取常量并具名**（建议 **60%**），文案**点名后果** | 「60%」是**保守值**：真机读数里协调者到 40.1% 时已在读别人历史。阈值具名 ⇒ 判据可钉、将来可调。 | 不警告（现状）· 按「低于阈值才正常」的表述（违反既有「只给读数+结论」纪律） |
@@ -94,25 +94,32 @@ function deliverIdleAlert(entry, watcher, rows, now) {
     if (groups.running.length > 0) return;                 // 还有人在跑 ⇒ 不算「有活没派」
     const signature = groups.idleAwait.map(r => r.target).join(",");
     const last = idleAlerted.get(entry.id);
-    if (last && now - last.at < WATCHDOG_DIGEST_DEBOUNCE_MS) return;   // D2：自己的窗口
-    if (last && last.signature === signature) return;                   // 状态没变 ⇒ 不重复
+    // ★ 评审 🔴#1 的裁决：窗口内不重复；窗口外**复投**（让信号不沉没），但每段限量。
+    if (last && last.signature === signature) {
+        if (now - last.at < WATCHDOG_DIGEST_DEBOUNCE_MS) return;   // 窗口内 ⇒ 零投递
+        if (last.count >= IDLE_ALERT_MAX_PER_EPISODE) return;      // 本段已投满 ⇒ 等状态变化
+    }
+    const count = last && last.signature === signature ? last.count + 1 : 1;   // 签名一变 ⇒ 重置为 1
     watcher.followup(relayUserMessage(renderIdleAlert(entry, groups, now), entry.watcherSession));
-    idleAlerted.set(entry.id, { at: now, signature });
+    idleAlerted.set(entry.id, { at: now, signature, count });
 }
 
-/** 压力告警：读协调者自身的投影，过阈值才说；与上一条各自的去抖窗口。 */
+/** 压力告警：读 watcher **自身**的投影（★ 只发给现任协调者，评审 🟡#2）；同一档不重复。 */
 function deliverPressureAlert(entry, watcher, now) {
-    const reading = readSessionResources(ctx, entry.watcherSession);   // 既有投影路径
+    if (!isIncumbentCoordinator(policy.get(), entry.team, entry.watcherSession)) return;  // ★ 角色门
+    const reading = renderResourceContext(ctx, ctx.agents.get(entry.watcherSession), () => {});  // ★ 真名（:3894）
     if (reading.percent === undefined || reading.percent < LIAISON_PRESSURE_WARN_PERCENT) return;
+    const bucket = bucketOf(reading.percent);              // ★ = Math.floor(p / 10)（每 10% 一档，评审 🟡#3）
     const last = pressureAlerted.get(entry.id);
     if (last && now - last.at < WATCHDOG_DIGEST_DEBOUNCE_MS) return;
-    if (last && last.bucket === bucketOf(reading.percent)) return;      // 同一档不重复
+    if (last && last.bucket === bucket) return;            // 同一档不重复
     watcher.followup(relayUserMessage(renderPressureAlert(reading, now), entry.watcherSession));
-    pressureAlerted.set(entry.id, { at: now, bucket: bucketOf(reading.percent) });
+    pressureAlerted.set(entry.id, { at: now, bucket });
 }
 ```
 
-**新增符号**：`LIAISON_PRESSURE_WARN_PERCENT`（具名常量，建议 60）· `deliverIdleAlert` / `deliverPressureAlert` · `renderIdleAlert` / `renderPressureAlert` · 两个去抖 Map（`idleAlerted` / `pressureAlerted`，与既有 `digested` 同姿态）。
+**新增符号**：`LIAISON_PRESSURE_WARN_PERCENT`（具名常量，建议 60）· **`IDLE_ALERT_MAX_PER_EPISODE`**（具名常量 = **3**）· **`bucketOf(percent) = Math.floor(percent / 10)`**（档粒度**写死**）· `deliverIdleAlert` / `deliverPressureAlert` · `renderIdleAlert` / `renderPressureAlert` · 两个去抖 Map（`idleAlerted` / `pressureAlerted`，与既有 `digested` 同姿态）。
+**既有符号（经回读确认的真名）**：`classifyWatchdogTargets`（`:3104`）· `renderResourceContext`（`:3894`，**不是** `readSessionResources` —— 那个名字不存在，评审 🟡#3 验出父侧写错）· `isIncumbentCoordinator`（`:4720` 邻近的既有判定）· `WATCHDOG_DIGEST_DEBOUNCE_MS`（`:294`）。
 **前置**：`entry.watcherSession` 是一个活代理（`patrolOne` 的 watcher 门已过）。
 **后置**：两条消息**都过既有消毒出口**（`wellFormed` / `noticeField`）；内存态 Map 有界（按 `entry.id`，注销即失）。
 
@@ -138,13 +145,14 @@ function deliverPressureAlert(entry, watcher, now) {
 | # | 判据 | 红相（怎么让它红） |
 | --- | --- | --- |
 | **U1** | **「有活没派」触发条件**：空闲待派非空 ∧ 运行中为空 ⇒ **恰投一条**；两个反相各自不投（① 有人在跑 ② 没有空闲成员） | 把条件写成「只要空闲待派非空就投」⇒ 反相①红；把条件写成永不投 ⇒ 正向红 |
-| **U2** | **自己的去抖**：同一状态 10 分钟内连投两次巡逻 ⇒ **第二次零投递**；窗口外 ⇒ 再投一次 | 去掉窗口 ⇒ 本条红 |
+| **U2** | **自己的去抖与限量（★ 评审 🔴#1 后的口径）**：同一签名 10 分钟内连投两次巡逻 ⇒ **第二次零投递**；窗口外 ⇒ **复投**（信号不沉没）；**同一签名投满 `IDLE_ALERT_MAX_PER_EPISODE`(=3) 次后**，窗口外也不再投，直到**签名变化**（成员集合变了）才重置计数 | 去掉窗口 ⇒ 本条红；把「窗口外复投」整段删掉（回到永不复投）⇒ 本条红；去掉限量 ⇒ 无限复投 ⇒ 本条红 |
 | **U3** | **与既有摘要互不抑制**：同一轮里「摘要」与「有活没派」**各投一条**（互不吃掉对方） | 复用既有指纹 ⇒ 其中一条被抑制 ⇒ 本条红 |
-| **U4** | **压力告警**：压力 ≥ 阈值 ⇒ 投；< 阈值 ⇒ 不投（**正向与反相各一条**）；同一档不重复 | 去掉阈值判断 ⇒ 反相红；去掉档位判断 ⇒ 重复投 ⇒ 本条红 |
+| **U4** | **压力告警**：★ **只发给现任协调者**（非协调者的 watcher ⇒ **零投递**，评审 🟡#2 的角色门）；现任协调者压力 ≥ 阈值 ⇒ 投；< 阈值 ⇒ 不投；**同一档（每 10%）不重复** | 去掉阈值判断 ⇒ 反相红；去掉档位判断 ⇒ 重复投 ⇒ 本条红；**去掉角色门** ⇒ worker 也收到 ⇒ 本条红 |
 | **U5** | **事实源指路在场**：宪章文本**含**「黑板」与「tasks」与「不要读…会话历史」三段必经字样；摘要脚注同批含指路句 | 去掉任一处 ⇒ 本条红 |
 | **U6** | **反走私**：把注册参数（团队名 / 目标 id）替换成含换行与控制字符的载荷 ⇒ 投出的消息里**不含**那些字节（过 `noticeField`） | 绕过消毒出口 ⇒ 本条红 |
 | **U7** | **不回归**：`TICKABLE_VERDICTS` 仍**恰三态**；摘要四组语义与行数预算与改前逐字一致 | 顺手把空闲待派塞进三态集合 ⇒ 本条红 |
 | **U8** | **零新依赖 / 零 schema**：顶层 `import` 仍 8 条；`policy.json` 键集仍十键 | 新增 import 或字段 ⇒ 本条红 |
+| **U9** | **FR-J4 的文档面同批改准（★ 评审 🔵#6 要求给 FR-J4 一条判据）**：`team_link_watch` 的 description **与** `README.md` 的摘要段**都含**新事实源指路句（宪章那句的同义表述）；两处**逐字一致** | 任一处漏改 ⇒ 本条红 |
 
 **两次实测读数（实施方必须给）**：修复前（把两条新告警的调用点去掉）⇒ **U1/U3/U4 红**；接上 ⇒ 全绿。
 
@@ -155,9 +163,10 @@ function deliverPressureAlert(entry, watcher, now) {
 | 情形 | 行为 |
 | --- | --- |
 | **协调者自己不 live** | `patrolOne` 的既有 watcher 门先挡（`:3451-3455`）⇒ 两条告警都**不投**（不可能投给一个不存在的代理） |
+| **★ 协调者没有任何在册 watch（评审 🟡#4 补）** | **两条告警都不存在** —— 巡逻是**唯一的驱动源**（`patrol()` 只遍历 `policy.get().watchdogs`，`:3488`）；没有注册就没有巡逻。**这是本批的已知前提**：可接受，因为被派活的一方（协调者）**必然**有一条全队工作台的自动注册（`/team_session` 建队时自动挂，`origin=auto`；老团队由 attach 的按队补挂兜底）⇒ **实践上恒成立**；本行明确写出，避免读者以为「任何会话都能收到这两条告警」。 |
 | **团队只有协调者没有成员** | `idleAwait` 为空 ⇒ U1 反相 ⇒ 不投（本来也无人可派） |
 | **成员全部在跑** | `running` 非空 ⇒ 不投（这正是「有人在干活」，不该打扰） |
 | **读不到压力投影** | `renderResourceContext` 的既有「不可读」支（`:3769`）⇒ 压力告警**走「读不到就不说」**（绝不编造一个百分比） |
-| **去抖 Map 无界增长** | 按 `entry.id`，注销/换届即失；条数上界 = 注册数（既有的同类 Map 同规矩） |
+| **去抖 Map 无界增长** | 按 `entry.id`，注销/换届即失；条数上界 = 注册数（既有的同类 Map 同规矩）；`idleAlerted` 每条只存 `{at, signature, count}`（定长） |
 | **失败方向** | **fail-open**：告警投不出去只留一行 warn（与 `deliverDigest` 的 catch 同姿态，`:3353-3356`），绝不让巡逻崩 |
-| **重启** | 去抖窗口清零 ⇒ 重启后**可能**立刻再投一次同类告警（**可接受**：重启本身就是状态剧变，且既有的 `digested` 同行为） |
+| **重启** | 去抖窗口与**限量计数**清零 ⇒ 重启后**可能**立刻再投一次同类告警（**可接受**：重启本身就是状态剧变，且既有的 `digested` 同行为） |

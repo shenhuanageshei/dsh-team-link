@@ -17,7 +17,7 @@ sequenceDiagram
     participant F as forensics/<bootId>/
     DSH->>P: activation
     P->>F: 建本次 bootId 目录 + 写首拍（原子）
-    loop 每 5 分钟（既有巡逻定时器）
+    loop 每 entry.intervalMinutes（默认 10 分钟；既有巡逻定时器，lib/index.js:3221）
         P->>F: 原子覆盖 heartbeat.json（内存/磁盘/会话数/看门狗数/拍号）
     end
     Note over DSH: ✗ 非正常退出（无收尾代码可跑）
@@ -62,7 +62,7 @@ DSH 自带 `~/.dsh/death-forensics/` 已有半个仪表（`crash.log` / `heartbe
 | **D1** | **心跳写在自己的目录**：`<DSH_HOME>/team-link/forensics/<bootId>/heartbeat.json` | 宿主目录 `death-forensics/` 是**宿主的地盘**（且我们读不懂它的内部结构）；写在插件自己的根目录旁边 ⇒ 与 `policy.json` 同级、权限与生命周期一致 | ① 写宿主 `death-forensics/`（越界，且宿主可能清理）· ② 写系统临时目录（会被清） |
 | **D2** | **每次启动一个目录**，而不是覆盖同一个文件 | 文件系统**自带历史**：崩溃后那个目录还在 ⇒ 不需要任何额外逻辑就能拿到上一拍的现场。 | ① 单文件覆盖（历史丢失）· ② 追加日志（会无限增长，还要解析） |
 | **D3** | **心跳内容 = 定长小 JSON**（≤ 1 KB） | 定长 ⇒ 写入快、原子覆盖永不撕裂；小 ⇒ 磁盘可忽略。 | 记录大对象（慢、且可能写一半） |
-| **D4** | **写频 = 既有巡逻定时器（10 分钟）**，首拍在 activation | **零新增定时器**（复用既有 patrol）—— 与既有「一个后台定时器干两件事」的姿态一致（`:3496-3499`）。⇒ 死亡窗口的**精度上界 = 10 分钟**，如实登记。 | 新增 1 分钟定时器（多一个后台负载） |
+| **D4** | **写频 = 既有巡逻定时器**，首拍在 activation | **零新增定时器**（复用既有 patrol）—— 与既有「一个后台定时器干两件事」的姿态一致（`:3496-3499`）。★ **间隔真值（设计评审 🟡#1 要求的事实核查）**：巡逻间隔 = `entry.intervalMinutes × 60000`（`lib/index.js:3221`），**默认 10 分钟**、可配（`silentMinutes>=10` / `intervalMinutes>=5`，见 `team_link_watch` 的注册面）。⇒ 死亡窗口的**精度上界 = 该注册的 `intervalMinutes`**（默认 **10 分钟**），如实登记；★ 本节此前在时序图写「5 分钟」、此处写「10 分钟」，**两处打架 —— 已按代码真值统一为「随注册值，默认 10」**。 | 新增 1 分钟定时器（多一个后台负载） |
 | **D5** | **保留上限 = 最近 10 次启动**，超出按最旧清理 | 有界（NF-K3）；10 次 ≈ 覆盖最近几次崩溃，够用。 | 不清理（无界）· 保留 1 次（看不到模式） |
 | **D6** | **不做外部收集器 / 不发 HTTP** | `node:http` 不在 8 条白名单里；外部进程是更重的一步（需求档 §五 3）。**等本批跑出几组现场再谈**。 | 起独立进程 / 发 HTTP |
 | **D7** | **读面 = 让既有 `team_link_status` 支持 `action=forensics`**（只读），**不加新工具** | 插件有**工具数同改锁**（`host-half.test.mjs:5604` 断言「README 计数 == 实际注册数」）；加第 12 个工具要动多处计数。而「看崩溃现场」天然属于状态卡这一家。 | 新增 `team_link_forensics` 工具（要改工具计数与多处文档） |
@@ -83,6 +83,10 @@ DSH 自带 `~/.dsh/death-forensics/` 已有半个仪表（`crash.log` / `heartbe
 ★ **字段面的诚实边界（必须写进实施任务）**：`在飞作业数` **本批不做** ——
 插件读不到宿主的作业服务（`:100` 的 4 项 inject 里没有 `jobs`）。读数里**不得**出现这一格，
 也不得用「猜测的 0」冒充（需求档 §五 5）。
+
+★ **不读宿主任何文件（设计评审 🟡#2 的处置，口径以此为准）**：本批**只读自家** `forensics/<bootId>/heartbeat.json` +
+目录列表；宿主 `~/.dsh/death-forensics/` 下的 `crash.log` / `heartbeat.log` / `state.json` **一概不读**
+（不与宿主的地盘发生任何读取关系）。死亡窗口 = [自家 `lastBeatAt`, 本次 `startedAt`]，**纯自家推导**。
 
 ---
 
@@ -107,7 +111,13 @@ async function writeHeartbeat(now) {
         watchdogs: watchdogRowCount(),
         // ★ 在飞作业数：本批不做（读不到宿主作业服务）
     };
-    try { await writePolicyFileAtomic-ish(dir + "/heartbeat.json", JSON.stringify(doc)); }
+    const target = path.join(forensicsDirOf(bootId), "heartbeat.json");   // ★ path.join（不是 "/" 字面量）
+    try {
+        // ★ 复用**既有的**原子写助手 `writePolicyFileAtomic`（lib/index.js:1895）——
+        //   它的一条后置就是「目标内容恰为 text 或抛错」（本文件同样只需这一个保证）；
+        //   批次 L 若同批实施，它已改成唯一临时名 + 有界重试，这里**自动受益**。
+        await writePolicyFileAtomic(target, JSON.stringify(doc));
+    }
     catch (e) { warnOnce("heartbeat write failed: " + describeError(e)); }
 }
 
@@ -118,8 +128,11 @@ async function writeHeartbeat(now) {
  */
 function readPreviousForensics() { /* 扫描 forensics/*/heartbeat.json，取 lastBeatAt 最大且 bootId !== 本次 */ }
 
-/** 保留上限：按目录 mtime 排序，删掉最旧的第 11 份起。失败只 warn。 */
-async function pruneForensics(keep = 10) { /* 纯读目录 + unlink；越界不删 */ }
+/**
+ * 保留上限：**按心跳文件内嵌的 `lastBeatAt` 排序**（★ 评审 🔵#5：不用目录 mtime ——
+ * 它是否随原子覆盖更新取决于实现细节，口径不稳），删掉最旧的第 11 份起。失败只 warn。
+ */
+async function pruneForensics(keep = FORENSICS_KEEP_BOOTS) { /* 纯读目录 + unlink；越界不删；永不删本次 */ }
 ```
 
 **新增符号**：`bootId` / `forensicsRoot` / `writeHeartbeat` / `readPreviousForensics` / `pruneForensics` / `renderForensicsReport` · 具名常量 `FORENSICS_KEEP_BOOTS = 10`。
@@ -170,8 +183,19 @@ async function pruneForensics(keep = 10) { /* 纯读目录 + unlink；越界不�
 | **U7** | **输出面**：不带 `action` 时状态卡输出**逐字不变**（与改前同字节）；带 `action=forensics` 时**含**窗口与四类读数；**不含**「在飞作业」这一格（诚实边界） | 改动了既有输出 ⇒ 本条红；出现 jobs 那一格 ⇒ 本条红 |
 | **U8** | **失败方向**：让 `writeHeartbeat` 的目标不可写 ⇒ 巡逻**不抛**、只留一行 warn、其余投递照常 | 让异常冒泡 ⇒ 本条红 |
 | **U9** | **零新依赖 / 零 schema**：顶层 `import` 仍 8 条；`policy.json` 键集仍十键 | 新增 import 行或字段 ⇒ 本条红 |
+| **U10** | **磁盘读不到的诚实路径（★ 评审 🟡#3①）**：把 `statfs` 桩成 reject ⇒ `disk.free` / `disk.total` **恰为 `null`**，且**不得**出现任何数字（编造 ⇒ 本条红）；同时 `writeHeartbeat` **不抛**、巡逻照常 | 用 0 或估算值冒充 ⇒ 本条红 |
+| **U11** | **免责声明在场（★ 评审 🟡#3②）**：`action=forensics` 的输出**含**那句「**非正常退出不单独归因**」（本批只留现场、不下崩溃结论）；★ **且**「正常退出」与「崩溃」同形这件事在输出里说清 | 删掉那句 ⇒ 本条红 |
 
-**两次实测读数（实施方必须给）**：修复前（把周期心跳那一句去掉）⇒ **U2 红**；接上 ⇒ 全绿。清理判据的**双向**读数：不清理 ⇒ U5 红；清理但删错（含本次）⇒ U5 红。
+**用户故事 → 判据映射（★ 评审 🔵#6 要求显式化）**
+
+| US | 承接的判据 |
+| --- | --- |
+| **US-K1**（看死前读数） | U1 · U2（心跳在场且更新）· U10（磁盘诚实） |
+| **US-K2**（看死亡窗口时长） | U4（窗口计算 + 首次运行如实说「无」） |
+| **US-K3**（一条命令可读） | U6（只读合同）· U7（输出面）· U11（免责声明） |
+| **US-K4**（不打扰、有界） | U5（保留上限）· U8（失败静默） |
+
+**两次实测读数（实施方必须给）**：修复前（把周期心跳那一句去掉）⇒ **U2 红**；接上 ⇒ 全绿。清理判据的**双向**读数：不清理 ⇒ U5 红；清理但删错（含本次）⇒ U5 红。磁盘与免责声明两条的**双向**读数：桩成 reject ⇒ U10 绿而「编造数字」的变异版本红；删免责句 ⇒ U11 红。
 
 ---
 
