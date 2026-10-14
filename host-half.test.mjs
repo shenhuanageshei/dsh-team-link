@@ -306,6 +306,36 @@ function makeSessionProjections({ readings = {}, omit = false, throws = false } 
 }
 
 /**
+ * `permissionPresets` 服务桩（批 P · FR-P4 的**写面**）。宿主真身
+ * （`@deepseek-ai/dsh-permission-presets`）：`current(session)` 读该会话当前的审批档名、
+ * `set(session, name)` 写它。桩**按会话 id 记值、写后读得到同一个值** —— 只记调用次数的桩
+ * 会把「设进去了没有」这层（评审 🔴#1 的原话：判据不能只查「印了字」）永久挡在套件外。
+ *
+ * 两个旋钮都是**形状断层**那一档的 fixture（与 `makeAgentPresets` 的 `omitMount` 同一纪律：
+ * 缺了它，「服务在场但写面不在」这条判据永远看不到那个形状）：
+ *   - `omitSet`：服务在场、**没有** `set` ⇒ 插件必须**具名拒绝那次调用**（不裸 TypeError）；
+ *   - `refuseSet`：`set` 在场但抛错 ⇒ 回执/文档必须如实说「没设成」。
+ */
+function makePermissionPresets({ presets = {}, omitSet = false, refuseSet = false } = {}) {
+	const values = new Map(Object.entries(presets));
+	const sets = [];
+	const sessionIdOf = (session) => session?.header?.id ?? session?.id ?? null;
+	const service = {
+		current(session) { return values.get(sessionIdOf(session)); },
+		...(omitSet ? {} : {
+			async set(session, value) {
+				if (refuseSet) throw new Error("stub permissionPresets.set refused");
+				const sessionId = sessionIdOf(session);
+				sets.push({ sessionId, session, value });
+				values.set(sessionId, value);
+				return { currentValue: value };
+			},
+		}),
+	};
+	return { service, sets, values, valueOf: (session) => values.get(sessionIdOf(session)) };
+}
+
+/**
  * 宿主**真实形状**的会话对象（AGENTS.md §四：桩必须镜像宿主，不能只镜像自家调用面）。
  * 真身 `sessionProjections.stateOf(session, key)` 内部会走 `session.snapshotEvents(...)` —— 不具该方法的
  * 会话对象（例如插件自己捏的 `{ header: { id } }` 替身）在真宿主必抛
@@ -483,8 +513,7 @@ function makeAgentPresets({ defaultId = STUB_DEFAULT_PRESET, known = [STUB_DEFAU
 	return { service, resolved, standings, acquired, released, legacyPinned, mounts, defaultId, pinSurface };
 }
 
-/** DEFECT-1 的端到端读数，按**会话 id** 配对（不按位置）：`meta.agentPreset`
- * （宿主此后要读的那一份）与 `mount` 真正绑定的 preset（agent 的 persona-prefix
+/** DEFECT-1 的端到端读数，按**会话 id** 配对（不按位置）：`meta.agentPreset`（宿主此后要读的那一份）与 `mount` 真正绑定的 preset（agent 的 persona-prefix
  * 组装源）必须同源，且各恰一次。① 缺省、② 显式 preset=、③a `successor:"auto"`
  * 三条路径共用这一个判据 —— 判据只写一处，才不会出现「三处口径」。 */
 function presetBindingOf(env) {
@@ -1124,6 +1153,9 @@ function setup({
 	sessionTitleOptions = undefined,
 	omitAgentDefaultModel = false,
 	agentDefaultModelOptions = undefined,
+	/** 批 P（FR-P4）: 审批档写面（`permissionPresets`）的两档 fixture —— 服务缺席 / 形状断层。 */
+	omitPermissionPresets = false,
+	permissionPresetsOptions = undefined,
 	workspaceRegistryOptions = undefined,
 	failCreateAt = -1,
 	createdHook = undefined,
@@ -1321,6 +1353,12 @@ function setup({
 	// 可用的 provider/model」那一档。
 	const agentDefaultModel = makeAgentDefaultModel(agentDefaultModelOptions ?? {});
 	if (!omitAgentDefaultModel) ctx.provide("agentDefaultModel", agentDefaultModel.service);
+	// 批 P（FR-P4）：审批档的**写面**。同一款可选服务——默认提供（探针 2 的结论：真宿主
+	// `permissionPresets.set(session, name)` 对插件自建会话可达），`omitPermissionPresets` 是
+	// 「服务完全缺席」那一档，`permissionPresetsOptions.omitSet` 是「服务在场、写面形状断层」
+	// 那一档（两者都必须走 FR-P3 的如实行，绝不裸 TypeError、绝不阻断换届）。
+	const permissionPresets = makePermissionPresets(permissionPresetsOptions ?? {});
+	if (!omitPermissionPresets) ctx.provide("permissionPresets", permissionPresets.service);
 	// --- 策略持久化自持化（设计档 §3.2）: 每个夹具一个**私有** DSH_HOME ---------
 	// 文件后端在 settings 缺席时接管落点，所以夹具必须各占一个 home —— 共用一个会
 	// 让后建的夹具读到前一个夹具的 teams（真机上正是「换个工作区团队就没了」的反面）。
@@ -1390,7 +1428,7 @@ function setup({
 	const invoke = (rawInput, agent = senderAgent) => ({ commandId: "cmd-test", agent, rawInput, attachments: [], signal: new AbortController().signal });
 	/** G2 handle: the provider-side peak of concurrent `agents.create` calls. */
 	const maxCreateInFlight = () => createInFlight.max;
-	return { policyHome: policyDir, systemPrompt, projections: projectionsStub, ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideConnection, connection, provideCommands, agentPresets, workspaceRegistry, sessionTitle, agentDefaultModel, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
+	return { policyHome: policyDir, systemPrompt, projections: projectionsStub, ctx, prepared, setFailWith: (error) => { failWith = error; }, setHiddenAgent: (id, value) => { if (value) hidden.add(id); else hidden.delete(id); }, setScript: (entry) => { uq.script.push(entry); }, registeredTools, routes, senderAgent, senderCalls, targetAgent, targetCalls, uq, tool, settings, log, query, provideSettings, provideSettingsFiber, provideWebServer, provideConnection, connection, provideCommands, agentPresets, workspaceRegistry, sessionTitle, agentDefaultModel, permissionPresets, agentFor: (id) => agents.get(id), extraCalls, commands, created: agentFactory.created, creates: agentFactory.creates, actionLog, invoke, maxCreateInFlight, resumeCalls, resumeRecords, resumedAgents, agents };
 }
 
 function execFor(agent) {
@@ -3592,7 +3630,7 @@ const rotRoles = () => [
  * and the trust state a rotation operates on. `receiveMode: accept` keeps notice
  * delivery out of the receiver dialog; the notice cases set their mode explicitly.
  */
-function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, agentPresetsOptions = undefined, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, projectionsReadings = undefined, omitResume = false, extraAgents = undefined, omitAgentsCreate = false } = {}) {
+function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, agentPresetsOptions = undefined, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitPermissionPresets = false, permissionPresetsOptions = undefined, projectionsReadings = undefined, omitResume = false, extraAgents = undefined, omitAgentsCreate = false } = {}) {
 	const env = setup({
 		sessions: [],
 		useSettings: true,
@@ -3624,6 +3662,10 @@ function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trus
 		// 里带上模型选择，否则「令牌投给了一个跑不起来的持钥者、而旧任已冻结」。
 		omitAgentDefaultModel,
 		agentDefaultModelOptions,
+		// 批 P（FR-P4）：审批档**写面**的两档降级 fixture 同样透传（auto 与 reappoint 两条路
+		// 都走同一个 `applyInheritedApprovalPolicy`，所以两档都必须在真路径上能造出来）。
+		omitPermissionPresets,
+		permissionPresetsOptions,
 		// 批 P（FR-P1/FR-P2）：继承读取器的模型投影读数面（`sessionProjections.stateOf(session,
 		// "modelSelection")` 的读数）。透传它 = 让 `successor:"auto"` 这条真路径能带上
 		// 「前任上次用的模型对」，而不是只测一个复制品。
@@ -14541,17 +14583,21 @@ check("批 J · U6 反走私负向判据（★ 收尾单补齐：此前如实登
 
 // ---------------------------------------------------------------------------
 // 批 P · 换届继任者的设置继承（设计档 docs/2026-10-14-rotation-inheritance-design.md）
-// FR-P1 读取器 + FR-P2 两个调用点接线；§8 的判据 Pi1 / Pi2 / Pi5 / Pi6。
-// **本块 4 条判据，共 7 条断言**（Pi1 两条 · Pi2 两条 · Pi5 两条 · Pi6 一条）。
+// 第 1 单：FR-P1 读取器 + FR-P2 两个调用点接线；§8 的判据 Pi1 / Pi2 / Pi5 / Pi6。
+// 第 2 单（收口）：FR-P3 三处如实可见 + FR-P4 审批档继承（创建返回之后设）；§8 的余下判据
+//   Pi3 / Pi4 / Pi7 / Pi8 / Pi9。
+// **本块 9 条判据，共 14 条断言**（Pi1 两条 · Pi2 两条 · Pi3 一条 · Pi4 一条 · Pi5 两条 ·
+//   Pi6 一条 · Pi7 三条 · Pi8 一条 · Pi9 一条）；`grep -c '批 P · Pi' host-half.test.mjs` = 14。
 // 三个宿主探针的结论（只读，实读宿主 app.asar）：
 //   探针 1 通过 —— 非调用方会话的 provider/model 可读（活代理走宿主持久投影
 //     `sessionProjections.stateOf(session, "modelSelection").lastUsed`，无活代理走
 //     `sessionQuery.readSession` 的最后一条 `request/header`）⇒ 模型**继承**分支生效。
 //   探针 2 通过 —— `permissionPresets.set(session, name)` 对插件自建会话可达，且宿主自己的
 //     建会话路径（asar 的 `createWebhookSession`）是 **create 返回之后** 才设 ⇒ FR-P4 走默认
-//     支路（本单不做 FR-P4，审批档**不进 plan**）。
+//     支路（审批档**不进 plan**，`buildTeamSessionCreateOptions` 逐字不改 —— D6）。
 //   探针 3 通过 —— 代理不在场时 `header.agentPreset` 仍可读（`sessionQuery.readSession` 返回
-//     盘上那份 `SessionLogHeader`）⇒ 「已死前任仍可继承预设」分支生效（Pi1 第二条断言）。
+//     盘上那份 `SessionLogHeader`）⇒ 「已死前任仍可继承预设」分支生效（Pi1② 直接驱动读取器、
+//     Pi9 走完整 reappoint 链，两条各是一次读数）。
 // ---------------------------------------------------------------------------
 const piInherit = __testing.readInheritableSettings;
 /** 前任 header 里存着的**非缺省** preset（必须在 `makeAgentPresets` 的 `known` 里）。 */
@@ -14623,9 +14669,152 @@ check(`批 P · Pi6 不回归（红相＝把回退源改到 \`buildTeamSessionCr
 	piCreateBody.includes("async function buildTeamSessionCreateOptions(") && !piCreateBody.includes("readInheritableSettings") && !piCreateBody.includes("sessionQuery")
 	&& piExplicitPlan.meta?.agentPreset === "coder" && piExplicitPlan.agentOptions?.provider === "explicit-provider" && piExplicitPlan.agentOptions?.model === "explicit-model"
 	&& hostSource.includes("agent?.session?.header?.agentPreset"));
-// ★ 批 P 定点修复轮的**中间读数**（定位用；**不新增、不放宽任何断言** —— 本块仍是 4 条判据 7 条
-//   断言，`assertion total` 随之不变）。四格对应「① 夹具喂的投影读数 ② 实现取的是哪条读面
-//   ③ 宿主缺省模型服务被问了几次、问的什么 ④ 最终进 plan 的那一对」，外加 Pi2① 三条子句的逐条读数。
+
+// ===========================================================================
+// 批 P · 第 2 单（收口单）：FR-P3 三处如实可见 · FR-P4 审批档继承 · Pi3/Pi4/Pi7/Pi8/Pi9
+// 红相读数（父侧口径：每条判据都要给「怎么让它红」）逐条写在 check 文案里。
+// ===========================================================================
+
+// --- Pi3 + Pi7（**同一个 env**，两条判据共用一次真路径；★ 评审 🔴#1 的落地）--------
+// 为什么共用：原设计的洞正是「只打印一行『审批档=Z』而没真设 ⇒ Pi3 照样绿」。同一个夹具
+// 同时读「三处印了什么」与「那次设置调用真发生了没有、设成什么」，那层洞才关得上。
+/** 前任的审批档（与宿主缺省不同名；桩不校验名字，真机是 permissionPresets 的档位名）。 */
+const PI_APPROVAL = "pi3-approval-preset";
+const PI3_WS = path.join(HANDOFF_WS, "pi3");
+const pi3Env = rotateEnv({
+	askScript: ["创建并交班"],
+	teams: handoffTeam(PI3_WS),
+	// 探针 1 / 探针 2 的两条读面都喂上：模型对 + 审批档（`permissions.currentValue`）。
+	projectionsReadings: {
+		modelSelection: { lastUsed: { provider: PI_INCUMBENT_PROVIDER, model: PI_INCUMBENT_MODEL }, pending: null },
+		permissions: { currentValue: PI_APPROVAL },
+	},
+});
+pi3Env.senderAgent.session.header.agentPreset = PI_INCUMBENT_PRESET;
+const pi3Out = String(await pi3Env.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: PI_HANDOFF }, execFor(pi3Env.senderAgent)));
+const pi3Dialog = String(pi3Env.uq.requests[0]?.questions?.[0]?.question ?? "");
+const pi3Doc = await __testing.latestHandoffDocument(pi3Env.team(), "coordinator");
+const pi3DocText = pi3Doc.path === null ? "" : await readFile(pi3Doc.path, "utf8");
+/** 三项的**取值形态**（这一次三项都继承得到，所以三行里没有「未继承」）。 */
+const PI3_ROWS = [`preset=${PI_INCUMBENT_PRESET}`, `model=${PI_INCUMBENT_PROVIDER}/${PI_INCUMBENT_MODEL}`, `审批档=${PI_APPROVAL}`];
+const pi3Missing = {
+	dialog: PI3_ROWS.filter((row) => !pi3Dialog.includes(row)),
+	receipt: PI3_ROWS.filter((row) => !pi3Out.includes(row)),
+	document: PI3_ROWS.filter((row) => !pi3DocText.includes(row)),
+};
+check(`批 P · Pi3 三处如实可见（红相＝去掉任一处（确认框正文 / prepare 回执 / handoff 事实段）的那三行 ⇒ 对应那一格非空 ⇒ 本条红；把「未继承」的原因换成一句笼统话 ⇒ Pi8/Pi4 红）: 三处**各自**含**逐项**继承行 —— preset / model / 审批档三项各一行，且三处渲染的是**同一份**取值（值形态：${PI3_ROWS.join(" / ")}；未继承时同一位置写成「未继承（原因：…）」）`
+	+ (Object.values(pi3Missing).every((list) => list.length === 0) ? "" : `（实测缺：${show(pi3Missing)}）`),
+	pi3Dialog !== "" && pi3Out !== "" && pi3DocText !== ""
+	&& Object.values(pi3Missing).every((list) => list.length === 0)
+	// 三处各自**逐项**在场（不是「至少一处有」）：三行各出现恰一次以上，且三处都点了名。
+	&& PI3_ROWS.every((row) => pi3Dialog.split(row).length - 1 === 1 && pi3Out.split(row).length - 1 === 1 && pi3DocText.split(row).length - 1 === 1));
+check(`批 P · Pi7① 审批档**真被设进**（红相＝把那次设置调用改成 **no-op**（例如把 \`applyInheritedApprovalPolicy\` 里的 \`set\` 那一句删掉 / 只留回执行）⇒ \`sets\` 为空 ⇒ 本条红。★ 这正是评审 🔴#1 的洞：只印一行「审批档=${PI_APPROVAL}」而没真设，Pi3 照样绿）: 探针 2 通过的分支 ⇒ 创建返回**之后** \`permissionPresets.set\` **恰被调用一次**，第二参就是前任值、第一参就是**新会话自己**的会话对象，且写后读回的该会话审批档**等于**前任值（不是「印了字」而是「服务里真的变了」）`,
+	pi3Env.creates.length === 1 && pi3Env.permissionPresets.sets.length === 1
+	&& pi3Env.permissionPresets.sets[0].value === PI_APPROVAL
+	&& pi3Env.permissionPresets.sets[0].sessionId === pi3Env.creates[0]?.sessionId
+	&& pi3Env.agentFor(pi3Env.creates[0]?.sessionId) !== undefined
+	&& pi3Env.permissionPresets.valueOf(pi3Env.agentFor(pi3Env.creates[0].sessionId).session) === PI_APPROVAL
+	&& pi3Out.includes("审批档落地（FR-P4）：已在创建返回之后调用 permissionPresets.set"));
+// 支路 ②（服务**缺席**）：读得到、但写面不在场 ⇒ **零设置调用** + FR-P3 的如实行（D4）。
+const pi7NoFaceEnv = rotateEnv({
+	askScript: ["创建并交班"],
+	teams: handoffTeam(path.join(HANDOFF_WS, "pi7-noface")),
+	omitPermissionPresets: true,
+	projectionsReadings: { permissions: { currentValue: PI_APPROVAL } },
+});
+const pi7NoFaceOut = String(await pi7NoFaceEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: PI_HANDOFF }, execFor(pi7NoFaceEnv.senderAgent)));
+check(`批 P · Pi7② 降级支路「服务不在场」零设置调用（红相＝这条路上仍去调用设置（裸调一个不存在的服务 ⇒ 裸 TypeError）⇒ 本条红）: \`permissionPresets\` 缺席时换届照常跑完（创建恰一次），**一次设置调用都没有**，且回执里那一行如实写成「审批档=未继承（原因：宿主没有 permissionPresets 服务…）」——看得见就不算静默（D4）`,
+	pi7NoFaceEnv.creates.length === 1 && pi7NoFaceEnv.permissionPresets.sets.length === 0
+	&& pi7NoFaceOut.includes("审批档=未继承（原因：宿主没有 permissionPresets 服务")
+	&& !pi7NoFaceOut.includes("审批档落地（FR-P4）"));
+// 支路 ③（**形状断层**：服务在场、没有 `set`）：具名拒绝那次调用 —— 绝不裸 TypeError，也绝不阻断换届。
+const pi7BrokenEnv = rotateEnv({
+	askScript: ["创建并交班"],
+	teams: handoffTeam(path.join(HANDOFF_WS, "pi7-broken")),
+	permissionPresetsOptions: { omitSet: true },
+	projectionsReadings: { permissions: { currentValue: PI_APPROVAL } },
+});
+const pi7BrokenOut = String(await pi7BrokenEnv.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: PI_HANDOFF }, execFor(pi7BrokenEnv.senderAgent)));
+check(`批 P · Pi7③ 形状断层 ⇒ 具名拒绝文案（红相＝把 \`approvalWriteFace\` 的形状门去掉 ⇒ 裸调 \`service.set\` ⇒ 裸 TypeError \`service.set is not a function\`，那条消息里既没有「写面形状断层」也没有出路 ⇒ 本条红）: 服务在场但没有 \`set\` 时，插件**不裸调**、**不裸 TypeError**、**不阻断换届**（创建恰一次、令牌照发），三处如实行点名「写面形状断层」与核对出路（与 preset 面 {@link buildTeamSessionCreateOptions} 的形状断层同款纪律）`,
+	pi7BrokenEnv.creates.length === 1 && pi7BrokenEnv.permissionPresets.sets.length === 0
+	&& pi7BrokenOut.includes("审批档=未继承（原因：permissionPresets 服务在场，但写面形状断层")
+	&& pi7BrokenOut.includes("不裸 TypeError") && pi7BrokenOut.includes("0.4.2 记过")
+	&& !pi7BrokenOut.includes("审批档落地（FR-P4）"));
+
+// --- Pi8：前任**从没存过** preset（与 Pi4 的「解析抛」是两条不同的路径）-------------
+const PI8_WS = path.join(HANDOFF_WS, "pi8");
+const pi8Env = rotateEnv({ askScript: ["创建并交班"], teams: handoffTeam(PI8_WS) });
+// 前任 = coordinator 的现任 = `session-self`，**活代理**，而它自己从没存过 preset
+// （夹具默认的 header 里没有 agentPreset）—— 这一档走的就是读取器里「活着但没存过」那一支。
+const pi8Out = String(await pi8Env.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: PI_HANDOFF }, execFor(pi8Env.senderAgent)));
+const pi8Dialog = String(pi8Env.uq.requests[0]?.questions?.[0]?.question ?? "");
+const pi8Doc = await __testing.latestHandoffDocument(pi8Env.team(), "coordinator");
+const pi8DocText = pi8Doc.path === null ? "" : await readFile(pi8Doc.path, "utf8");
+/** 具名如实行的那一段（设计档 §9 的原句形状；主机侧只判「这一段在不在」）。 */
+const PI8_ROW = "preset=未继承（原因：前任无存量";
+check(`批 P · Pi8 前任从没存过 preset（红相＝把这条路径写成**静默落缺省**（读取器返回 null 而不给原因 / 三处不印那一行）⇒ 本条红）: \`header.agentPreset\` 为空 ⇒ 继任者落**宿主缺省**（${STUB_DEFAULT_PRESET}），且确认框正文 / prepare 回执 / 交接文档事实段**三处**都写出具名行「${PI8_ROW}…）」——「没继承」与「为什么没继承」一起说`,
+	pi8Env.senderAgent.session.header.agentPreset === undefined
+	&& pi8Env.creates.length === 1 && pi8Env.creates[0].meta?.agentPreset === STUB_DEFAULT_PRESET
+	&& pi8Dialog.includes(PI8_ROW) && pi8Out.includes(PI8_ROW) && pi8DocText.includes(PI8_ROW));
+
+// --- Pi4：继承来的 preset **不可解析** ⇒ 不阻断创建（设计档 §9 那一档）---------------
+const PI4_GHOST = "ghost-preset";
+const PI4_WS = path.join(HANDOFF_WS, "pi4");
+const pi4Env = rotateEnv({ askScript: ["创建并交班"], teams: handoffTeam(PI4_WS) });
+// 前任存着一个**已知名字但解析不出来**的 preset（桩的 `resolve` 对不在 `known` 里的 id 抛错，
+// 与真宿主的 `agent-preset/not-found` 同形）。
+pi4Env.senderAgent.session.header.agentPreset = PI4_GHOST;
+const pi4Out = String(await pi4Env.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: PI_HANDOFF }, execFor(pi4Env.senderAgent)));
+const pi4Doc = await __testing.latestHandoffDocument(pi4Env.team(), "coordinator");
+const pi4DocText = pi4Doc.path === null ? "" : await readFile(pi4Doc.path, "utf8");
+check(`批 P · Pi4 不阻断（红相＝改成 fail-closed 拒绝创建（把 \`resolve\` 的抛错放行到 \`createRootAgent\`）⇒ \`agents.create\` 零次、换届整条失败 ⇒ 本条红）: 前任 preset（${PI4_GHOST}）不可解析 ⇒ **创建仍成功**（\`agents.create\` **恰一次**）、新会话落宿主缺省（${STUB_DEFAULT_PRESET}）、plan 里那一项已降级为 \`undefined\`（读数：\`resolve\` 先被探一次（${PI4_GHOST}）再以 \`undefined\` 走缺省解析），且回执含**未继承 + 原因 + 出路**（原因点名那个 id、出路点名「在设置里恢复或重命名」）`,
+	pi4Env.creates.length === 1 && pi4Env.creates[0].meta?.agentPreset === STUB_DEFAULT_PRESET
+	&& pi4Env.agentPresets.resolved.length === 2 && pi4Env.agentPresets.resolved[0] === PI4_GHOST && pi4Env.agentPresets.resolved[1] === undefined
+	&& pi4Out.includes(`preset=未继承（原因：前任的 preset「${PI4_GHOST}」已不可解析`)
+	&& pi4Out.includes(`宿主 resolve 抛：agent-presets: preset "${PI4_GHOST}" not found`)
+	&& pi4Out.includes("出路：在设置里恢复或重命名这个 preset")
+	&& pi4DocText.includes(`preset=未继承（原因：前任的 preset「${PI4_GHOST}」已不可解析`));
+
+// --- Pi9：**已死前任**（探针 3 通过 ⇒ 会话级读面仍继承；reappoint 那条路天然是它）----
+// 这一条走的是**真 reappoint 链**（对话框 → 铸 id → create → 交接文档 → prepare），而不是
+// 直接驱动读取器：Pi1② 已经直接驱动过读取器，这里要证的是「这条链上没有谁把它掐成 null」。
+const PI9_WS = path.join(HANDOFF_WS, "pi9");
+const PI9_DEAD = "team-link-night-shift-worker-b-9f9f9f9f";
+const pi9Reads = [];
+const pi9Env = rotateEnv({
+	askScript: [[__testing.SELF_SUCCESSOR_LABEL]],
+	teams: [{
+		name: "night-shift",
+		createdAt: 1_700_000_000_000,
+		workspace: PI9_WS,
+		policy: { writer: "coordinator" },
+		rotationBackup: null,
+		roles: [seededRole("coordinator", "session-self"), seededRole("worker-b", PI9_DEAD)],
+	}],
+	extraAgents: [{ id: PI9_DEAD, status: "idle" }],
+});
+pi9Env.setHiddenAgent(PI9_DEAD, true);
+// 探针 3 的那条读面：夹具**声明盘上那份 header 里存着前任的 preset**（活代理不在场，值仍在盘上）。
+// 这是「夹具声明它服务的形状」，不是给插件开后门：读取器走的就是 `sessionQuery.readSession`。
+pi9Env.query.readSession = async (id) => { pi9Reads.push(id); return { session: { id, cwd: PI9_WS, agentPreset: PI_INCUMBENT_PRESET }, events: [] }; };
+const pi9Out = String(await pi9Env.tool("team_link_recover").execute({ action: "reappoint", team: "night-shift", role: "worker-b" }, execFor(pi9Env.agentFor("session-self"))));
+const pi9Dialog = String(pi9Env.uq.requests[0]?.questions?.[0]?.question ?? "");
+const pi9Doc = await __testing.latestHandoffDocument(pi9Env.team(), "worker-b");
+const pi9DocText = pi9Doc.path === null ? "" : await readFile(pi9Doc.path, "utf8");
+check(`批 P · Pi9 已死前任仍继承（红相＝让「代理不在场」直接**静默成 \`null\`**（即 \`readInheritedPreset\` 在 \`liveAgent === undefined\` 时不走会话级冷读、也不给原因）⇒ \`meta.agentPreset\` 落宿主缺省 ${STUB_DEFAULT_PRESET} 且三处无如实行 ⇒ 本条红）: reappoint 的「自建继任者」这条链上（前任**按定义**已死）预设**仍继承** —— 新会话 \`meta.agentPreset\` 等于盘上那份 header 的值（${PI_INCUMBENT_PRESET} ≠ 缺省 ${STUB_DEFAULT_PRESET}），冷读面被点了名（同一个前任 id），且三处如实行写的是**取值形态**（不是「未继承」）`,
+	pi9Env.creates.length === 1 && pi9Env.creates[0].meta?.agentPreset === PI_INCUMBENT_PRESET
+	&& PI_INCUMBENT_PRESET !== STUB_DEFAULT_PRESET
+	&& pi9Reads.includes(PI9_DEAD)
+	&& pi9Dialog.includes(`preset=${PI_INCUMBENT_PRESET}`)
+	&& pi9Out.includes(`preset=${PI_INCUMBENT_PRESET}`)
+	&& pi9DocText.includes(`preset=${PI_INCUMBENT_PRESET}`)
+	&& !pi9Out.includes("preset=未继承"));
+
+// ★ 批 P 第 1 单定点修复轮的**中间读数**（定位用；**不新增、不放宽任何断言**）。四格对应
+//   「① 夹具喂的投影读数 ② 实现取的是哪条读面 ③ 宿主缺省模型服务被问了几次、问的什么
+//   ④ 最终进 plan 的那一对」，外加 Pi2① 三条子句的逐条读数。★ 第 2 单在同一处补了六格
+//   新读数（Pi3 三处缺项 / Pi7 的 set 调用 / Pi4 的 resolve 序列 / Pi8 的缺省 / Pi9 的冷读点名）——
+//   同样只打印，不参与任何判据（判据在各自的 check 里）。
 console.log(`[PI-DIAG] ${JSON.stringify({
 	piProjectionsReadings: piEnv.projections.readings,
 	piProjectionStateOfModelSelection: piEnv.projections.calls.filter((row) => row.key === "modelSelection"),
@@ -14644,6 +14833,18 @@ console.log(`[PI-DIAG] ${JSON.stringify({
 	piBlind: [piBlind.preset, piBlind.provider, piBlind.model, piBlind.approvalPolicy],
 	piFallbackPair: `${piFallbackEnv.creates[0]?.agentOptions?.provider ?? "-"}/${piFallbackEnv.creates[0]?.agentOptions?.model ?? "-"}`,
 	piFallbackDefaultCalls: piFallbackEnv.agentDefaultModel.calls.length,
+	pi3Missing,
+	pi3Rows: PI3_ROWS,
+	pi7Sets: pi3Env.permissionPresets.sets.map((entry) => `${entry.sessionId}:${entry.value}`),
+	pi7NoFaceSets: pi7NoFaceEnv.permissionPresets.sets.length,
+	pi7BrokenSets: pi7BrokenEnv.permissionPresets.sets.length,
+	pi4Resolved: pi4Env.agentPresets.resolved,
+	pi4Meta: pi4Env.creates[0]?.meta?.agentPreset ?? null,
+	pi8PresetLine: PI8_ROW,
+	pi8Meta: pi8Env.creates[0]?.meta?.agentPreset ?? null,
+	pi9Meta: pi9Env.creates[0]?.meta?.agentPreset ?? null,
+	pi9ColdReads: pi9Reads,
+	pi9ReceiptHasValueRow: pi9Out.includes(`preset=${PI_INCUMBENT_PRESET}`),
 })}`);
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
