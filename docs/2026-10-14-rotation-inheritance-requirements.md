@@ -1,6 +1,8 @@
 # 批 P · 换届继任者的设置继承 —— 需求档
 
 > 本档只写**要解决什么**（三层：总体目标 / 功能用户故事 / 非功能标准）与**明确的非目标**。
+> **实施状态（2026-10-14，批 P 落码）**：**已实施** —— 落点与判据见设计档头注（`readInheritableSettings` ＋ 两处接线 ＋ 三处逐项如实可见 ＋ 审批档创建后设）；**US-P1…US-P4 逐条落地**（US-P1/2 由 `Pi1`/`Pi2` 的双分支覆盖 · US-P3 由 `Pi3` 的三处逐项覆盖 · US-P4 由 `Pi4`/`Pi7`/`Pi8`/`Pi9` 的如实报与降级分支覆盖）；**NF-P1…NF-P5 守住**（import 仍 8 条 · `policy.json` 仍十键 · 读不到不阻断 · 每条判据带红相 · `/team_session` 与复活路径零回归）。**宿主机读** `1697 (failed: 0)` · client `310 (failed: 0)`。
+>
 > **怎么做**在设计档 [`docs/2026-10-14-rotation-inheritance-design.md`](2026-10-14-rotation-inheritance-design.md)。
 > 行号一律 as-of **2026-10-14 工作树（commit `7a7b984`）**，实施按**符号名**定位。
 > **设计输入出处（会诊 #66）**：本轮**有会诊** —— [`docs/consult-minutes/2026-10-14-consult-66-minutes.md`](consult-minutes/2026-10-14-consult-66-minutes.md)（4/5 有效），父侧裁定层 §2–§5；用户 2026-10-14 裁定「都按你建议」（含**不重启 DSH**）。

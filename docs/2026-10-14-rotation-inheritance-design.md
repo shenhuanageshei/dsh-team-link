@@ -2,6 +2,8 @@
 
 > **规格档**。需求档 [`docs/2026-10-14-rotation-inheritance-requirements.md`](2026-10-14-rotation-inheritance-requirements.md)。
 > 行号一律 as-of **2026-10-14 工作树（commit `7a7b984`）**，实施按**符号名**定位。
+> **实施状态（2026-10-14，批 P 落码）**：**已实施** —— 落点 `lib/index.js`：**`readInheritableSettings`**（FR-P1，四项 / 读不到 `null` / **绝不抛**）＋ 两处调用点接线（FR-P2，`autoHandover` 与 `appointSelfBuiltSuccessor`，**只有 preset/provider/model 进 plan**）＋ **三处逐项如实可见**（FR-P3：确认框正文 / prepare 回执 / 交接文档事实段）＋ **审批档继承**（FR-P4，**创建返回之后设**，共用函数 `buildTeamSessionCreateOptions` 逐字未改）。判据 **`Pi1`–`Pi9`（14 条 `check()`）**在 `host-half.test.mjs` 的「批 P」块。★ **三个宿主探针全通过**（翻宿主 `app.asar`，只读检索）：模型对可读 · 审批档可写且是「创建返回后设」· 已死前任可读预设 ⇒ **三项都不必降级**。**宿主机读**：`node host-half.test.mjs` ⇒ `ALL PASS / 1697 (failed: 0)` · `node client-half.test.mjs` ⇒ `310 (failed: 0)`；构成 `1697 = 1646 + 20 + 8 + 9 + 14`。★ 实施拆两小单；第二单以 `error` 终止（路由 `deepseek-flash`），**代码与判据已落盘并经父侧实测全绿**，文档收口由父侧补齐。
+>
 > **设计输入**：会诊 #66（4/5 有效）→ [`docs/consult-minutes/2026-10-14-consult-66-minutes.md`](consult-minutes/2026-10-14-consult-66-minutes.md) §2–§5；用户 2026-10-14 裁定「都按你建议」。
 > ★ 本档全文不写出框定 token 的原串（批 E 立仓规）；新测试标识符统一用 **`Pi` 中缀**。
 
