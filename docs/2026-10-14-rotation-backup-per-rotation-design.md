@@ -1,5 +1,8 @@
 # 批 Q · 换届的「撤销依据」按换届各存一份 —— 设计档
 
+> **★ 接续须知（2026-10-15 凌晨，父侧写）**：本档**已两轮评审判 PASS**（`advisor-dsh-20` / `advisor-dsh-22`：逐条验证 7 条折入全部为已修，无未解决 🔴，评审原文 `[APPROVE:7032d28f]` + `VERDICT: PASS`）；**但平台的签发闸门两次都拒发令牌** —— 理由是「评审表格中仍存在未解决的阻塞行（严重度单元格为 🔴）」，而它指的是**那行「🔴：状态=Fixed」的等级列**（启发式误判；批 P 的同格式第二轮曾正常签发）。叠加**第一次复审 FAIL 已撤销本会话既有签发** ⇒ **本会话实施被硬卡**（`eng_coder` 回执：「no design token issued in this session（从未签发）」）。
+> **⇒ 接续方式**：**开一个新会话**（**不需要重启 DSH**），在新会话里对**本档 + 配对需求档**跑一次 `advisor(type='design')`（新会话 ⇒ 评审计数重置、按第 1 轮做完整评审、PASS 即签发令牌），然后按设计档 §5 的 FR-Q1…FR-Q5 实施。**设计本身无需改动**。
+
 > **规格档**。需求档 [`docs/2026-10-14-rotation-backup-per-rotation-requirements.md`](2026-10-14-rotation-backup-per-rotation-requirements.md)。
 > 行号一律 as-of **2026-10-14 工作树（commit `826b0ec`）**，实施按**符号名**定位。
 > **设计输入**：会诊 **#66** 父侧裁定层 §3-①（[`docs/consult-minutes/2026-10-14-consult-66-minutes.md`](consult-minutes/2026-10-14-consult-66-minutes.md)）；用户 2026-10-14 裁定「起批 0」「可以」。
