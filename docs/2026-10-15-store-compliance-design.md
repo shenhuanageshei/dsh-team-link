@@ -72,7 +72,7 @@ DSH STORE 的**上架自动检查**（每 8 小时扫固定 commit）在 [issue 
 | **FR-R2** | **闸门改写**：把「顶层 `^import` 恰 8 条」改成「**汇总宿主半边文件的宿主说明符**恰 8 条」（白名单逐字不变），并新增「模块图无环」断言。★ **要改的既有断言恰 7 处**（评审 🟡#3 折入：按**判定文本前缀** grep 定位，逐处给出，不靠判据 ID 猜）—— `U19 日志事件`（`host-half.test.mjs:7337`）· `批 H · NF-H5 零新依赖`（`:13137`）· `批 I · U17 零新依赖`（`:13422`）· `批 K · U9 零新依赖`（`:13785`）· `批 L · Aw7 零新依赖`（`:14120`）· `批 J · U8 零新依赖`（`:14426`）· `批 P · Pi5② 零新依赖`（`:14653`）；七处**都读 `lib/index.js` 的顶层 import 行**（`HOST_IMPORTS` 白名单在 `:7332`）⇒ 拆分后**全部会失效**，**必须同批改齐** | `host-half.test.mjs` 上述七处 · `lib/index.js` |
 | **FR-R3** | **`engines` 声明**：`package.json` 加 `"engines": {"node": ">=22"}`；★ README 的「宿主版本支持」表**已核实在场**（`README.md:1224`「### 宿主版本支持（先读这一节）」），但**它只列 DSH 版本、没有 Node** ⇒ 本 FR 是**新增一行 Node 范围**（不是「同步既有值」） | `package.json` · `README.md:1224` 起那张表 |
 | **FR-R4** | **装/启/卸证据**：按 D7 做一次并记入证据账本（三段输出原文） | `docs/verification-log.md`（只追加） |
-| **FR-R5** | **文档与计数收口**：合规档 §六 的字节数改准（1,092,693 ⇒ 拆后最大值 + 每档实数）· CHANGELOG 补批 R 条目 · README 设计文档索引登记本批两档 + 合规档 | `docs/2026-10-15-store-compliance.md` · `CHANGELOG.md` · `README.md` |
+| **FR-R5** | **文档与计数收口**：合规档 §六 的字节数改准（1,092,693 ⇒ 拆后最大值 + 每档实数）· CHANGELOG 补批 R 条目 · README 设计文档索引登记本批两档 + 合规档 · ★ **同批改准需求档 §六**的笔误（`NR-R2`/`NR-R3` ⇒ `NF-R2`/`NF-R3`）与判据范围（`Rr1–Rr6` ⇒ **`Rr1–Rr8`**，并点名 NF-R1 ⇒ Rr8）—— 评审 🔵#4，父侧尝试就地改未果（锚点字符不匹配），**登记给实施方按 grep 收口** | `docs/2026-10-15-store-compliance.md` · `docs/2026-10-15-store-compliance-requirements.md` · `CHANGELOG.md` · `README.md` |
 
 **改动的文件面**：`lib/index.js` · 新 `lib/<域>.js`（≥4 个）· `host-half.test.mjs` · `package.json` · `README.md` · `CHANGELOG.md` · `docs/2026-10-15-store-compliance.md` · `docs/verification-log.md` · 本批两份档。
 
