@@ -23,6 +23,9 @@
   "scripts": {
     "test": "node host-half.test.mjs && node client-half.test.mjs"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
