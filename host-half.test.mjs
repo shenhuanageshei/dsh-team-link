@@ -3111,18 +3111,23 @@ check("§3.5: and the fan-out still steers the running target and follows up the
 // U13 (§10.1.2): the sender-side receipt — `output.presentationMeta`
 // ---------------------------------------------------------------------------
 
-// The two SOURCE reads the §12.5 cross-half lock below needs. `new URL(…,
+// The client-half SOURCE read the §12.5 cross-half lock below needs. `new URL(…,
 // import.meta.url)` (never `import.meta.resolve`, which resolves against the
 // process cwd — the ② 收口轮's own lesson) so the run reads the real files from
 // any working directory.
-const hostSource = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
+// ★ 批 R FR-R0：**宿主半边的读数不再在这里定义** —— `hostSource` 现在是
+// `hostHalfFiles()` 全部文件的**拼接**（定义在下面那个 helper 块的末尾，因为「宿主半边文件集」
+// 这个 helper 必须先就位）。今日文件集只有 `lib/index.js` 一档 ⇒ 全文 23 处文本锁与框定 token
+// 残留扫描的读数与旧定义（只读 `lib/index.js`）**逐字相同**；拆档后它们自动跟着新文件集走。
 const clientSource = await readFile(fileURLToPath(new URL("./lib/client.js", import.meta.url)), "utf8");
 
 // ---------------------------------------------------------------------------
-// 批 R · FR-R2 前半：**宿主半边文件集**与**宿主说明符汇总**（新闸门口径）
+// 批 R · FR-R0（第 0 小单）：宿主半边文件集 · 宿主说明符**去重集合** · hostSource 拼接
+// 同时是 FR-R2 前半（新闸门口径）的落点
 // ---------------------------------------------------------------------------
-// 归属：设计档 docs/2026-10-15-store-compliance-design.md §4 D3 · §5 FR-R2 ·
-// §8 Rr3（判据表）· docs/2026-10-15-store-compliance-requirements.md §四 NF-R4。
+// 归属：设计档 docs/2026-10-15-store-compliance-design.md §5 **FR-R0**（★ 实施中发现的设计缺口，
+// 2026-10-15 折入）· §4 D3 · §5 FR-R2 · §8 Rr3（判据表；Rr0①/② 的判据在文件末尾的「批 R」块）
+// · docs/2026-10-15-store-compliance-requirements.md §四 NF-R4。
 //
 // 为什么改口径：拆分（FR-R1）会把宿主半边拆成 `lib/index.js` ＋ 若干域档，模块之间
 // 必然用**相对导入**（`./<域>.js`）—— 旧口径（「`lib/index.js` 顶层 `^import` 恰 8 条」）
@@ -3134,11 +3139,19 @@ const clientSource = await readFile(fileURLToPath(new URL("./lib/client.js", imp
 // **永久红**的写法）。今天 `lib/client.js` 顶层**零条** `import`（client bundle 里 import
 // 被禁，见该文件里那句注释），所以把汇总面**改成含 `client.js`** 并不改变说明符清单、
 // 只改变**文件集** ⇒ 那条红相由 Rr3② 的**文件集锁**承接（不是靠说明符条数）。
-// 本单（R-1）还没有拆分 ⇒ `hostHalfFiles()` 此刻等价于 `["lib/index.js"]`，于是七处既有
-// 断言的**语义逐字不变、仍绿**；下一单拆分时它们自动跟着新文件集走，不需要再改一次。
+// 本单（R-1）还没有拆分 ⇒ `hostHalfFiles()` 此刻等价于 `["lib/index.js"]`，八处既有
+// 断言（`U19` / 批 H `NF-H5` / 批 I `U17` / 批 K `U9` / 批 L `Aw7` / 批 J `U8` /
+// 批 P `Pi5②` / 批 R `Rr3①`）**全部改成集合比较**后仍绿。
+// ★ **口径更正（批 R 第 0 小单 FR-R0 实测）**：旧文写「下一单拆分时它们自动跟着新文件集走，
+// 不需要再改一次」——**与实测不符**。拆分必然引入跨档的**重复**宿主说明符（例如 `node:fs/promises`
+// 在每个用到落盘/读取的域档里都会出现），而旧实现是**逐文件扁平拼接、不去重**：白名单仍是 8 个
+// 而聚合值会随文件数翻倍（两个文件 ⇒ 8，三个 ⇒ 最多 24），**八处断言会同时假红**。两个 helper
+// 因此在本单**同批改准**：① `hostHalfSpecifiers()` **去重 ＋ 排序**（集合口径，与文件数无关）；
+// ② `hostSource` 改成 `hostHalfFiles()` 的**拼接**（此前它只读 `lib/index.js` ⇒ 域档一搬出去，
+// 全文那 23 处文本锁与框定 token 残留扫描会**静默读到空串**，这是假绿而不是假红）。
 
 /** 宿主半边的文件集：`lib/` 下的 `.js`（**排除 `client.js`**），按文件名排序。
- * 拆分后这里自动多出域档 —— 闸门口径不需要再改。 */
+ * 拆分后这里自动多出域档 —— 文件集自动跟随，闸门口径不需要再改。 */
 const hostHalfFiles = () => readdirSync(fileURLToPath(new URL("./lib/", import.meta.url)), { withFileTypes: true })
 	.filter((entry) => entry.isFile() && entry.name.endsWith(".js") && entry.name !== "client.js")
 	.map((entry) => `lib/${entry.name}`)
@@ -3152,8 +3165,43 @@ const hostSpecifiersOf = (source) => source.split(/\r?\n/u)
 	.map((line) => (/from\s+"([^"]+)"/u.exec(line) ?? [])[1])
 	.filter((specifier) => typeof specifier === "string" && !specifier.startsWith("."));
 
-/** 汇总 `hostHalfFiles()` 里逐字出现的宿主说明符（文件按名字排序、文件内按行序）。 */
-const hostHalfSpecifiers = () => hostHalfFiles().flatMap((file) => hostSpecifiersOf(readFileSync(fileURLToPath(new URL(`./${file}`, import.meta.url)), "utf8")));
+/** 把 `hostHalfFiles()` 的返回值（或判据面的内存投影）归一成**文件路径列表**：
+ * ① `string[]`（生产路径）：真文件相对路径，按给定顺序；
+ * ② `Map<路径, 源码>`（**判据面**，Rr0① 的合成投影）：取键 —— **注意不能直接展开 Map**，
+ *    展开得到的是 `[key, value]` 二元组（那正是本小单首跑当场 ENOENT 的根因）。
+ * ★ 末行是**前置条件**（fail-closed）：列表非空且逐项是字符串，否则当场说清是哪一种形状错了
+ * —— 少了它，形状一变就退化成「拿二元组去读文件」这种难定位的 ENOENT。 */
+const hostHalfPaths = (files) => {
+	const list = Array.isArray(files) ? [...files] : files instanceof Map ? [...files.keys()] : null;
+	if (list === null || list.length === 0 || !list.every((file) => typeof file === "string" && file !== "")) {
+		throw new TypeError(`hostHalfPaths: 需要非空的路径数组或 Map<路径, 源码>（收到 ${show(files)}）`);
+	}
+	return list;
+};
+
+/** `files` 里某一档的正文 —— 两种**同样真实**的形态（同一个 helper 吃下两者，Rr0 因此不必给
+ * `node:fs` 打桩就能把**内存里的合成投影**喂进真实现）：
+ * ① `"lib/<名>.js"`：真文件相对路径 ⇒ 读盘；② `Map<"lib/<名>.js", 源码>`：**内存投影** ⇒ 直取。 */
+const hostHalfFileText = (file, sources) => (sources instanceof Map ? sources.get(file) : readFileSync(fileURLToPath(new URL(`./${file}`, import.meta.url)), "utf8"));
+
+/** 聚合**任意一组宿主半边档**里的宿主说明符：逐档取 `hostSpecifiersOf()`、**去重（集合口径）
+ * ＋ 按字典序排序**。去重是**判据成立的前提** —— 拆分引入的跨档重复说明符会按文件数把聚合值
+ * 撑大（见上面那条口径更正）；排序让比较与**文件顺序 / 导入行序**无关（本仓旧口径下三处比较
+ * 就把期望值 `.sort()` 后 join 成字符串）。
+ * ★ 入参就是 `hostHalfFiles()` 的返回值：真文件路径数组，或（**判据面**）`Map<路径, 源码>`
+ * 形态的**内存投影** —— Rr0① 用它喂**合成三文件夹具**证明去重生效，走的是与真读数
+ * **同一条**实现（生产路径照旧只传路径数组）。 */
+const hostHalfSpecifiersOf = (files) => [...new Set(hostHalfPaths(files).flatMap((file) => hostSpecifiersOf(hostHalfFileText(file, files))))].sort();
+
+/** 汇总 `hostHalfFiles()` 里出现的宿主说明符 —— **去重 ＋ 排序后的集合**（同上）。 */
+const hostHalfSpecifiers = () => hostHalfSpecifiersOf(hostHalfFiles());
+
+/** 宿主半边**全部源码的拼接**（`hostHalfFiles()` 的顺序：按文件名排序、档内按正文原序、档间 `\n`）。
+ * ★ 此前它只读 `lib/index.js`；改成拼接后，全文那 23 处文本锁与框定 token 残留扫描在拆分后
+ * **自动跟着新文件集走**（今日文件集只有入口那一档 ⇒ 本行读数与旧定义**逐字相同**）。
+ * ★ 求值时机：模块体**只在这里求值一次**（与旧定义相同——旧定义也是一次 `await readFile`），
+ * 所以拆档发生在**本轮运行之内**是不会被看见的（拆档后重跑即自动跟随）。 */
+const hostSource = hostHalfFiles().map((file) => readFileSync(fileURLToPath(new URL(`./${file}`, import.meta.url)), "utf8")).join("\n");
 
 /** One dispatch and its card, projected the way the Tool registry does it: the
  * body stashes the card against the frozen `exec.arguments` object and the
@@ -7364,17 +7412,23 @@ check("DEFECT-2 源码锁: 全模块 `.attachSession(` / `.detachSession(` 各**
 // 两种拼法，所以「换个写法再开第二个取用点」也躲不过；注释里因此不写这两种字面量。
 check("DEFECT-4 源码锁: `ctx.get(\"sessionTitle\")` 恰一处、`.rename(` 恰一处（② 与 ③a 共用同一个注入点，不存在各写一遍的第二处）", (hostSource.match(/ctx\.get\??\.\("sessionTitle"\)/gu) ?? []).length === 1 && (hostSource.match(/\.rename\(/gu) ?? []).length === 1);
 // 批 R（FR-R2）口径改写：从「`lib/index.js` 顶层 import 行」改成「**宿主半边文件集**
-// 汇总出的宿主说明符」—— 只数宿主说明符，内部相对导入（`./<域>.js`）不计入（见本文件
-// 顶部那两个 helper 的注释与设计档 §8 Rr3）。本单还没拆分 ⇒ 此处读数与旧口径逐字等价。
-const importList = hostHalfSpecifiers();
+// 汇总出的宿主说明符」—— 只数宿主说明符，内部相对导入（`./<域>.js`）不计入；
+// 且**去重 ＋ 排序**（FR-R0：跨档重复说明符按文件数把聚合值撑大 ⇒ 旧「恰 8 条」口径会假红）。
+// 比较一律走 `hostSpecifierSetMatches()`（下一条 `check` 之前定义）。
+const u19ImportSpecs = hostHalfSpecifiers();
 // 策略持久化自持化（设计档 §3.2/§3.4）新增两个**已审计**模块：`node:fs`（同步读 policy.json）与 `node:os`（homedir 兜底）—— 两者都不是会话日志写入面，U19 的红线（不得自己长出日志写入 API）不受影响；
 // 同一次改动把清单从六个模块变成八个，列表与文案里的计数**同改**（本仓纪律 ①）。
 const HOST_IMPORTS = ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "schemastery", "node:crypto", "node:fs/promises", "node:fs", "node:os", "node:path"];
+/** ★ 闸门本体（批 R FR-R0 收口）：聚合出来的宿主说明符**逐字恰为白名单那个集合** ——
+ * 去重后的**条数**与**成员**两侧都咬。★ 这条谓词**不是**「包含即可」：`aggregated.length === WHITELIST.length`
+ * 挡住「新加第 9 个宿主依赖」，`every` 两侧挡住「换掉 / 少掉一条」。八处零新依赖断言全部改用它，
+ * Rr0② 即在**合成夹具**上证明「第 9 个 ⇒ 必红」（把本函数改成 subset/包含口径 ⇒ Rr0② 红）。 */
+const hostSpecifierSetMatches = (aggregated, whitelist) => Array.isArray(aggregated) && Array.isArray(whitelist) && aggregated.length === whitelist.length && aggregated.every((specifier) => whitelist.includes(specifier)) && whitelist.every((specifier) => aggregated.includes(specifier));
 // `appendFile(`/`writeFile(` are deliberately NOT in this list: they are the
 // blackboard's own file writes (`team/<name>/decisions.md`), not session log
 // writes — the red line is about event types, not about the plugin touching disk.
 check("U19 日志事件: the host module itself never appends or emits a session-log event — no `ctx.session` write seam (the only `ctx.*` session contact is the read-only `sessionQuery`, `sessionReferenceResolver` and `agents`), no `session.append` / appendEvent / writeEvent / logEvent / `ctx.emit` anywhere in the module (源码级锁；插件间接写会话只经上游的 `agents.create` / `agent.followup`)", !/ctx\.session(?![A-Za-z])/u.test(hostSource) && !/\.append(Event)?\(/u.test(hostSource) && !/\b(appendEvent|writeEvent|logEvent|emitEvent)\b/u.test(hostSource) && !/\bctx\.emit\(/u.test(hostSource) && !/\bsession\.append/u.test(hostSource));
-check("U19 日志事件: ... and the **host half's** whole import surface (aggregated over hostHalfFiles(), 批 R 口径: 只数宿主说明符, 内部相对导入不计入) is the eight audited modules — a whitelist, so a new dependency cannot slip a log-write API in (`@deepseek-ai/dsh-session-reference` is upstream's deep-link parser, not a session-log writer)", sameJson(importList, HOST_IMPORTS) && importList.every((specifier) => HOST_IMPORTS.includes(specifier)));
+check("U19 日志事件: ... and the **host half's** whole import surface (aggregated over hostHalfFiles(), 批 R 口径: 只数宿主说明符, 内部相对导入不计入, 并**去重 + 排序**成集合) IS the eight audited modules — a set whitelist, so a new dependency cannot slip a log-write API in (`@deepseek-ai/dsh-session-reference` is upstream's deep-link parser, not a session-log writer)", hostSpecifierSetMatches(u19ImportSpecs, HOST_IMPORTS));
 // The runtime half, on a REAL batch (2 workers, the §10.2.6 default shape): drive
 // the command, then replay its own `agent/pre-step` listener. The listener is the
 // one seam that could inject a session-log event; it must only hand the payload
@@ -13172,10 +13226,10 @@ check("批 H · U12② 写前重读：★ 确认期间别的行被并发改动 �
 
 // --- NF-H5: 零新依赖（八条 import 白名单是硬闸门） ------------------------------
 // 批 R（FR-R2）口径改写：读数从「`lib/index.js` 顶层 import 行」改成「**宿主半边文件集**
-// 汇总出的宿主说明符」（本单还没拆分 ⇒ 两者等价）。
+// 汇总出的宿主说明符」（**去重 ＋ 排序成集合**；本单还没拆分 ⇒ 两者等价）。
 const h8DhImportSpecs = hostHalfSpecifiers();
-check("批 H · NF-H5 零新依赖（红相＝本批新增任何 import ⇒ 本条红）: 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入）汇总出的宿主说明符仍**恰 8 条**，八条说明符逐字是白名单那一份（本批用的 `readdir` / `path` / `basename` 全部来自既有八条）。★ 范围如实：同一条白名单另有既有锁（`U19 日志事件` 的 import surface），本条是**本批自己的**第二把锁 + 点名本批的到达路径",
-	h8DhImportSpecs.length === 8 && h8DhImportSpecs.slice().sort().join(",") === ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "node:crypto", "node:fs", "node:fs/promises", "node:os", "node:path", "schemastery"].join(","));
+check("批 H · NF-H5 零新依赖（红相＝本批新增任何 import ⇒ 本条红）: 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入、**去重 ＋ 排序成集合**）汇总出的宿主说明符仍**恰为白名单那 8 个**，说明符逐字是白名单那一份（本批用的 `readdir` / `path` / `basename` 全部来自既有八条）。★ 范围如实：同一条白名单另有既有锁（`U19 日志事件` 的 import surface），本条是**本批自己的**第二把锁 + 点名本批的到达路径",
+	hostSpecifierSetMatches(h8DhImportSpecs, HOST_IMPORTS));
 
 // ===========================================================================
 // 批 I · 屏蔽的作用域（block scope）
@@ -13457,10 +13511,10 @@ check("批 I · U19 落点不变量（红相＝双写 / 绕开 `policy.update` �
 
 // --- U17: 零新依赖（八条 import 白名单是硬闸门） -----------------------------------
 // 批 R（FR-R2）口径改写：读数从「`lib/index.js` 顶层 import 行」改成「**宿主半边文件集**
-// 汇总出的宿主说明符」（本单还没拆分 ⇒ 两者等价）。
+// 汇总出的宿主说明符」（**去重 ＋ 排序成集合**；本单还没拆分 ⇒ 两者等价）。
 const biImportSpecs = hostHalfSpecifiers();
-check("批 I · U17 零新依赖（红相＝本批顺手新增一个 import ⇒ 本条红）: 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入）汇总出的宿主说明符仍**恰 8 条**，八条说明符逐字是白名单那一份（新工具用的是本文件已有的 `wellFormed` / `agentSessionId` / `policy`）",
-	biImportSpecs.length === 8 && biImportSpecs.slice().sort().join(",") === ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "node:crypto", "node:fs", "node:fs/promises", "node:os", "node:path", "schemastery"].join(","));
+check("批 I · U17 零新依赖（红相＝本批顺手新增一个 import ⇒ 本条红）: 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入、**去重 ＋ 排序成集合**）汇总出的宿主说明符仍**恰为白名单那 8 个**，说明符逐字是白名单那一份（新工具用的是本文件已有的 `wellFormed` / `agentSessionId` / `policy`）",
+	hostSpecifierSetMatches(biImportSpecs, HOST_IMPORTS));
 
 // --- U9: 文档同批改准（工具面 / README / CHANGELOG / backlog） ---------------------
 const biReadmeSource = await readFile(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
@@ -13818,15 +13872,14 @@ check("批 K · U8 失败方向（负相自证）: 同一档夹具里**确实**�
 // ★ `fkLibSource` 保留原样：U13 的负向锁还要用它做「宿主那个目录名零命中」的源码检索。
 const fkLibSource = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
 // 批 R（FR-R2）口径改写：读数从「`lib/index.js` 顶层 import 行」改成「**宿主半边文件集**
-// 汇总出的宿主说明符」（本单还没拆分 ⇒ 两者等价）。
+// 汇总出的宿主说明符」（**去重 ＋ 排序成集合**；本单还没拆分 ⇒ 两者等价）。
 const fkImportSpecs = hostHalfSpecifiers();
 const fkU9 = fkEnv({ name: "u9", useSettings: false, watchdogs: [] });
 await fkU9.tool("team_link_roster").execute({ action: "upsert-team", team: "fk-team" }, execFor(fkU9.senderAgent));
 await fkWaitBeat(fkU9);                           // 首拍是异步原子写 ⇒ 读它之前先等 I/O 落定（见 fkWaitBeat）
 const fkU9PolicyDoc = JSON.parse(await readFile(path.join(fkU9.policyHome, "team-link", "policy.json"), "utf8"));
-check("批 K · U9 零新依赖 + 零 schema（红相＝新增一条 import 行、或往 policy.json 的 schema/键集里加一格 ⇒ 本条红）: 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入）汇总出的宿主说明符仍**恰 8 条**、八条说明符逐字是白名单那一份（本批用到的 `statfs` / `rm` 只加在既有 `node:fs/promises` 那一行的**解构列表**里 ⇒ 条数与说明符都没变）；且 `policy.json` 仍是**十键**（心跳写在**它自己的目录**里，一个字节都没进策略档）",
-	fkImportSpecs.length === 8
-		&& fkImportSpecs.slice().sort().join(",") === ["@deepseek-ai/dsh-session-reference", "@deepseek-ai/dsh-tools", "node:crypto", "node:fs", "node:fs/promises", "node:os", "node:path", "schemastery"].join(",")
+check("批 K · U9 零新依赖 + 零 schema（红相＝新增一条 import 行、或往 policy.json 的 schema/键集里加一格 ⇒ 本条红）: 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入、**去重 ＋ 排序成集合**）汇总出的宿主说明符仍**恰为白名单那 8 个**、说明符逐字是白名单那一份（本批用到的 `statfs` / `rm` 只加在既有 `node:fs/promises` 那一行的**解构列表**里 ⇒ 条数与说明符都没变）；且 `policy.json` 仍是**十键**（心跳写在**它自己的目录**里，一个字节都没进策略档）",
+	hostSpecifierSetMatches(fkImportSpecs, HOST_IMPORTS)
 		&& sameJson(Object.keys(fkU9PolicyDoc.policy).sort(), U19_POLICY_KEYS)
 		&& existsSync(path.join(fkU9.fkRoot, fkU9.ctl().bootId, FK_HEARTBEAT)));
 
@@ -14158,10 +14211,10 @@ check("批 L · Aw6 零 schema / 零形状变更（红相＝顺手往 `policy.js
 
 // --- Aw7: 零新依赖（条数锁；NF-L1）------------------------------------------
 // 批 R（FR-R2）口径改写：读数从「`lib/index.js` 顶层 import 行」改成「**宿主半边文件集**
-// 汇总出的宿主说明符」（本单还没拆分 ⇒ 两者等价）。批 J 的 U8 复用下面这份同一读数。
+// 汇总出的宿主说明符」（**去重 ＋ 排序成集合**；本单还没拆分 ⇒ 两者等价）。批 J 的 U8 复用下面这份同一读数。
 const awImportSpecs = hostHalfSpecifiers();
-check("批 L · Aw7 零新依赖（红相＝新增第二条 import 行 / 换掉任一说明符 ⇒ 本条红）: 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入）汇总出的宿主说明符仍**恰 8 条**、八条说明符逐字是白名单那一份（`HOST_IMPORTS`，与 `U19 日志事件` 同一份真读数）。★ 口径如实：本批**一个新名字都没加** —— 随机后缀用既有的 `createHash`（`node:crypto`）、残留清理用既有的 `rm`（批 K 已加进 `node:fs/promises` 那一行的解构列表）⇒ 设计档留的那条「确需 `unlink` 时只加在既有解构行里」的退路**最终没有用到**，`import` 面一个字符未动",
-	awImportSpecs.length === 8 && sameJson(awImportSpecs, HOST_IMPORTS));
+check("批 L · Aw7 零新依赖（红相＝新增第二条 import 行 / 换掉任一说明符 ⇒ 本条红）: 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入、**去重 ＋ 排序成集合**）汇总出的宿主说明符仍**恰为白名单那 8 个**、说明符逐字是白名单那一份（`HOST_IMPORTS`，与 `U19 日志事件` 同一份真读数）。★ 口径如实：本批**一个新名字都没加** —— 随机后缀用既有的 `createHash`（`node:crypto`）、残留清理用既有的 `rm`（批 K 已加进 `node:fs/promises` 那一行的解构列表）⇒ 设计档留的那条「确需 `unlink` 时只加在既有解构行里」的退路**最终没有用到**，`import` 面一个字符未动",
+	hostSpecifierSetMatches(awImportSpecs, HOST_IMPORTS));
 
 // --- Aw8: 负向锁（NF-L2 不退化：必经接缝、且不直接写目标）----------------------
 const awSeamStatementLines = AW_SEAM_BODY.split("\n").slice(1, -1).filter((line) => line.trim() !== "");
@@ -14465,10 +14518,10 @@ check("批 J · U7 不回归（红相①＝顺手把「空闲待派」塞进 `TI
 // --- U8：零新依赖 / 零 schema（NF-J1 ＋ 设计档 §7）-----------------------------------
 // 归属：设计档 §7（`policy.json` 一字不改、进程内只多两个去抖 Map）· §8 U8；需求档 NF-J1。
 // import 面复用批 L Aw7 的同一份真读数（`hostHalfSpecifiers()` 现读 —— 批 R FR-R2 起口径是
-// 「宿主半边文件集汇总出的宿主说明符」，不重复解析一次）；键集读**注册出去的
+// 「宿主半边文件集汇总出的宿主说明符」，**去重 ＋ 排序成集合**、不重复解析一次）；键集读**注册出去的
 // 命名空间 base**（与 U19 schema 同一个权威读数 `U19_POLICY_KEYS`，不手抄一份）。
-check("批 J · U8 零新依赖 / 零 schema（红相①＝新增第 9 条 import（或换掉任一说明符）⇒ 本条红；红相②＝往策略命名空间加一格键 ⇒ 本条红）: ① 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入）汇总出的宿主说明符仍**恰 8 条**且说明符逐字是白名单那一份；② 注册出去的 `team-link` 命名空间仍**恰十键** —— 本批的两条新告警只用进程内 Map（`idleAlerted` / `pressureAlerted`），`policy.json` 一个字段都没加",
-	awImportSpecs.length === 8 && sameJson(awImportSpecs, HOST_IMPORTS)
+check("批 J · U8 零新依赖 / 零 schema（红相①＝新增第 9 条 import（或换掉任一说明符）⇒ 本条红；红相②＝往策略命名空间加一格键 ⇒ 本条红）: ① 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入、**去重 ＋ 排序成集合**）汇总出的宿主说明符仍**恰为白名单那 8 个**且说明符逐字是白名单那一份；② 注册出去的 `team-link` 命名空间仍**恰十键** —— 本批的两条新告警只用进程内 Map（`idleAlerted` / `pressureAlerted`），`policy.json` 一个字段都没加",
+	hostSpecifierSetMatches(awImportSpecs, HOST_IMPORTS)
 		&& sameJson(Object.keys(cjFireEnv.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS));
 
 // --- U9：FR-J4 文档面同批改准（工具 description ↔ README 摘要段 逐字一致）-------------
@@ -14694,12 +14747,12 @@ check(`批 P · Pi2② 读不到的降级支路（红相＝① 读取器把读�
 check(`批 P · Pi5① 零新增政策状态（红相＝往 \`policy.json\` 加一格字段 ⇒ 本条红）: 本批之后，\`team-link\` 命名空间的 base 键集仍与权威读数 \`U19_POLICY_KEYS\` 的**十键**逐字一致（继承是创建那一刻的派生读数，不落盘 —— D5/NF-P2）`,
 	piEnv.settings !== undefined && sameJson(Object.keys(piEnv.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS));
 // 批 R（FR-R2）口径改写：从「八条 import **整行**逐字」改成「宿主半边文件集汇总出的
-// **宿主说明符**恰 8 条、逐字等于白名单」—— 拆分后每个域档可以只导入自己用到的那几个
-// 绑定名，整行逐字比对必然假红；而闸门守的是**宿主依赖面**，不是绑定名清单。
-// 本单还没拆分 ⇒ 旧口径与新口径读的是同一份数据（八条说明符逐字相同、行序也相同）。
+// **宿主说明符**恰为白名单那 8 个（去重 ＋ 排序成集合）」—— 拆分后每个域档可以只导入自己
+// 用到的那几个绑定名，整行逐字比对必然假红；而闸门守的是**宿主依赖面**，不是绑定名清单。
+// 本单还没拆分 ⇒ 旧口径与新口径读的是同一份数据（**去重后**仍是那八条说明符）。
 const piImportSpecs = hostHalfSpecifiers();
-check(`批 P · Pi5② 零新依赖（红相＝加一条顶层 \`import\` / 换掉其中一条 ⇒ 本条红）: 宿主半边文件集（\`hostHalfFiles()\`；批 R 口径：只数**宿主**说明符、内部相对导入不计入）汇总出的宿主说明符仍**恰 8 条**，且逐字等于白名单 \`HOST_IMPORTS\`（读取器只用既有符号：\`ctx.agents\` / \`ctx.sessionQuery\` / \`ctx.get\`）`,
-	piImportSpecs.length === 8 && sameJson(piImportSpecs, HOST_IMPORTS));
+check(`批 P · Pi5② 零新依赖（红相＝加一条顶层 \`import\` / 换掉其中一条 ⇒ 本条红）: 宿主半边文件集（\`hostHalfFiles()\`；批 R 口径：只数**宿主**说明符、内部相对导入不计入、**去重 ＋ 排序成集合**）汇总出的宿主说明符仍**恰为白名单那 8 个**，且逐字等于白名单 \`HOST_IMPORTS\`（读取器只用既有符号：\`ctx.agents\` / \`ctx.sessionQuery\` / \`ctx.get\`）`,
+	hostSpecifierSetMatches(piImportSpecs, HOST_IMPORTS));
 
 // --- Pi6：不回归（两个**没动**的路径） ------------------------------------------
 const piCreateBody = hostSource.slice(hostSource.indexOf("async function buildTeamSessionCreateOptions("), hostSource.indexOf("async function buildTeamSessionResumeOptions("));
@@ -14890,7 +14943,8 @@ console.log(`[PI-DIAG] ${JSON.stringify({
 // 批 R · 上架合规（DSH STORE 契约）—— **首批判据** Rr3 / Rr5 / Rr6
 // ===========================================================================
 // 归属：设计档 docs/2026-10-15-store-compliance-design.md
-//   §4 D1–D7 · §5 FR-R2（闸门改写）/ FR-R3（`engines`）· §8 判据表 Rr1–Rr8 · §9 边界；
+//   §4 D1–D7 · §5 FR-R0（第 0 小单：测试档就绪）/ FR-R2（闸门改写）/ FR-R3（`engines`）
+//   · §8 判据表 Rr1–Rr8（＋ 第 0 小单的 Rr0①–④，见本块 Rr0 一段）· §9 边界；
 //   需求档 docs/2026-10-15-store-compliance-requirements.md §四（NF-R1…NF-R7）；
 //   契约逐条回答 docs/2026-10-15-store-compliance.md（§一 兼容范围 · §二 依赖）。
 //
@@ -14901,6 +14955,9 @@ console.log(`[PI-DIAG] ${JSON.stringify({
 //   · Rr2（入口与对外面逐字不变）/ Rr8（行为零变更）的口径就是**既有套件自身的红绿读数**
 //     ＋ 入口面在本单**本就一字未动**（`package.json` 只新增了 `engines`）⇒ 由后续拆分单承接。
 //   ⇒ 本单不写「还不成立」的判据，也不把既有套件的读数再抄一遍充数。
+// ★ **第 0 小单（FR-R0，2026-10-15）追加 Rr0①–④**：合成三文件投影的去重等价（去重生效）、
+//   第 9 个宿主说明符仍必红（闸门未失明）、真文件集未被投影顶替、合成投影零落盘 ——
+//   它们把「拆分不再撞闸门」这件事从「本单的手工改造」变成**可复跑的判据**。
 
 const rrPkg = JSON.parse(readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"));
 const rrReadme = readFileSync(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
@@ -14915,11 +14972,79 @@ const rrRelativeFixture = [
 	'import schemastery from "schemastery";',
 ].join("\n");
 const rrFixtureSpecs = hostSpecifiersOf(rrRelativeFixture);
+
+// --- Rr0：**去重生效** ＋ **闸门未失明**（FR-R0；设计档 §5 FR-R0 的四条改动里第 1/2/4 条）------
+// 为什么单独立判据：旧口径是「**逐文件扁平拼接、不去重**」＋ 逐处字面 `length === 8`，而
+// 白名单仍是 8 个 ⇒ **任何**满足设计档的拆分（新域档自己也要 `import node:fs/promises`）
+// 都会把聚合值撑到 16 ⇒ 八处断言同时**假红**。这两条判据在**合成夹具**上把修法钉死：
+// ① 跨档重复说明符**恰贡献一次**（去重生效）；② 真加第 9 个宿主说明符时**仍必红**（没放水）。
+// 夹具是内存里的**三段源码**（入口 ＋ 假域档 ＋ 假 shared，各带重叠 `node:*`），逐段写成
+// `lib/<名>.js` 形态喂给真 helper；用 901/902/903 三个不存在的号，`hostHalfFiles()` 那份真
+// 文件集里不会出现它们（Rr0③ 在真实现上复核这一点；合成投影只经 helper 入参进入）。
+const RR_SYNTH_DIR = `__rr-synth-${process.pid}`;
+const RR_SYNTH_FILES = [`lib/${RR_SYNTH_DIR}/901.js`, `lib/${RR_SYNTH_DIR}/902.js`, `lib/${RR_SYNTH_DIR}/903.js`];
+const RR_SYNTH_ENTRY = RR_SYNTH_FILES[0];
+/** 三段源码的**重叠**布局：入口取白名单前 3 个 ＋ 两条相对导入、假域档取第 1/2/4/5 个
+ *（⇒ 重复**必然发生**）、假 shared 取后 4 个 ⇒ **并集恰为白名单那 8 个**、拼接**总数恰 11**
+ *（「拼接数 > 8 ∧ 去重后 = 8」＝ 去重真的在起作用，而不是夹具本身就只有 8 条）。 */
+const RR_SYNTH_RAW_COUNT = 11;
+const RR_SYNTH_EXPECTED = [...HOST_IMPORTS].sort();
+const RR_SYNTH_STRAY = "node:worker_threads";
+const rrSyntheticFile = (name, specifiers) => [
+	`import { sharedThing } from "./shared.js";`,
+	`import { anotherThing } from "./ledger.js";`,
+	...specifiers.map((specifier, index) => `import { thing${index} } from "${specifier}";`),
+	`export const ${name} = 1;`,
+].join("\n");
+const rrSyntheticProjection = (extra) => new Map([
+	[RR_SYNTH_FILES[0], rrSyntheticFile("entry", [...HOST_IMPORTS.slice(0, 3), ...(extra === undefined ? [] : [extra])])],
+	[RR_SYNTH_FILES[1], rrSyntheticFile("domain", [HOST_IMPORTS[0], HOST_IMPORTS[1], HOST_IMPORTS[3], HOST_IMPORTS[4]])],
+	[RR_SYNTH_FILES[2], rrSyntheticFile("shared", HOST_IMPORTS.slice(4))],
+]);
+/** 合成投影的**未去重**宿主说明符总数（＝旧口径「逐文件扁平拼接」的读数口径）。 */
+const rrSyntheticRawSpecifiers = (projection) => [...projection.values()].flatMap((source) => hostSpecifiersOf(source));
+/** 同一份合成投影交给**真 helper** 聚合（`hostHalfSpecifiersOf` 吃内存投影 Map ⇒ 走的是
+ * 拆档后真读数用的同一条**去重 ＋ 排序**实现；零 `node:fs` 打桩、零落盘、零全局改动）。 */
+const rrSyntheticAggregated = (projection) => hostHalfSpecifiersOf(projection);
+/** 集合式的「真文件集 ⊇ 白名单」读数（Rr0① 用它证明**真档**上没漏名字；合成投影只有 3 档）。 */
+const rrRealFilesCoverWhitelist = () => {
+	const realSpecs = hostHalfSpecifiersOf(hostHalfFiles());
+	return HOST_IMPORTS.every((specifier) => realSpecs.includes(specifier));
+};
+const rrSyntheticFiles = rrSyntheticProjection();
+const rrSyntheticRaw = rrSyntheticRawSpecifiers(rrSyntheticFiles);
+const rrSyntheticSpecs = rrSyntheticAggregated(rrSyntheticFiles);
+const rrSyntheticNinthFiles = rrSyntheticProjection(RR_SYNTH_STRAY);
+const rrSyntheticNinthRaw = rrSyntheticRawSpecifiers(rrSyntheticNinthFiles);
+const rrSyntheticNinthSpecs = rrSyntheticAggregated(rrSyntheticNinthFiles);
+
+check(`批 R · Rr0① 合成三文件投影的去重（红相＝去掉 \`hostHalfSpecifiersOf\` 里的去重（\`new Set(...)\`）或回退成逐文件扁平拼接 ⇒ 本条红）: 入口 ＋ 假域档 ＋ 假 shared（各带**重叠** \`node:*\` 说明符，逐文件拼接共 ${RR_SYNTH_RAW_COUNT} 条）经真 helper 聚合后**恰为白名单那 8 个**（现读 ${show(rrSyntheticSpecs)}；未去重读数 ${rrSyntheticRaw.length} 条 ⇒ 去重确实在起作用），且旧读法 ${rrSyntheticRaw.length} 条 ⇒ 旧口径的「恰 8 条」会**假红**（这正是本小单要修的那条根因）`,
+	rrSyntheticRaw.length === RR_SYNTH_RAW_COUNT
+		&& sameJson(rrSyntheticSpecs, RR_SYNTH_EXPECTED)
+		&& hostSpecifierSetMatches(rrSyntheticSpecs, HOST_IMPORTS)
+		&& rrRealFilesCoverWhitelist());
+
+check(`批 R · Rr0② 闸门未失明（红相＝把集合比较改成「包含即可」/ subset ⇒ 本条红，同时八处零新依赖断言会跟着放开）: 往**同一份**合成投影的**入口档**（\`${RR_SYNTH_ENTRY}\`）里再加**第 9 个**宿主说明符 \`${RR_SYNTH_STRAY}\`（未去重 ${rrSyntheticNinthRaw.length} 条、去重后 ${rrSyntheticNinthSpecs.length} 条）⇒ 闸门谓词 \`hostSpecifierSetMatches()\` **必红**（这是八处零新依赖断言共用的那一条谓词）；对照：不加它时同一谓词为**真**`,
+	rrSyntheticNinthRaw.length === RR_SYNTH_RAW_COUNT + 1
+		&& rrSyntheticNinthSpecs.length === HOST_IMPORTS.length + 1
+		&& !hostSpecifierSetMatches(rrSyntheticNinthSpecs, HOST_IMPORTS)
+		&& hostSpecifierSetMatches(rrSyntheticSpecs, HOST_IMPORTS)
+		&& rrSyntheticNinthSpecs.includes(RR_SYNTH_STRAY));
+
+check(`批 R · Rr0③ 真文件集未被投影顶替（★ 负相自证：合成投影只从 helper 的**入参**进 —— \`hostHalfFiles\` 没被打桩、也没被改写过）: \`hostHalfFiles()\` 现读 ${show(hostHalfFiles())} —— 仍是真实目录扫描（含入口 \`lib/index.js\`、不含 \`client.js\`、不含合成号 ${show(RR_SYNTH_DIR)}），且聚合读数 ${show(rrHostSpecs)} 与真读数同源`,
+	hostHalfFiles().includes("lib/index.js")
+		&& !hostHalfFiles().includes("lib/client.js")
+		&& !hostHalfFiles().some((file) => file.includes(RR_SYNTH_DIR))
+		&& sameJson(hostHalfFiles(), rrHostFiles));
+
+check(`批 R · Rr0④ 合成投影**只**经 helper 入参进入（★ 防线判定：合成号 ${show(RR_SYNTH_DIR)} 若真被落盘到 \`lib/\`，投影就不再是「内存里的」夹具 ⇒ 本条红）: 磁盘上 \`lib/${RR_SYNTH_DIR}/\` **不在场**，且 \`lib/index.js\` 的现读正文与本次运行开头那份 \`hostSource\` **逐字相同**（${hostSource.length} 字符；本条同时给 \`Rr0①–③\` 的「零落盘」自证）`,
+	!existsSync(fileURLToPath(new URL(`./lib/${RR_SYNTH_DIR}/`, import.meta.url)))
+		&& readFileSync(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8") === hostSource);
 const rrClientPath = fileURLToPath(new URL("./lib/client.js", import.meta.url));
 const rrClientSpecs = existsSync(rrClientPath) ? hostSpecifiersOf(readFileSync(rrClientPath, "utf8")) : null;
 
-check(`批 R · Rr3① 宿主依赖面（红相＝真加一条**宿主**导入 ⇒ 本条红）: 从 \`hostHalfFiles()\`（现读文件集 ${show(rrHostFiles)}）汇总出的**宿主说明符**恰 8 个、且逐字等于白名单 \`HOST_IMPORTS\`（现读 ${show(rrHostSpecs)}）。★ 本仓自设的「顶层 import 恰 8 条」闸门即由此改写而来：守的是「不引入新的**宿主**依赖面」，不是「文件里只能有 8 行 import」`,
-	rrHostSpecs.length === HOST_IMPORTS.length && sameJson(rrHostSpecs, HOST_IMPORTS) && rrHostSpecs.every((specifier) => HOST_IMPORTS.includes(specifier)));
+check(`批 R · Rr3① 宿主依赖面（红相＝真加一条**宿主**导入 ⇒ 本条红）: 从 \`hostHalfFiles()\`（现读文件集 ${show(rrHostFiles)}）汇总出的**宿主说明符**（去重 ＋ 排序成集合）恰为白名单那 8 个、且逐字等于 \`HOST_IMPORTS\`（现读 ${show(rrHostSpecs)}）。★ 本仓自设的「顶层 import 恰 8 条」闸门即由此改写而来：守的是「不引入新的**宿主**依赖面」，不是「文件里只能有 8 行 import」`,
+	hostSpecifierSetMatches(rrHostSpecs, HOST_IMPORTS));
 
 check(`批 R · Rr3② 范围写死（红相＝把 \`hostHalfFiles()\` 的汇总面**改成含 \`lib/client.js\`** ⇒ 本条红 —— 设计档 §8 Rr3 点名的正是这条红相）: 宿主半边文件集**含**入口 \`lib/index.js\`、**不含** \`lib/client.js\`（该文件真实在场：${existsSync(rrClientPath)}；顶层 \`^import\` 现读 ${rrClientSpecs === null ? "读不到" : `${rrClientSpecs.length} 条`}）—— 浏览器半边有它自己的导入面，把它算进汇总面就是**永久红**`,
 	rrHostFiles.includes("lib/index.js") && !rrHostFiles.includes("lib/client.js") && rrClientSpecs !== null);
