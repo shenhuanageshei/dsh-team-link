@@ -2901,6 +2901,112 @@ check("team_append refuses the same way without a workspace root", noWsAppend.in
 	rmSync(tasksPath, { force: true });
 
 // ---------------------------------------------------------------------------
+// 批 34 · FR-7（**跨仓交付** · team-link 侧）：台账写门
+// 权威规格 = `dsh-thincoder-suite/docs/2026-10-14-anti-drift-design.md` §5 **FR-7**
+// （规则① `done` 需 `claim` 来历 · 规则② `retract` 需**同任务**真实存在的指针 ·
+//  失败朝向 fail-closed）+ §14 **L-9**（开关 = 本仓 `PolicyConfig` 的**嵌套**键
+//  `antiDrift.ledgerTransitionGate`，默认 **OFF**；**开门 = 两侧各设一次** —— suite 侧
+//  `anti_drift_config` 写的是**它自己**配置面上的同名键，对这里的门完全无效）。
+// 判据 = 该档 §8 的腿 **A-7**。落点刻意与写入口一致：全部走**真工具**
+// `team_link_team_append`（门住在 tasks 分支**内部**，没有第二条路径）。
+// ---------------------------------------------------------------------------
+
+const A7_TEAM = "night-shift";
+const a7Text = async () => (existsSync(tasksPath) ? readFile(tasksPath, "utf8") : "");
+const a7Rows = async () => {
+	const text = (await a7Text()).trim();
+	return text === "" ? 0 : text.split(/\r?\n/u).length;
+};
+/** A-7 夹具：与 boardEnv 同一片黑板（`TEAM_WS/team/night-shift/`），写权限放开（本腿测的是
+ * 台账门，不是写权限门）。`gate === undefined` ⇒ **根本不写这个键** = 全新安装那一档。 */
+const a7Env = (gate) => {
+	const env = teamEnv({ teams: [teamRow({ writer: "any" })] });
+	if (gate !== undefined) env.ns.data.antiDrift = { ledgerTransitionGate: gate };
+	return env;
+};
+const a7Append = (env, args) => env.tool("team_link_team_append").execute({ team: A7_TEAM, file: "tasks", ...args }, execFor(env.senderAgent));
+
+// --- A-7 ①：规则①（done 需 claim 来历） ---------------------------------------
+rmSync(tasksPath, { force: true });
+const a7On = a7Env(true);
+const a7Plan = await a7Append(a7On, { kind: "plan", line: "A-7 夹具：一件刚派出去的活" });
+check("A-7 射程（前置）: 门开着也拦不住 kind=plan —— 门只管 `done` / `retract` 两条规则，登记一件活照旧通过（不扩大既有拒绝面）",
+	a7Plan.includes("已追加 tasks #1") && a7Plan.includes("task=t-1") && (await a7Rows()) === 1);
+const a7BeforeNoClaim = await a7Text();
+const a7NoClaim = await a7Append(a7On, { kind: "done", task: "t-1", line: "声称做完了（但没人接过）" });
+check("A-7 ① 无 `claim` 的 `done` ⇒ 拒 + **零写入**（台账字节不变）: 点名任务号 + 指路 `kind=claim` + 收尾 `Nothing was written`",
+	a7NoClaim.includes("拒写 done(t-1)") && a7NoClaim.includes("没有 claim 行") && a7NoClaim.includes("kind=claim")
+		&& a7NoClaim.includes("Nothing was written") && a7NoClaim.startsWith("写入失败：")
+		&& (await a7Text()) === a7BeforeNoClaim);
+const a7Claim = await a7Append(a7On, { kind: "claim", task: "t-1", line: "接了" });
+const a7Done = await a7Append(a7On, { kind: "done", task: "t-1", line: "做完了（有 claim 来历）" });
+check("A-7 ① 对照（门不是恒拒）: 先 `claim` 之后的 `done` 通过 —— #2=claim、#3=done 都落盘",
+	a7Claim.includes("已追加 tasks #2") && a7Done.includes("已追加 tasks #3") && (await a7Rows()) === 3);
+
+// --- A-7 ②：规则②（retract 需**同任务**真实存在的指针） ------------------------
+// 台账此刻：#1 plan t-1 · #2 claim t-1 · #3 done t-1；再登记 t-2（#4）做跨任务靶子。
+const a7Plan2 = await a7Append(a7On, { kind: "plan", line: "A-7 夹具：第二件活（跨任务指针的靶子）" });
+const a7BeforeBadRef = await a7Text();
+check("A-7 ② 前置: 第二件活登记成功（#4 = t-2）—— 跨任务靶子**真实存在**，否则下面的拒绝会假绿",
+	a7Plan2.includes("已追加 tasks #4") && a7Plan2.includes("task=t-2") && (await a7Rows()) === 4);
+const a7GhostSeq = await a7Append(a7On, { kind: "retract", task: "t-1", line: "撤回 #99 的第 2 处（那一行不存在）" });
+check("A-7 ② 指向**不存在**的 `#<seq>` ⇒ 拒 + 零写入（点名抽到的引用 + 列本任务可用行 + `Nothing was written`）",
+	a7GhostSeq.includes("拒写 retract") && a7GhostSeq.includes("#99") && a7GhostSeq.includes("Nothing was written")
+		&& (await a7Text()) === a7BeforeBadRef);
+const a7CrossSeq = await a7Append(a7On, { kind: "retract", task: "t-1", line: "撤回 #4 的第 1 处（那是 t-2 的行）" });
+check("A-7 ② ★**同任务谓词**（`#<seq>` 面 · 本腿的变异靶之一）: `#4` **真实存在**但属于**别的任务** ⇒ 拒 + 零写入 —— 拿别人的任务行当凭据 = 装饰不是证据",
+	a7CrossSeq.includes("拒写 retract") && a7CrossSeq.includes("#4") && a7CrossSeq.includes("Nothing was written")
+		&& (await a7Text()) === a7BeforeBadRef);
+const a7CrossTask = await a7Append(a7On, { kind: "retract", task: "t-1", line: "撤回 t-2 上那条派活" });
+check("A-7 ② ★**同任务谓词**（`t-<n>` 面 · 本腿的变异靶之一）: `t-2` **真实存在**但 ≠ 本行的 `t-1` ⇒ 拒 + 零写入",
+	a7CrossTask.includes("拒写 retract") && a7CrossTask.includes("t-2") && a7CrossTask.includes("Nothing was written")
+		&& (await a7Text()) === a7BeforeBadRef);
+const a7GoodSeq = await a7Append(a7On, { kind: "retract", task: "t-1", line: "撤回 #3 的第 2 处：是我读数窗口旧了" });
+check("A-7 ② 指向**本任务**真实存在的 `#<seq>` ⇒ 通过（与既有语料同形：既有夹具的 retract 正文正是「撤回 #N 的…」）",
+	a7GoodSeq.includes("已追加 tasks #5") && (await a7Rows()) === 5);
+const a7GoodTask = await a7Append(a7On, { kind: "retract", task: "t-1", line: "撤回 t-1 上那条 claim" });
+check("A-7 ② 指向**本任务号**的 `t-<n>` ⇒ 通过", a7GoodTask.includes("已追加 tasks #6") && (await a7Rows()) === 6);
+const a7DecisionsPristine = await readFile(decisionsPath, "utf8");
+const a7Decisions = await a7On.tool("team_link_team_append").execute({ team: A7_TEAM, file: "decisions", line: "门只在 tasks 分支内" }, execFor(a7On.senderAgent));
+check("A-7 射程: 门**只**在 tasks 分支内生效 —— decisions 写入照旧（另两个分支的拒绝面一个字节没动）",
+	a7Decisions.includes("已追加 decisions #") && a7Decisions.includes("author=session-self"));
+await writeFile(decisionsPath, a7DecisionsPristine, "utf8");
+
+// --- A-7 ③：默认 OFF 与「开关 OFF ⇒ 与改动前逐字等价」 ------------------------
+const a7DefaultEnv = a7Env(undefined);
+check("A-7 ③ 缺省读数（A-13 同族）: **不种任何键**时真策略视图读回 `antiDrift.ledgerTransitionGate === false`，且声明面（注册出去的 base）里确有 `antiDrift` 这一项 —— 「接线在、声明不在」的半成品形态被钉死",
+	__testing.policyFor(a7DefaultEnv.ctx).get().antiDrift.ledgerTransitionGate === false
+		&& Object.keys(a7DefaultEnv.settings.namespaces.get("team-link").base).includes("antiDrift"));
+rmSync(tasksPath, { force: true });
+const a7Off = a7Env(false);
+const a7OffPlan = await a7Append(a7Off, { kind: "plan", line: "门关着时的派活" });
+const a7OffDone = await a7Append(a7Off, { kind: "done", task: "t-1", line: "没 claim 也照写（门关着）" });
+check("A-7 ③ 开关 OFF ⇒ **零回归**（规则① 那一半）: 同一条「无 `claim` 的 `done`」照写不误 —— 门关闭时本批的改动对写入行为**不可见**",
+	a7OffPlan.includes("已追加 tasks #1") && a7OffDone.includes("已追加 tasks #2") && (await a7Rows()) === 2);
+const a7OffRetract = await a7Append(a7Off, { kind: "retract", task: "t-1", line: "撤回 #99 的第 2 处（门关着，照写）" });
+check("A-7 ③ 开关 OFF ⇒ **零回归**（规则② 那一半）: 指向不存在行的 `retract` 照写不误",
+	a7OffRetract.includes("已追加 tasks #3") && (await a7Rows()) === 3);
+rmSync(tasksPath, { force: true });
+
+// --- A-7 ④：开关可读可写 + 非法值被 zod 拒 ------------------------------------
+const a7Store = __testing.policyFor(a7DefaultEnv.ctx);
+await a7Store.update({ antiDrift: { ledgerTransitionGate: true } });
+const a7ReadBackOn = a7Store.get().antiDrift.ledgerTransitionGate;
+await a7Store.update({ antiDrift: { ledgerTransitionGate: false } });
+const a7ReadBackOff = a7Store.get().antiDrift.ledgerTransitionGate;
+check("A-7 ④ 可读可写: 经真策略 store 写 true ⇒ 读回 true；写回 false ⇒ 读回 false（门随下一次写入判读走，无需重启）",
+	a7ReadBackOn === true && a7ReadBackOff === false);
+await a7Store.update({ antiDrift: { ledgerTransitionGate: "yes" } });
+check("A-7 ④ **非法值被 zod 拒**（读真声明面 `__testing.PolicyConfig`）: `ledgerTransitionGate: \"yes\"` 过不了声明面（抛 `expected boolean`），而缺省形态落成 `false`；同一份垃圾值在**归一化**层也不会把门打开（非 `true` 即 `false`）",
+	(() => { try { __testing.PolicyConfig({ antiDrift: { ledgerTransitionGate: "yes" } }); return false; } catch { return true; } })()
+		&& __testing.PolicyConfig({}).antiDrift.ledgerTransitionGate === false
+		&& a7Store.get().antiDrift.ledgerTransitionGate === false);
+
+// 收尾：把本块动过的共享黑板还原（decisions 已在上面写回；tasks 删掉），后面任何一节都
+// 不会观察到 A-7 的夹具。
+rmSync(tasksPath, { force: true });
+
+// ---------------------------------------------------------------------------
 // M3 (§3.4): broadcast fan-out — one full gate pass per target
 // ---------------------------------------------------------------------------
 
@@ -5443,7 +5549,7 @@ const reapTool = reapEnv.tool("team_link_recover");
 // ★ FR-10（批 5）: attach 后置链现在会按队补挂 auto 工作台注册 ⇒ 命名空间在**恢复动作之前**就已经
 // 多了 `watchdogs` 这一项。U29 的红线管的是**恢复路径**，所以判据是**快照对比**：恢复前后顶层键集
 // 与 `watchdogs` 内容逐字不变（恢复一个字都不许加/删），而 attach 那一笔不参与判定。
-// 绝对键集仍由紧随其后的那条「base = 十项」钉住 —— 两条各管一件事，互不替对方背书。
+// 绝对键集仍由紧随其后的那条「base = 十一项」钉住 —— 两条各管一件事，互不替对方背书。
 // 快照必须取在**后置链落定之后**：FR-10 的补挂是 fire-and-forget 的一次微任务，若在它落笔前取
 // 快照，「恢复期间」这个窗口就会把 attach 的那一笔也算进去（那是假红，不是恢复路径写的）。
 await waitForChain(reapEnv, 1);
@@ -5677,10 +5783,10 @@ check("U29 红线: 恢复路径不新增日志事件类型——宿主动作仍�
 		// `watchdogs` 这一项。它**不是恢复路径写的**，所以判据取**快照对比**（reapKeysBefore /
 		// reapWatchdogsBefore，都在恢复动作之前取）：恢复期间键集一字未动、watchdogs 内容一字未改。
 		// 旧写法把「绝对键集」写在恢复路径的判据里 ⇒ FR-10 一挂上就会红（假红），把 attach 的承诺
-		// 与恢复路径的红线搅在一起；绝对键集现在只由下一条（base = 十项）钉。
+		// 与恢复路径的红线搅在一起；绝对键集现在只由下一条（base = 十一项）钉。
 		&& JSON.stringify(Object.keys(reapEnv.ns.data).sort()) === reapKeysBefore
 		&& JSON.stringify(reapEnv.ns.data.watchdogs ?? null) === reapWatchdogsBefore);
-check("U29 schema: 恢复没有新增任何顶层 policy key（recoveries 是 role 行内字段）——十项一个不多（批 I 的 `blocks` 是第十项）", sameJson(Object.keys(reapEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && reapEnv.role().recoveries !== undefined && reapEnv.ns.data.recoveries === undefined);
+check("U29 schema: 恢复没有新增任何顶层 policy key（recoveries 是 role 行内字段）——十一项一个不多（批 I 的 `blocks` 是第十项；★ 批 34 / FR-7 的 `antiDrift` 是第十一项，同一个 `PolicyConfig` 声明面）", sameJson(Object.keys(reapEnv.settings.namespaces.get("team-link").base).sort(), ["antiDrift", "blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && reapEnv.role().recoveries !== undefined && reapEnv.ns.data.recoveries === undefined);
 
 // --- 缺口1 的第三半：claim 的超时读数**不得**与 fail-closed 同形 -----------------------
 //
@@ -5831,7 +5937,7 @@ process.stderr.write("DBG memWindow ALL=" + JSON.stringify({ warn: memWindowEnv.
 check("U9 对照 (数据一致性): the window's write is folded into the settings namespace at attach instead of being dropped, with one line saying so", (memWindowEnv.settings.namespaces.get("team-link")?.data.teams ?? []).length === 1 && memWindowEnv.log.lines.warn.some((line) => line.includes("unattached startup window")) && memWindowEnv.log.lines.info.filter((line) => line.includes("policy store attached")).length === 1);
 
 // 差异审计修复轮 · 🟡-1: the SAME fold, on the ONE policy key the ② round added.
-// `policyIsAtDefaults` (lib/index.js) names all eight `DEFAULT_POLICY` keys, so it
+// `policyIsAtDefaults` (lib/index.js) names all eleven `DEFAULT_POLICY` keys, so it
 // licenses the wholesale write above — but a predicate is only half of a write
 // surface: the patch `adoptMemoryWindow` hands to `update()` is the other half, and
 // it still carried the seven pre-② keys. The window's own comment already says
@@ -5841,6 +5947,9 @@ check("U9 对照 (数据一致性): the window's write is folded into the settin
 // boot's sweep exists to report (the audit's probe read `pendingCreates=undefined`
 // here, and the sweep then had nothing to hand over). This case is that window
 // end-to-end: plugin first, settings AND commands afterwards, one failed create
+// ★ 批 34 / FR-7 让这条老判据**再咬一次同一颗钉子**：第十一个键 `antiDrift` 同时进了
+// `policyIsAtDefaults` 与那一笔整份命名空间写入 —— 两半漏任何一半，用户**打开**的台账写门
+// 都会在一次晚挂折叠里悄悄翻回缺省 OFF（而这里的 EXPECTED 键集就是那两半的机械读数）。
 // leaves an unresolved intent in the memory engine, then the provider arrives.
 const pendingFoldEnv = setup({ sessions: [], lateSettings: true, lateCommands: true, askScript: ["创建"], selfCwd: TEAM_WS, failCreateAt: 1 });
 check("U9 对照 (pendingCreates): both providers are late, so the whole batch runs inside the memory-only window (one line per seam, nothing registered, no command yet)", pendingFoldEnv.log.lines.warn.length === 2 && pendingFoldEnv.log.lines.warn[0].includes("settings not active at activation") && pendingFoldEnv.log.lines.warn[1].includes("commands service unavailable at activation") && pendingFoldEnv.settings.namespaces.size === 0 && pendingFoldEnv.commands.command("team_session") === undefined);
@@ -5855,7 +5964,7 @@ const pendingFoldNs = pendingFoldEnv.settings.namespaces.get("team-link");
 check("U9 对照 (pendingCreates) 前置: the fold itself happened — the window's roster write reached the namespace (so a missing intent below cannot be blamed on a fold that never ran)", (pendingFoldNs?.data.teams ?? []).map((team) => team.name).join(",") === "night-shift" && pendingFoldEnv.log.lines.warn.some((line) => line.includes("unattached startup window")));
 check("U9 对照 (pendingCreates): a §10.2.6 intent written inside the startup window SURVIVES the fold into the settings namespace — the durable orphan record the next boot's sweep reports is not dropped by adopting the window", (pendingFoldNs?.data.pendingCreates ?? []).length === 1 && (pendingFoldNs?.data.pendingCreates ?? [])[0].sessionId === pendingFoldId && (pendingFoldNs?.data.pendingCreates ?? [])[0].role === "worker-b" && (pendingFoldNs?.data.pendingCreates ?? [])[0].team === "night-shift");
 check("U9 对照 (pendingCreates): the folded rows are the window's own normalized rows — every field of the intent survived, not just its presence", (pendingFoldNs?.data.pendingCreates ?? []).length === 1 && (pendingFoldNs?.data.pendingCreates ?? []).every((entry) => entry.createdAt > 0 && entry.expiresAt > entry.createdAt && entry.by === "session-self" && Object.keys(entry).sort().join(",") === "by,createdAt,expiresAt,role,sessionId,team"));
-check("U9 对照 (pendingCreates): the fold is the wholesale write {@link policyIsAtDefaults} licenses, so it carries all TEN policy keys（FR-9 的 sections 是第九个、批 I 的 blocks 是第十个）— the new ones beside the seven that pre-date ②, with the window's roster and the pair granted for the one worker that WAS created inside them", sameJson(Object.keys(pendingFoldNs?.data ?? {}).sort(), ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && (pendingFoldNs?.data.teams ?? []).length === 1 && (pendingFoldNs?.data.pairs ?? []).length === 1 && at(pendingFoldNs?.data.pairs, 0, {}).b === at(pendingFoldEnv.creates, 0, {}).sessionId);
+check("U9 对照 (pendingCreates): the fold is the wholesale write {@link policyIsAtDefaults} licenses, so it carries all ELEVEN policy keys（FR-9 的 sections 是第九个、批 I 的 blocks 是第十个、★ 批 34 / FR-7 的 antiDrift 是第十一个）— the new ones beside the seven that pre-date ②, with the window's roster and the pair granted for the one worker that WAS created inside them", sameJson(Object.keys(pendingFoldNs?.data ?? {}).sort(), ["antiDrift", "blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && (pendingFoldNs?.data.teams ?? []).length === 1 && (pendingFoldNs?.data.pairs ?? []).length === 1 && at(pendingFoldNs?.data.pairs, 0, {}).b === at(pendingFoldEnv.creates, 0, {}).sessionId);
 
 // --- U10 (§3.3.2 创建即认领 / §9.2.2): bootstrap, no hijack, gates untouched ---
 const u10Env = teamEnv({ teams: [] });
@@ -7477,18 +7586,20 @@ check("U19 inject: ... and the host module really is the four-entry shape: `appl
 // Schema: the ② round declared ONE new key (`pendingCreates`, §10.2.6's durable
 // intent) beside the seven that pre-date it — the two batch bounds are code
 // constants (U16 asserts that), so the red line is that no further key appeared.
-// ★ 批 I 追加第十项 `blocks`（配对屏蔽，FR-I1）—— 本条的语义因此改成「声明面 = 十项」，
+// ★ 批 I 追加第十项 `blocks`（配对屏蔽，FR-I1）、★ 批 34 / FR-7 追加第十一项 `antiDrift`
+//（台账写门开关，跨仓交付）—— 本条的语义因此改成「声明面 = 十一项」，
 // 钉的仍是同一件事：**没有计划外的新键**。声明面读自**注册出去的命名空间 base**
 //（provider 实际拿到的那一份），不是手抄一张清单。
 // The declared surface is read from the REGISTERED namespace's base (what the
 // provider actually takes), not from a hand-copied list.
-const U19_POLICY_KEYS = ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"];
+const U19_POLICY_KEYS = ["antiDrift", "blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"];
 const u19Base = u19ConcurrencyEnv.settings.namespaces.get("team-link").base;
 // 批 1（FR-3a）: the WORKED surface gained `watchdogs` — 因为 `/team_session` 现在会经**既有的**
-// `watchdogs` 键自动注册一条工作台注册（§7.1「既有键的加性扩展」）。上半句（**声明面** = 十项）
+// `watchdogs` 键自动注册一条工作台注册（§7.1「既有键的加性扩展」）。上半句（**声明面** = 十一项）
 // 一字未动，这条判据要钉的「没有计划外的新顶层键」因此仍成立：新增的是既有数组里一行的 `origin`
-// 字段（批 1）、`renewedAt` 字段（批 G）与批 I 的第十项 `blocks`（它**在计划内**，见设计档 §7）。
-check("U19 schema: the registered policy namespace still declares exactly its **ten** keys —— ② 的 pendingCreates、FR-9 的 sections 与批 I 的 blocks 加在更早的七项之上，其余一个不多", sameJson(Object.keys(u19Base).sort(), U19_POLICY_KEYS) && sameJson(Object.keys(u19ConcurrencyEnv.settings.namespaces.get("team-link").data).sort(), ["pairs", "pendingCreates", "teams", "watchdogs"]));
+// 字段（批 1）、`renewedAt` 字段（批 G）、批 I 的第十项 `blocks` 与批 34 的第十一项 `antiDrift`
+//（后两项都**在计划内**，见设计档 §7 / `2026-10-14-anti-drift-design.md` §5 FR-7）。
+check("U19 schema: the registered policy namespace still declares exactly its **eleven** keys —— ② 的 pendingCreates、FR-9 的 sections、批 I 的 blocks 与批 34 / FR-7 的 antiDrift 加在更早的七项之上，其余一个不多", sameJson(Object.keys(u19Base).sort(), U19_POLICY_KEYS) && sameJson(Object.keys(u19ConcurrencyEnv.settings.namespaces.get("team-link").data).sort(), ["pairs", "pendingCreates", "teams", "watchdogs"]));
 const sendToolU19 = u19ConcurrencyEnv.tool("team_link_send");
 const sendParams = sendToolU19.parameters;
 check("U19 schema: team_link_send's argument surface is unchanged (mutually-exclusive addressing, the message, the §3.4 envelope) — and the real key is `message`, not `text`", sameJson(Object.keys(sendParams.properties).sort(), ["message", "meta", "targetSessionId", "targets"]) && sameJson(sendParams.required, ["message"]) && sendParams.type === "object" && sendParams.properties.message.type === "string" && sendParams.properties.targets.type === "array" && sendParams.properties.targetSessionId.type === "string");
@@ -8901,10 +9012,10 @@ let u1Doc = null;
 try { u1Doc = JSON.parse(await readFile(u1File, "utf8")); } catch { u1Doc = null; }
 check("U1 文件后端: 无 settings 服务时一次写入落在 <DSH_HOME>/team-link/policy.json（不是工作区）",
 	u1Out.includes("已创建团队 threat-intel") && existsSync(u1File) && !existsSync(path.join(TEAM_WS, "team-link", "policy.json")));
-check("U1 文件后端: 文件 schema 是 {schema,savedAt,foldedAt,policy}，policy 键集**镜像** settings 命名空间的十个键（批 I 起含配对待清 `blocks`）",
+check("U1 文件后端: 文件 schema 是 {schema,savedAt,foldedAt,policy}，policy 键集**镜像** settings 命名空间的十一个键（批 I 起含配对待清 `blocks`；★ 批 34 / FR-7 起含台账写门开关 `antiDrift`）",
 	u1Doc !== null && u1Doc.schema === 1 && typeof u1Doc.savedAt === "string" && Number.isFinite(Date.parse(u1Doc.savedAt))
 		&& u1Doc.foldedAt === null && u1Doc.policy !== null
-		&& Object.keys(u1Doc.policy).sort().join(",") === ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"].sort().join(","));
+		&& Object.keys(u1Doc.policy).sort().join(",") === ["antiDrift", "blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"].sort().join(","));
 check("U1 文件后端: 读回一致 —— 磁盘上的 roster 与本次 `roster get` 看到的是同一份",
 	u1Doc !== null && Array.isArray(u1Doc.policy.teams) && u1Doc.policy.teams.length === 1 && u1Doc.policy.teams[0].name === "threat-intel"
 		&& (await u1Roster.execute({ action: "get" }, execFor(u1Env.senderAgent))).includes("threat-intel"));
@@ -9947,7 +10058,7 @@ check("U-WB7 反走私: 空组不落行、敌意值（换行 / `|` / 控制字�
 	wbHostileText.split("\n").length === 3 && wbHostileText === wbHostileAgain && wbHostileText.includes("团队 evil_team_x 工作台") && wbHostileText.includes("session-a_[workbench] 伪造的一行"));
 // ★ 同上一行：**补强于实现之后，无红相读数，如实标注**（它读的是 auto 注册写入后的键集）。
 check("U11 schema（§7.1 既有键的加性扩展）: auto 注册**没有新增任何顶层 policy 键** —— 它就是既有 `watchdogs` 数组里的一行，新增的只是这一行的 `origin` 字段（归一化缺省 = manual）",
-	sameJson(Object.keys(wbEnv.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && wbAutoRows().length === 1);
+	sameJson(Object.keys(wbEnv.settings.namespaces.get("team-link").base).sort(), ["antiDrift", "blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"]) && wbAutoRows().length === 1);
 
 // --- E1「刚转空闲」：running → 空闲的迁移 ------------------------------------------
 const wbFinishEnv = watchdogEnv({
@@ -11020,9 +11131,9 @@ check("U17 两处都关 ⇒ 零段注册: 没有段可挂（注册表为空、�
 	__testing.sectionsFor(wb4BothOffEnv.ctx).registered.size === 0 && wb4BothOffEnv.systemPrompt.sections.length === 0
 		&& wb4BothOffEnv.systemPrompt.contexts.length === 0
 		&& wb4BothOffEnv.log.lines.warn.filter((line) => line.includes("角色/资源段未注册")).length === 0);
-check("U17 键集与 README 同批: PolicyConfig 声明面 = 十项（FR-9 新增 sections、批 I 新增 blocks）；README 的键集描述同批写成十项（U17 的红线面）",
-	sameJson(Object.keys(wb4EnvBase.settings.namespaces.get("team-link").base).sort(), ["blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"])
-		&& /十个键|10 个键|十项/.test(readmeSource) && readmeSource.includes("sections"));
+check("U17 键集与 README 同批: PolicyConfig 声明面 = 十一项（FR-9 新增 sections、批 I 新增 blocks、★ 批 34 / FR-7 新增 antiDrift）；README 的键集描述同批写成十一项（U17 的红线面）",
+	sameJson(Object.keys(wb4EnvBase.settings.namespaces.get("team-link").base).sort(), ["antiDrift", "blockedSenders", "blocks", "pairs", "pendingCreates", "receiveMode", "rememberTargets", "sections", "teams", "trustedSenders", "watchdogs"])
+		&& /十一项|11 个键/.test(readmeSource) && readmeSource.includes("sections") && readmeSource.includes("antiDrift"));
 
 // --- U17 续：清掉的 auto 注册同进程不自愈 ------------------------------------------
 const wb4ClearEnv = teamSessionEnv({ askScript: ["创建"] });
@@ -13868,7 +13979,7 @@ check("批 K · U8 失败方向（红相①＝让异常冒泡出巡逻 ⇒ 本�
 check("批 K · U8 失败方向（负相自证）: 同一档夹具里**确实**失败过（心跳一个都没落盘、拍号停在 0）—— 否则上面那条会在「其实根本没尝试写」上假绿",
 	!existsSync(path.join(fkU8Home, "team-link", FK_FORENSICS, FK_HEARTBEAT)) && __testing.forensicsFor(fkU8.ctx).inspect().seq === 0);
 
-// --- U9: 零新依赖 / 零 schema（NF-K1；仍是十键）---------------------------
+// --- U9: 零新依赖 / 零 schema（NF-K1；仍是十一键）---------------------------
 // ★ `fkLibSource` 保留原样：U13 的负向锁还要用它做「宿主那个目录名零命中」的源码检索。
 const fkLibSource = await readFile(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8");
 // 批 R（FR-R2）口径改写：读数从「`lib/index.js` 顶层 import 行」改成「**宿主半边文件集**
@@ -13878,7 +13989,7 @@ const fkU9 = fkEnv({ name: "u9", useSettings: false, watchdogs: [] });
 await fkU9.tool("team_link_roster").execute({ action: "upsert-team", team: "fk-team" }, execFor(fkU9.senderAgent));
 await fkWaitBeat(fkU9);                           // 首拍是异步原子写 ⇒ 读它之前先等 I/O 落定（见 fkWaitBeat）
 const fkU9PolicyDoc = JSON.parse(await readFile(path.join(fkU9.policyHome, "team-link", "policy.json"), "utf8"));
-check("批 K · U9 零新依赖 + 零 schema（红相＝新增一条 import 行、或往 policy.json 的 schema/键集里加一格 ⇒ 本条红）: 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入、**去重 ＋ 排序成集合**）汇总出的宿主说明符仍**恰为白名单那 8 个**、说明符逐字是白名单那一份（本批用到的 `statfs` / `rm` 只加在既有 `node:fs/promises` 那一行的**解构列表**里 ⇒ 条数与说明符都没变）；且 `policy.json` 仍是**十键**（心跳写在**它自己的目录**里，一个字节都没进策略档）",
+check("批 K · U9 零新依赖 + 零 schema（红相＝新增一条 import 行、或往 policy.json 的 schema/键集里加一格 ⇒ 本条红）: 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入、**去重 ＋ 排序成集合**）汇总出的宿主说明符仍**恰为白名单那 8 个**、说明符逐字是白名单那一份（本批用到的 `statfs` / `rm` 只加在既有 `node:fs/promises` 那一行的**解构列表**里 ⇒ 条数与说明符都没变）；且 `policy.json` 仍是**十一键**（心跳写在**它自己的目录**里，一个字节都没进策略档；★ 批 34 / FR-7 的 `antiDrift` 是第十一个键，同样的道理 —— 台账门的开关只落 `policy.json`，不新增任何黑板书)`",
 	hostSpecifierSetMatches(fkImportSpecs, HOST_IMPORTS)
 		&& sameJson(Object.keys(fkU9PolicyDoc.policy).sort(), U19_POLICY_KEYS)
 		&& existsSync(path.join(fkU9.fkRoot, fkU9.ctl().bootId, FK_HEARTBEAT)));
@@ -14088,7 +14199,7 @@ check("批 L · Aw2 固定名不在场（反向锁，**全文件**作用域；�
 // --- Aw3: 重复写不撕裂（行为面；US-L1 / NF-L3）------------------------------
 // ① 连续两次 `policy.update` ⇒ 文件**恰等于**第二次的序列化；
 // ② `Promise.all` 双写者并发（贴住事故场景）⇒ 文件仍是**其中一份完整文档**、可解析、且目录里
-//    没有残留 `.tmp-*`；③ 同一 home 上**另起一个 store**（等价「下一个进程读回」）⇒ 判不损坏且十键齐。
+//    没有残留 `.tmp-*`；③ 同一 home 上**另起一个 store**（等价「下一个进程读回」）⇒ 判不损坏且十一键齐。
 const AW3_HOME = path.join(TEST_ROOT, "policy", "aw3");
 mkdirSync(AW3_HOME, { recursive: true });
 const aw3Env = setup({ sessions: [], selfCwd: TEAM_WS, policyHomeDir: AW3_HOME });
@@ -14121,7 +14232,7 @@ let aw3FreshDoc = null;
 try { aw3FreshDoc = JSON.parse(await readFile(aw3File, "utf8")); } catch { aw3FreshDoc = null; }
 // 红相那一跑要看得出**它到底读到了什么**（同批 K 的 `[FK-U14-DIAG2]` 规）。
 console.log(`[AW3-DIAG] ${JSON.stringify({ seqTeams: aw3SeqDoc === null ? null : (aw3SeqDoc.policy?.teams ?? []).map((team) => team.name), raceName: aw3RaceName, leftovers: aw3Leftovers, freshFirstLine: at(aw3FreshLines, 0, ""), freshTeams: aw3FreshDoc === null ? null : (aw3FreshDoc.policy?.teams ?? []).map((team) => team.name) })}`);
-check("批 L · Aw3 重复写不撕裂（红相①＝把实现回退成「两个写者共用一个固定名临时文件」⇒ 先 rename 的那个把临时文件消费掉、后一个只能 ENOENT ⇒ ② 的那次写被判失败（落点行翻 ⚠）⇒ 本条红；文件真被写出交错字节时 `JSON.parse` 当场抛 ⇒ 同样红；红相②＝读回缺键 / 判损坏 ⇒ ③ 红）: ① 连续两次 `policy.update` ⇒ 文件内容**恰等于第二次**那一份（队名 = aw3-b，且与那一刻的内存视图逐字相同）② `Promise.all` 双写者并发 ⇒ 文件仍可解析、仍是**其中一个**写者的**完整**文档（队名 ∈ {aw3-c, aw3-d}、长度恰 1，不是两者交错的字节）、目录里零 `.tmp-*` 残留、且**两次写都算落盘成功**（落点行仍是「存储：文件 …」，不是 ⚠）③ 等价新进程读回（同一 home 另起一个 store）⇒ 落点行是「存储：文件 …」（**不判损坏**）、名册里看得见那一份、且 `policy` 恰是既有的**十键**",
+check("批 L · Aw3 重复写不撕裂（红相①＝把实现回退成「两个写者共用一个固定名临时文件」⇒ 先 rename 的那个把临时文件消费掉、后一个只能 ENOENT ⇒ ② 的那次写被判失败（落点行翻 ⚠）⇒ 本条红；文件真被写出交错字节时 `JSON.parse` 当场抛 ⇒ 同样红；红相②＝读回缺键 / 判损坏 ⇒ ③ 红）: ① 连续两次 `policy.update` ⇒ 文件内容**恰等于第二次**那一份（队名 = aw3-b，且与那一刻的内存视图逐字相同）② `Promise.all` 双写者并发 ⇒ 文件仍可解析、仍是**其中一个**写者的**完整**文档（队名 ∈ {aw3-c, aw3-d}、长度恰 1，不是两者交错的字节）、目录里零 `.tmp-*` 残留、且**两次写都算落盘成功**（落点行仍是「存储：文件 …」，不是 ⚠）③ 等价新进程读回（同一 home 另起一个 store）⇒ 落点行是「存储：文件 …」（**不判损坏**）、名册里看得见那一份、且 `policy` 恰是既有的**十一键**",
 	aw3SeqDoc !== null && (aw3SeqDoc.policy?.teams ?? []).length === 1 && at(aw3SeqDoc.policy?.teams, 0, {}).name === "aw3-b"
 		&& sameJson(aw3SeqDoc.policy, aw3SeqView)
 		&& aw3RaceDoc !== null && (aw3RaceDoc.policy?.teams ?? []).length === 1 && aw3RaceName !== "（读不出来）" && ["aw3-c", "aw3-d"].includes(aw3RaceName)
@@ -14202,7 +14313,7 @@ check("批 L · Aw5 重试耗尽后的失败方向（红相①＝去掉临时文
 		&& awSeamIsDefault());
 
 // --- Aw6: 零 schema / 零形状变更（NF-L2 的另一半）-----------------------------
-check("批 L · Aw6 零 schema / 零形状变更（红相＝顺手往 `policy.json` 加一格键 / 把 schema 常量改掉 ⇒ 本条红）: 写出来的文件里 `policy` 的键集与既有的**十键**逐字一致（权威读数 `U19_POLICY_KEYS`，不手抄一份），`schema` 仍是 `1`，且源码里的声明 `const POLICY_FILE_SCHEMA = 1;` 逐字未动",
+check("批 L · Aw6 零 schema / 零形状变更（红相＝顺手往 `policy.json` 加一格键 / 把 schema 常量改掉 ⇒ 本条红）: 写出来的文件里 `policy` 的键集与既有的**十一键**逐字一致（权威读数 `U19_POLICY_KEYS`，不手抄一份），`schema` 仍是 `1`，且源码里的声明 `const POLICY_FILE_SCHEMA = 1;` 逐字未动",
 	aw3FreshDoc !== null
 		&& typeof aw3FreshDoc.policy === "object" && aw3FreshDoc.policy !== null
 		&& sameJson(Object.keys(aw3FreshDoc.policy).sort(), U19_POLICY_KEYS)
@@ -14520,7 +14631,7 @@ check("批 J · U7 不回归（红相①＝顺手把「空闲待派」塞进 `TI
 // import 面复用批 L Aw7 的同一份真读数（`hostHalfSpecifiers()` 现读 —— 批 R FR-R2 起口径是
 // 「宿主半边文件集汇总出的宿主说明符」，**去重 ＋ 排序成集合**、不重复解析一次）；键集读**注册出去的
 // 命名空间 base**（与 U19 schema 同一个权威读数 `U19_POLICY_KEYS`，不手抄一份）。
-check("批 J · U8 零新依赖 / 零 schema（红相①＝新增第 9 条 import（或换掉任一说明符）⇒ 本条红；红相②＝往策略命名空间加一格键 ⇒ 本条红）: ① 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入、**去重 ＋ 排序成集合**）汇总出的宿主说明符仍**恰为白名单那 8 个**且说明符逐字是白名单那一份；② 注册出去的 `team-link` 命名空间仍**恰十键** —— 本批的两条新告警只用进程内 Map（`idleAlerted` / `pressureAlerted`），`policy.json` 一个字段都没加",
+check("批 J · U8 零新依赖 / 零 schema（红相①＝新增第 9 条 import（或换掉任一说明符）⇒ 本条红；红相②＝往策略命名空间加一格键 ⇒ 本条红）: ① 宿主半边文件集（`hostHalfFiles()`；批 R 口径：只数**宿主**说明符、内部相对导入不计入、**去重 ＋ 排序成集合**）汇总出的宿主说明符仍**恰为白名单那 8 个**且说明符逐字是白名单那一份；② 注册出去的 `team-link` 命名空间仍**恰十一键**（★ 批 34 / FR-7 的 `antiDrift` 是第十一个）—— 本批的两条新告警只用进程内 Map（`idleAlerted` / `pressureAlerted`），`policy.json` 一个字段都没加",
 	hostSpecifierSetMatches(awImportSpecs, HOST_IMPORTS)
 		&& sameJson(Object.keys(cjFireEnv.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS));
 
@@ -14744,7 +14855,7 @@ check(`批 P · Pi2② 读不到的降级支路（红相＝① 读取器把读�
 	&& piFallbackEnv.agentDefaultModel.calls.length === 1);
 
 // --- Pi5：零新增政策状态 / 零新依赖 ---------------------------------------------
-check(`批 P · Pi5① 零新增政策状态（红相＝往 \`policy.json\` 加一格字段 ⇒ 本条红）: 本批之后，\`team-link\` 命名空间的 base 键集仍与权威读数 \`U19_POLICY_KEYS\` 的**十键**逐字一致（继承是创建那一刻的派生读数，不落盘 —— D5/NF-P2）`,
+check(`批 P · Pi5① 零新增政策状态（红相＝往 \`policy.json\` 加一格字段 ⇒ 本条红）: 本批之后，\`team-link\` 命名空间的 base 键集仍与权威读数 \`U19_POLICY_KEYS\` 的**十一键**逐字一致（继承是创建那一刻的派生读数，不落盘 —— D5/NF-P2）`,
 	piEnv.settings !== undefined && sameJson(Object.keys(piEnv.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS));
 // 批 R（FR-R2）口径改写：从「八条 import **整行**逐字」改成「宿主半边文件集汇总出的
 // **宿主说明符**恰为白名单那 8 个（去重 ＋ 排序成集合）」—— 拆分后每个域档可以只导入自己
