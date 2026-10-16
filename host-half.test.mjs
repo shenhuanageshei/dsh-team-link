@@ -3223,8 +3223,11 @@ check("§3.5: and the fan-out still steers the running target and follows up the
 // any working directory.
 // ★ 批 R FR-R0：**宿主半边的读数不再在这里定义** —— `hostSource` 现在是
 // `hostHalfFiles()` 全部文件的**拼接**（定义在下面那个 helper 块的末尾，因为「宿主半边文件集」
-// 这个 helper 必须先就位）。今日文件集只有 `lib/index.js` 一档 ⇒ 全文 23 处文本锁与框定 token
-// 残留扫描的读数与旧定义（只读 `lib/index.js`）**逐字相同**；拆档后它们自动跟着新文件集走。
+// 这个 helper 必须先就位）。★ **口径更正（批 R 第 2 小单 · 2026-10-15 实测）**：FR-R0 当时文件集只有
+// `lib/index.js` 一档 ⇒ 当时的读数与旧定义（只读该档）**逐字相同**；**拆分落地后**文件集是
+// `lib/forensics.js` + `lib/index.js` ⇒ 全文那些文本锁与框定 token 残留扫描读的是**拼接体**
+// （按文件名排序 ⇒ 域档在前、入口在后），**不再**逐字等于「只读入口那一档」的旧读数 —— 它们
+// 自动跟着新文件集走，两档合起来仍是旧读数的全部文本。
 const clientSource = await readFile(fileURLToPath(new URL("./lib/client.js", import.meta.url)), "utf8");
 
 // ---------------------------------------------------------------------------
@@ -3245,7 +3248,8 @@ const clientSource = await readFile(fileURLToPath(new URL("./lib/client.js", imp
 // **永久红**的写法）。今天 `lib/client.js` 顶层**零条** `import`（client bundle 里 import
 // 被禁，见该文件里那句注释），所以把汇总面**改成含 `client.js`** 并不改变说明符清单、
 // 只改变**文件集** ⇒ 那条红相由 Rr3② 的**文件集锁**承接（不是靠说明符条数）。
-// 本单（R-1）还没有拆分 ⇒ `hostHalfFiles()` 此刻等价于 `["lib/index.js"]`，八处既有
+// R-1 当时还没有拆分 ⇒ `hostHalfFiles()` 那时等价于 `["lib/index.js"]`（批 R 第 2 小单拆档后
+// = `["lib/forensics.js", "lib/index.js"]`；集合口径与文件数无关 ⇒ 读数照旧），八处既有
 // 断言（`U19` / 批 H `NF-H5` / 批 I `U17` / 批 K `U9` / 批 L `Aw7` / 批 J `U8` /
 // 批 P `Pi5②` / 批 R `Rr3①`）**全部改成集合比较**后仍绿。
 // ★ **口径更正（批 R 第 0 小单 FR-R0 实测）**：旧文写「下一单拆分时它们自动跟着新文件集走，
@@ -3304,7 +3308,11 @@ const hostHalfSpecifiers = () => hostHalfSpecifiersOf(hostHalfFiles());
 
 /** 宿主半边**全部源码的拼接**（`hostHalfFiles()` 的顺序：按文件名排序、档内按正文原序、档间 `\n`）。
  * ★ 此前它只读 `lib/index.js`；改成拼接后，全文那 23 处文本锁与框定 token 残留扫描在拆分后
- * **自动跟着新文件集走**（今日文件集只有入口那一档 ⇒ 本行读数与旧定义**逐字相同**）。
+ * **自动跟着新文件集走**（批 R 第 0 小单当时只有入口那一档 ⇒ 当时读数与旧定义**逐字相同**）。
+ * ★ **口径更正（批 R 第 2 小单 · 2026-10-15 实测）**：拆分落地后本行读数就是**宿主半边文件集的
+ * 拼接**（今日 = `lib/forensics.js` + `lib/index.js`，按文件名排序 ⇒ 域档在前、入口在后、档间一个
+ * `\n`），**不再等于** `lib/index.js` 单独那一份。同批只改了**注释**口径（本段与批 L 那两处），
+ * 断言语义一字未动。
  * ★ 求值时机：模块体**只在这里求值一次**（与旧定义相同——旧定义也是一次 `await readFile`），
  * 所以拆档发生在**本轮运行之内**是不会被看见的（拆档后重跑即自动跟随）。 */
 const hostSource = hostHalfFiles().map((file) => readFileSync(fileURLToPath(new URL(`./${file}`, import.meta.url)), "utf8")).join("\n");
@@ -14145,8 +14153,10 @@ check("批 K · U15 空串 action 的口径＝「空串视为省略」且与参�
 //       需求档 docs/2026-10-13-policy-atomic-write-requirements.md（NF-L1…NF-L5 · §五 非目标）。
 // 标识符一律 `Aw` 中缀（`aw` 前缀 + `AW_` 常量）：顶格声明重名会让整档解析失败。
 // 每条文案都按「去掉哪一处实现 ⇒ 本条按哪个子句变红」写明红相（仓规 §一）。
-// ★ 判据读的是**真源码**（`hostSource` ＝ `lib/index.js` 全文，本档上部已读一次）与**真文件**，
-//   不抄一份进测试；注入改名失败走 `__testing.setRenameThroughSeam`（FR-L2 的那条缝）。
+// ★ 判据读的是**真源码**（`hostSource` ＝ **宿主半边文件集的拼接** —— 批 R 第 2 小单起 = 域档
+//   `lib/forensics.js` ＋ 入口 `lib/index.js`；本批要锁的 `writePolicyFileAtomic` / `renameThroughSeam`
+//   仍在入口那一档，而拼接体把它们照原序一起带进来 ⇒ 提取器（`awFunctionBody`）逐字照旧命中）与
+//   **真文件**，不抄一份进测试；注入改名失败走 `__testing.setRenameThroughSeam`（FR-L2 的那条缝）。
 // ★ 事故场景（本批要消灭的那一格）：所有写入者共用**一个固定名**临时文件 ⇒ 甲写完的完整
 //   JSON（841,905 字节）被乙从字符偏移 834,315 起追加 73 个字符 ⇒ **整份解析不动**。
 //   Aw1/Aw2 锁「名字唯一」，Aw3 锁「行为面不再撕裂」，Aw4/Aw5 锁「失败方向」。
@@ -15148,9 +15158,30 @@ check(`批 R · Rr0③ 真文件集未被投影顶替（★ 负相自证：合�
 		&& !hostHalfFiles().some((file) => file.includes(RR_SYNTH_DIR))
 		&& sameJson(hostHalfFiles(), rrHostFiles));
 
-check(`批 R · Rr0④ 合成投影**只**经 helper 入参进入（★ 防线判定：合成号 ${show(RR_SYNTH_DIR)} 若真被落盘到 \`lib/\`，投影就不再是「内存里的」夹具 ⇒ 本条红）: 磁盘上 \`lib/${RR_SYNTH_DIR}/\` **不在场**，且 \`lib/index.js\` 的现读正文与本次运行开头那份 \`hostSource\` **逐字相同**（${hostSource.length} 字符；本条同时给 \`Rr0①–③\` 的「零落盘」自证）`,
+/** Rr0④ 的**逐档重算**（批 R 修复小单）：按 `hostSource` 的同一条定义（`hostHalfFiles()` 的顺序、
+ * 档间一个 `\n`）把各档**当前正文**再拼一次，并**逐档**核对它确实从期望偏移起落在 `hostSource` 里。
+ * ★ 为什么不再拿拼接串去比单档：R-0 已把 `hostSource` 改成宿主半边文件集的拼接（见该 helper 自己的
+ * 口径更正）—— 拆档落地后，拼接体**结构上不可能**等于 `lib/index.js` 单档；那是判据没跟着自己的
+ * 口径改动走，不是实现出了问题。本条守的两条本意一字不变：**合成投影零落盘** ＋ **真读没被顶替**。 */
+const rrHostSourcePerFile = () => {
+	const files = hostHalfFiles();
+	let offset = 0;
+	const mismatched = [];
+	files.forEach((file, index) => {
+		const text = readFileSync(fileURLToPath(new URL(`./${file}`, import.meta.url)), "utf8");
+		if (!hostSource.startsWith(text, offset)) mismatched.push(file);
+		offset += text.length + (index === files.length - 1 ? 0 : 1);
+	});
+	return { files, mismatched, expectedLength: offset };
+};
+const rrHostSourceReading = rrHostSourcePerFile();
+/** 对照读数（**不参与判定**，只把「为什么改口径」写成可核数据）：与入口单档全文相等？ */
+const rrEntryAloneEqualsHostSource = readFileSync(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8") === hostSource;
+
+check(`批 R · Rr0④ 合成投影**只**经 helper 入参进入（★ 防线判定：合成号 ${show(RR_SYNTH_DIR)} 若真被落盘到 \`lib/\`，投影就不再是「内存里的」夹具 ⇒ 本条红）: 磁盘上 \`lib/${RR_SYNTH_DIR}/\` **不在场**，且 \`hostSource\` **逐档逐字等于** \`hostHalfFiles()\`（现读 ${show(rrHostSourceReading.files)}）各档**当前正文**按「按文件名排序、档内原序、档间一个 \`\\n\`」的拼接（${hostSource.length} 字符；失配档 ${show(rrHostSourceReading.mismatched)}；本条同时给 \`Rr0①–③\` 的「零落盘」自证）。★ 口径（批 R 修复小单）：**不再是**「与 \`lib/index.js\` 单档全文逐字相等」—— R-0 把 \`hostSource\` 改成了宿主半边文件集的拼接，拆档落地后它与任何**单档**都不相等（对照读数：与入口单档相等 = ${rrEntryAloneEqualsHostSource}），旧写法正是判据没跟着自己的口径改动走；本条的判定面因此改成**逐档比对**，守的两条本意（**真读不被顶替** · **合成投影零落盘**）一字不变`,
 	!existsSync(fileURLToPath(new URL(`./lib/${RR_SYNTH_DIR}/`, import.meta.url)))
-		&& readFileSync(fileURLToPath(new URL("./lib/index.js", import.meta.url)), "utf8") === hostSource);
+		&& rrHostSourceReading.mismatched.length === 0
+		&& rrHostSourceReading.expectedLength === hostSource.length);
 const rrClientPath = fileURLToPath(new URL("./lib/client.js", import.meta.url));
 const rrClientSpecs = existsSync(rrClientPath) ? hostSpecifiersOf(readFileSync(rrClientPath, "utf8")) : null;
 
