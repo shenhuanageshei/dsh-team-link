@@ -4900,6 +4900,61 @@ U20 判据一条）⇒ 该节表内行号按**符号名**复核可用，**按行
 重启后应验：`team_link_block action=list` 能列出分组、`action=unblock` 能解掉指定一对、
 `action=clear-legacy sender=<id>` 按发送方逐条清（受益方不得自清）。
 
+---
+
+## 批 Q 红相复现与读数更正（2026-10-18）
+
+> 背景：批 Q（换届撤销依据按换届各存一份）交付时，eng_coder 回执写「修复前 `1738 (failed: 17)`」，而它自己写的三份档（设计档头注 / 需求档头注 / `CHANGELOG`）写「`failed: 15`」。两个数不能都留着 —— 本节给出**可复现的实测**并据此更正。
+
+### 方法（副本内实跑，不碰工作树）
+
+1. `%TEMP%` 建副本：robocopy 当前工作树（排除 `node_modules` / `.git` / `.thincoder`）；
+2. 副本的 `lib/` 换成 `git archive HEAD lib`（= 批 Q **之前**的旧代码），判据与文档保留**当前新版本** —— 这就是「旧实现 × 新断言」的修复前口径；
+3. 副本的 `node_modules` 用 **junction** 指向仓内（只读；**删除前先 `cmd /c rmdir` 拆链接**，`Test-Path` 确认链接已消失、仓内 `schemastery` 仍在，才 `Remove-Item -Recurse` 删副本 —— 按 `AGENTS.md` §八的 junction 纪律）；
+4. `node host-half.test.mjs`，取**无管道**退出码。
+
+### 读数（逐字）
+
+```text
+17 FAILURE(S)
+assertion total: 1738 (failed: 17)
+EXIT=1
+```
+
+**构成 = 17 条**：
+
+- `Qr1 / Qr2 / Qr3 / Qr4 / Qr5 / Qr7 / Qr9 / Qr10 / Qr11`（**9** 条）—— 批 Q 自己的判据；
+- 既有断言连带红 **8** 条：`M4 prepare: rotationBackup snapshots…` / `U20 冻结未被跳过` / `U27 逐字复用 prepare` / `Y1 reappoint 无角色窄域` / `U9 (c)` / `U10 (c)` / `B/U12 只动两个键` / `Rr8 行为零变更`（新夹具的团队行带 `rotationBackups`，旧码归一化把它丢掉 ⇒ 这些「键集/快照」类断言当场红）；
+- **`Qr6` / `Qr8` 修复前绿**（覆盖缺口类，如实标负相）。
+
+### 更正
+
+| 位置 | 原文 | 改为 | 依据 |
+| --- | --- | --- | --- |
+| 设计档 §0 头注（2026-10-18 实施完成行） | `修复前 1738 (failed: 15)` | **`1738 (failed: 17)`** | 本节复现 |
+| 设计档 §8 末段「两次实测读数」 | 预测「Qr1/Qr3/Qr5/Qr9 红、Qr2 绿」 | 实测 **9 条 Qr 红（含 Qr2）**、覆盖缺口类是 `Qr6`/`Qr8` | 本节复现 |
+| 需求档头注 | `修复前 1738 (failed: 15)` | **`1738 (failed: 17)`** | 本节复现 |
+| `CHANGELOG.md` 批 Q 条目 | `failed: 15`（9 Qr ＋ Rr8 ＋ 5 条既有） | **`failed: 17`**（9 Qr ＋ Rr8 ＋ **7 条既有**） | 本节复现 |
+| `host-half.test.mjs` 批 Q 块头注释 | 「修复前红相 = Qr1/Qr3/Qr4/Qr5/Qr10/Qr11（6）；Qr2/Qr6/Qr7/Qr8/Qr9 绿」 | 同批 9 条 Qr 红 ＋ 8 条连带红；Qr6/Qr8 绿 | 本节复现（该注释随批 Q 交付评审处置轮一起改，改前记录在此） |
+
+### 交付后绿相（同一工作树，父侧实跑）
+
+```text
+node host-half.test.mjs    → ALL PASS / assertion total: 1738 (failed: 0)   EXIT=0
+node client-half.test.mjs  → ALL PASS / assertion total: 310 (failed: 0)    EXIT=0
+```
+
+### 分歧修复轮后读数（2026-10-18 23:5x，父侧实跑）
+
+修复轮 `eng-dsh-e247048adc6f41f9` 处置了审计的 #1/#2/#4/#5/#6(测试标签)/#12/#13/#14/#15/#16/#17 共十一项，并改了 `lib/index.js` 的 4 处描述/兜底文案（+145 B）。父侧复跑：
+
+```text
+node host-half.test.mjs    → ALL PASS / assertion total: 1738 (failed: 0)   EXIT=0
+node client-half.test.mjs  → ALL PASS / assertion total: 310 (failed: 0)    EXIT=0
+```
+
+连带读数：`Rr1` 最大单档字节 **254,802 → 254,947**（仍 < 262,144）；合规档 §六 同批改准（4 处），§二 保留批 R 当时读数并加 as-of 注记；`lib/` 相对导入图 0 环、宿主说明符 8 条、仓根无 `.tmp-*`、顶层键仍 11。断言总数**未变**（1738 / 310）—— 修复轮刻意未新增判据（三条测试债登记在台账 t-11）。
+
 
 
 

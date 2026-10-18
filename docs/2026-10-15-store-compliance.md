@@ -27,7 +27,7 @@
 | **运行时依赖（npm）** | **恰好 1 个**：`schemastery@^3.0.0` | **用途**：插件选项（`team-link` 命名空间的配置 schema）校验 —— 与宿主/`cordis` 自己用的**同一个** schema 库，不是自选的外来依赖。**许可**：MIT。**为什么不内联**：手写一个等价的 schema 校验器会引入**行为差异**（边界/强制转换），而它正是配置面的安全阀；保留 + 在此声明比内联更可审。 |
 | **宿主提供的包**（不在本仓 `dependencies` 里） | `@deepseek-ai/dsh-tools` · `@deepseek-ai/dsh-session-reference` · `@deepseek-ai/cordis` 等 | 由**宿主**在运行时提供；本仓编译期不解析它们（见 [`AGENTS.md`](../AGENTS.md) §四） |
 | **开发/测试依赖** | **零**：两套件是**纯 Node 脚本**（`node host-half.test.mjs` / `node client-half.test.mjs`），不需要测试框架 | ⇒ 本仓**不存在** `devDependencies`，也没有 `prepare` / 构建步骤（**无构建产物、无安装期脚本**）。`scripts.test` 只是这两条命令的封装。 |
-| 固定 commit 的运行文件 | `files` 白名单：`lib` · `cordis.patch.yml` · `dsh-open.cmd` · `register-protocol.ps1` · `LICENSE` · `README.md` · `CHANGELOG.md` · `docs` | ★ **批 R 已达标**：`lib/` 共 **25** 个 `.js` —— 宿主半边 **24 档**（入口 `lib/index.js` **254,802 字节** ＋ **23** 个域档）＋ 浏览器半边 `lib/client.js`（**156,665 字节**）；**最大单档字节 = 254,802**（`lib/index.js`）**< 商城上限 262,144**；历史 **1,093,629 → 现 254,802** ⇒ 见 §六「达标状态」。 |
+| 固定 commit 的运行文件 | `files` 白名单：`lib` · `cordis.patch.yml` · `dsh-open.cmd` · `register-protocol.ps1` · `LICENSE` · `README.md` · `CHANGELOG.md` · `docs` | ★ **批 R 已达标**：`lib/` 共 **25** 个 `.js` —— 宿主半边 **24 档**（入口 `lib/index.js` **254,802 字节** ＋ **23** 个域档）＋ 浏览器半边 `lib/client.js`（**156,665 字节**）；**最大单档字节 = 254,802**（`lib/index.js`）**< 商城上限 262,144**；历史 **1,093,629 → 现 254,802** ⇒ 见 §六「达标状态」。★ **2026-10-18 批 Q 修复轮后读数**：入口档因 4 处描述文案更正为 **254,947 字节**（仍 < 262,144）；本节保留批 R 当时的读数作历史，**现行值以 §六 为准**。 |
 
 ---
 
@@ -67,42 +67,44 @@
 | 场景 | 状态 | 证据 |
 | --- | --- | --- |
 | **一次性 Profile 的装 / 启 / 卸** | **待补**（用户 2026-10-15 已就绪重启时机） | 计划：新建一个空 profile → 从**本地路径**（`link:`）装入 → 启动 DSH 并确认工具面在场（`team_link_status` 出卡）→ 卸载 → 启动确认工具面消失且**无残留目录**；三段输出原文记进 [`docs/verification-log.md`](verification-log.md) |
-| **现状（本机长期部署）** | **已验证但非「一次性 profile」形态** | 本插件自 2026-09 起在本机 desktop profile 持续运行：工具面 11 个、套件 **1727 + 310** 条断言（批 R 收口实测；构成见 [`README.md`](../README.md) §十 —— ★ `host` 现读 `1727 (failed: 1)`，唯一红项是 `Rr4` 的模块图真环，见 §六 末行）、批 K 的崩溃现场读数已在真机取出 |
+| **现状（本机长期部署）** | **已验证但非「一次性 profile」形态** | 本插件自 2026-09 起在本机 desktop profile 持续运行：工具面 11 个、套件**现行 1738 + 310** 条断言（2026-10-18 批 Q 交付后实测；批 R 收口时点为 **1727 + 310**，见 [`README.md`](../README.md) §十）；★ **`Rr4` 现读绿**（`fdfc832` 之后环 = `[]`）—— 旧文「唯一红项是 `Rr4`」**作废**（as-of：批 R 收口时点曾红）；批 K 的崩溃现场读数已在真机取出 |
 
 ---
 
 ## 六、达标状态（原「未达标项」；批 R 收口后逐条改准）
 
 **商城口径**：单文件 **≤ 262,144 字节**（自动审查上限）。
-**最大单档字节 = 254,802**（`lib/index.js`；批 R 收口实测 —— 与判据 `Rr1` 的**同一读数**，本档与判据因此可互校）。
+**最大单档字节 = 254,947**（`lib/index.js`；**现行值 = 2026-10-18 批 Q 修复轮后重测**，与判据 `Rr1` 的**同一读数**；as-of：批 R 收口时点为 **254,802** —— 差值来自批 Q 修复轮的 4 处描述文案更正）。
 
 | # | 商城口径 | 现状 | 判据 / 说明 |
 | --- | --- | --- | --- |
-| 1 | 单文件 **≤ 262,144 字节** | **已达标**：`lib/` 共 **25** 个 `.js` —— 宿主半边 **24 档**（入口 `lib/index.js` **254,802 字节** ＋ **23** 个域档，逐档见下表）＋ 浏览器半边 `lib/client.js`（**156,665 字节**）；**历史 1,093,629 → 现 254,802**（历史值是拆分前 `lib/index.js` 的**工作树字节**：blob **1,077,286 B** ＋ **16,343** 个 CRLF；旧版本档写的 **1,092,693** 是差 **936 B** 的旧读数，本批按实测改准） | 判据 `Rr1`（遍历 `lib/*.js`、逐档打印实数字节）；域档清单见设计档 §5/§6 |
+| 1 | 单文件 **≤ 262,144 字节** | **已达标**：`lib/` 共 **25** 个 `.js` —— 宿主半边 **24 档**（入口 `lib/index.js` **254,947 字节** ＋ **23** 个域档，逐档见下表）＋ 浏览器半边 `lib/client.js`（**156,665 字节**）；**历史 1,093,629 → 现 254,947**（历史值是拆分前 `lib/index.js` 的**工作树字节**：blob **1,077,286 B** ＋ **16,343** 个 CRLF；旧版本档写的 **1,092,693** 是差 **936 B** 的旧读数，本批按实测改准） | 判据 `Rr1`（遍历 `lib/*.js`、逐档打印实数字节）；域档清单见设计档 §5/§6 |
 | 2 | 「固定源扫描不完整」/「未观察的能力信号未知」 | 很可能是 #1 的**连带结果**（单文件过大 ⇒ 自动扫描做不完）；#1 已达标，等商城复检判定 | 本档**不猜死**：复检结论按新开单另行跟进 |
 | 3 | 「运行时或可选依赖需要单独的供应链审查」 | 运行时依赖**恰 1 个** `schemastery`（已在 §二声明用途 / 许可 / 不内联的理由） | 若商城仍要求单独审查材料，按 §二扩写（固定版本 + 完整性哈希） |
 
-**逐档字节（批 R 收口实测；`Rr1` 的同一份读数）**
+**逐档字节（现行值 = 2026-10-18 批 Q 修复轮后重测；`Rr1` 的同一份读数。as-of：批 R 收口时点为 `index.js` 254,802 / `rotation.js` 81,812 / `shared.js` 22,325 / `policy-store.js` 34,955 等，见 git 历史）**
 
 | 档 | 字节 | 档 | 字节 |
 | --- | --- | --- | --- |
-| `lib/index.js`（入口） | 254,802 | `lib/shared.js` | 22,325 |
-| `lib/rotation.js` | 81,812 | `lib/sections-lifecycle.js` | 19,126 |
-| `lib/registration.js` | 67,282 | `lib/team-ledger-tools.js` | 17,366 |
-| `lib/team-session-surface.js` | 66,464 | `lib/block.js` | 14,609 |
-| `lib/policy-store-lifecycle.js` | 65,731 | `lib/sections.js` | 32,034 |
-| `lib/messaging.js` | 62,510 | `lib/policy-store.js` | 34,955 |
-| `lib/team-session-creation.js` | 59,767 | `lib/ledger.js` | 26,070 |
-| `lib/read-surface.js` | 59,206 | `lib/forensics.js` | 32,980 |
-| `lib/recovery.js` | 58,966 | `lib/team-tools.js` | 33,169 |
-| `lib/handover.js` | 55,761 | `lib/team-registration.js` | 48,999 |
-| `lib/watchdog-helpers.js` | 55,028 | `lib/team-session-command.js` | 52,038 |
-| `lib/roster-write.js` | 54,315 | `lib/watchdog.js` | 51,357 |
+| `lib/index.js`（入口） | 254,947 | `lib/rotation.js` | 93,422 |
+| `lib/registration.js` | 67,282 | `lib/team-session-surface.js` | 66,464 |
+| `lib/policy-store-lifecycle.js` | 65,731 | `lib/messaging.js` | 62,510 |
+| `lib/team-session-creation.js` | 61,103 | `lib/read-surface.js` | 59,206 |
+| `lib/recovery.js` | 59,037 | `lib/handover.js` | 55,761 |
+| `lib/roster-write.js` | 55,060 | `lib/watchdog-helpers.js` | 55,028 |
+| `lib/team-session-command.js` | 52,038 | `lib/watchdog.js` | 51,357 |
+| `lib/team-registration.js` | 49,631 | `lib/policy-store.js` | 37,634 |
+| `lib/team-tools.js` | 33,169 | `lib/forensics.js` | 32,980 |
+| `lib/sections.js` | 32,034 | `lib/ledger.js` | 26,070 |
+| `lib/shared.js` | 25,270 | `lib/sections-lifecycle.js` | 19,126 |
+| `lib/team-ledger-tools.js` | 17,366 | `lib/block.js` | 14,609 |
 | `lib/client.js`（浏览器半边） | 156,665 | — | — |
 
-**批 R 收口后仍然红的判据（如实登记，不粉饰）**
+**判据终态（2026-10-18 更正：`Rr4` 已绿，旧登记作废但保留为 as-of）**
 
-`Rr4`（模块图无环）现读 **红** —— `lib/shared.js` 与 `lib/rotation.js` **互导**（`shared.js` 的 `from "./rotation.js"` ↔ `rotation.js` 的 `from "./shared.js"`），静态导入图里有一个**真实的 2 环**（自 `R-5` 起就在，见 `lib/shared.js` 档头对它的论证）。设计档 D3 / §6 不变量 ③ / §9 边界都要求**禁循环**，而收口单的**写域不含 `lib/**`** ⇒ 这条判据**按设计原口径保持严格（不设例外）**，因此它红。**修法（需另立单，改 `lib/**`）**：把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` / `fmtWindowRest` 从 `rotation.js` **下沉**到 `shared.js`（或一个新的低层档），`shared → rotation` 那条边随之消失，图即无环。**在这一处修掉之前，本档不宣称「模块图无环」。**
+★ **现行读数：`Rr4`（模块图无环）现读绿，环 = `[]`** —— `fdfc832` 把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` / `fmtWindowRest` 从 `lib/rotation.js` 下沉到 `lib/shared.js` 之后，`lib/shared.js` 已无任何 `from "./rotation.js"` 行，`lib/rotation.js` 只剩**单向** `import … from "./shared.js"`；`host` 现读 **`1738 (failed: 0)`**。
+
+**as-of（批 R 收口时点，曾经为真，勿再当现状引用）**：当时 `lib/shared.js` 与 `lib/rotation.js` **互导**、静态导入图里有一个**真实的 2 环**（自 `R-5` 起就在），收口单写域不含 `lib/**` ⇒ 判据按设计原口径保持严格、当时为红；修法即上面的下沉，已由 `fdfc832` 完成。**在这一处修掉之前，本档不宣称「模块图无环」。**
 
 ---
 

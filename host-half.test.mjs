@@ -13,6 +13,8 @@ import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { apply, __testing } from "./lib/index.js";
+// ★ 批 Q：真函数读数面（模块命名空间 —— 批 Q 之前这些名字不存在，具名 import 会在链接期失败）。
+import * as qRotation from "./lib/rotation.js";
 
 let failures = 0;
 /** Assertions executed in this run, printed at the end so the README figure is
@@ -324,20 +326,25 @@ function makeSessionProjections({ readings = {}, omit = false, throws = false } 
 function makePermissionPresets({ presets = {}, omitSet = false, refuseSet = false } = {}) {
 	const values = new Map(Object.entries(presets));
 	const sets = [];
+	/** ★ 批 Q · Qr8（Pi7④）：**调用尝试**的账本 —— 与 `sets`（成功写入）分开记。
+	 *  `refuseSet: true` 时那一笔在抛错**之前**就记进 `calls`，于是「写面被调恰一次」
+	 *  与「写面抛错」两件事可以各自断言（只数 `sets` 会把「调了但抛了」读成「没调」）。 */
+	const calls = [];
 	const sessionIdOf = (session) => session?.header?.id ?? session?.id ?? null;
 	const service = {
 		current(session) { return values.get(sessionIdOf(session)); },
 		...(omitSet ? {} : {
 			async set(session, value) {
-				if (refuseSet) throw new Error("stub permissionPresets.set refused");
 				const sessionId = sessionIdOf(session);
+				calls.push({ sessionId, session, value });
+				if (refuseSet) throw new Error("stub permissionPresets.set refused");
 				sets.push({ sessionId, session, value });
 				values.set(sessionId, value);
 				return { currentValue: value };
 			},
 		}),
 	};
-	return { service, sets, values, valueOf: (session) => values.get(sessionIdOf(session)) };
+	return { service, sets, calls, values, valueOf: (session) => values.get(sessionIdOf(session)) };
 }
 
 /**
@@ -3946,8 +3953,10 @@ check("M4 prepare: the token is bound to (team, role, successor) with the 30-min
 	const pending = rotA.role().pending;
 	return pending.session === SUCCESSOR && pending.token === rotToken && pending.team === "night-shift" && pending.role === "coordinator" && pending.expiresAt - pending.createdAt === 30 * 60000 && Array.isArray(pending.migratedPairs) && pending.migratedPairs.length === 0;
 })());
+// 批 Q · FR-Q2：撤销依据从**团队级单槽**改成**按换届各存一份的集合**（`rotationBackups`），
+// 本条的判定面（「快照记下了换届前的信任状态」）一字未变，只是取处换成集合里本次那一份。
 check("M4 prepare: rotationBackup snapshots the pre-rotation trust state (撤销依据)", (() => {
-	const backup = rotA.team().rotationBackup;
+	const backup = at(rotA.team().rotationBackups, 0, { backup: null }).backup;
 	return backup !== null && backup.at > 0 && backup.pairs.length === 4 && backup.trustedSenders.length === 2 && backup.rememberTargets.length === 2 && backup.roster.roles.length === 3;
 })());
 check("M4 prepare: the guidance names the TTL, the model-drafted hand-over and the goal hint (§3.6.2)", rotPrep.includes("30 分钟内有效") && rotPrep.includes("机制与判断分离") && rotPrep.includes("/goal resume") && rotPrep.includes("armed-active = 内建心跳"));
@@ -4765,7 +4774,7 @@ const autoFreezeProbe = {
 	freezeA: autoEnv.calls("session-worker-a").followedup.length,
 	freezeB: autoEnv.calls("session-worker-b").followedup.length,
 	notice: (autoEnv.calls("session-worker-a").followedup[0]?.content?.[0]?.text ?? "").includes("[rotation-freeze]"),
-	backup: autoEnv.team().rotationBackup !== null,
+	backup: (autoEnv.team().rotationBackups ?? []).length === 1,
 	pairs: pairSummary(autoEnv),
 };
 check(`U20 冻结未被跳过: 既有 M4 机制原样走完（rotation-freeze 到其余成员、rotationBackup 快照、pairs 一条未动——信任迁移仍要 claim）`
@@ -5590,7 +5599,7 @@ check("U27 人类在环: 确认框写清爆炸半径（谁在任、谁是发起�
 
 check("U27 逐字复用 prepare: 令牌绑定 (team, role, successor) 三元组、30 分钟 TTL、rotationBackup 快照落下、freeze 广播到其余成员——一步未跳", (() => {
 	const pending = reapEnv.role().pending;
-	const backup = reapEnv.team().rotationBackup;
+	const backup = at(reapEnv.team().rotationBackups, 0, { backup: null }).backup;
 	return pending !== null && pending.session === "session-worker-b" && pending.team === "night-shift" && pending.role === "coordinator" && pending.expiresAt - pending.createdAt === 30 * 60000
 		&& backup !== null && backup.pairs.length === 4 && backup.trustedSenders.length === 1 && backup.rememberTargets.length === 1
 		&& reapEnv.calls("session-worker-b").followedup.some((message) => message.content[0].text.includes("[rotation-freeze]"))
@@ -5779,7 +5788,7 @@ const reapWorkerOut = await reapWorkerEnv.tool("team_link_recover").execute({ ac
 // The freeze broadcast goes to the team's OTHER live members — the successor is
 // excluded by construction (it is the one being handed the role), so the delivery to
 // prove is the one that landed on `session-coordinator-live`'s sink.
-check("Y1 reappoint 无角色窄域（行为锁）: 死的是 **worker** 时 reappoint 照常完成——真铸出绑定 (team, worker-a, successor) 的三元组令牌、真落 rotationBackup、真广播 freeze（有人给它加回 coordinator 守卫，这条当场红）", reapWorkerOut.includes("已按 §11.9.4 L2 铸好换届包") && reapWorkerEnv.role("worker-a").pending !== null && reapWorkerEnv.role("worker-a").pending.role === "worker-a" && reapWorkerEnv.role("worker-a").pending.session === "session-worker-b" && reapWorkerEnv.team().rotationBackup !== null && reapWorkerOut.includes("换届包已就绪") && reapWorkerEnv.calls("session-coordinator-live").followedup.some((message) => message.content[0].text.includes("[rotation-freeze]")) && reapWorkerEnv.ns.data.teams[0].policy.writer === "coordinator");
+check("Y1 reappoint 无角色窄域（行为锁）: 死的是 **worker** 时 reappoint 照常完成——真铸出绑定 (team, worker-a, successor) 的三元组令牌、真落 rotationBackup、真广播 freeze（有人给它加回 coordinator 守卫，这条当场红）", reapWorkerOut.includes("已按 §11.9.4 L2 铸好换届包") && reapWorkerEnv.role("worker-a").pending !== null && reapWorkerEnv.role("worker-a").pending.role === "worker-a" && reapWorkerEnv.role("worker-a").pending.session === "session-worker-b" && (reapWorkerEnv.team().rotationBackups ?? []).length === 1 && reapWorkerOut.includes("换届包已就绪") && reapWorkerEnv.calls("session-coordinator-live").followedup.some((message) => message.content[0].text.includes("[rotation-freeze]")) && reapWorkerEnv.ns.data.teams[0].policy.writer === "coordinator");
 const reapWorkerScope = await reapWorkerEnv.tool("team_link_recover").execute({ action: "revive", team: "night-shift", role: "worker-a" }, execFor(reapWorkerEnv.agentFor("session-worker-b")));
 // 批次 2 §4.2 (a) 把这条对照**反转**了：旧锁咬的是「同角色走 revive 仍被窄域拒」
 // （删除窄域即红），现在窄域本身被设计与 owner 裁定删除，于是锁换成新语义——同一个
@@ -7702,7 +7711,7 @@ const tiDialog = threatEnv.uq.requests[0];
 const tiMinted = at(threatEnv.creates, 0, {}).sessionId;
 check("U9 (c): 事故形状下对话框照常弹出，且选项里**含**常驻的「自建继任者」——候选集 = 活成员（这里是协调者自己）∪ 合成候选，不再是「只有一个已就座的人可选」", tiDialog !== undefined && tiDialog.questions[0].options.map((option) => option.label).join(",") === `session-ti-coord,${__testing.SELF_SUCCESSOR_LABEL}` && tiOut.includes("已按 §11.9.4 L2 铸好换届包"));
 check("U9 (c): 选中合成候选后 `agents.create` 真被调用，且铸出来的 id 是 §10.2.2 模板形 team-link-<team>-<role>-<uuid8>（与被恢复的角色同名段）", threatEnv.creates.length === 1 && typeof tiMinted === "string" && /^team-link-threat-intel-b-[0-9a-f]{8}$/u.test(tiMinted) && tiMinted !== TI_DEAD_B);
-check("U9 (c): prepare.successor 就是这个新铸的 id，令牌绑定三元组 (threat-intel, b, <minted>)、TTL 30 分钟——prepare 逐字跑，令牌类型未新增", threatEnv.role("b").pending !== null && threatEnv.role("b").pending.session === tiMinted && threatEnv.role("b").pending.team === "threat-intel" && threatEnv.role("b").pending.role === "b" && threatEnv.role("b").pending.expiresAt - threatEnv.role("b").pending.createdAt === 30 * 60000 && threatEnv.team().rotationBackup !== null);
+check("U9 (c): prepare.successor 就是这个新铸的 id，令牌绑定三元组 (threat-intel, b, <minted>)、TTL 30 分钟——prepare 逐字跑，令牌类型未新增", threatEnv.role("b").pending !== null && threatEnv.role("b").pending.session === tiMinted && threatEnv.role("b").pending.team === "threat-intel" && threatEnv.role("b").pending.role === "b" && threatEnv.role("b").pending.expiresAt - threatEnv.role("b").pending.createdAt === 30 * 60000 && (threatEnv.team().rotationBackups ?? []).length === 1);
 check("U9 (c): 新建的会话是**根会话**——meta 里没有 origin / parentSession / delegationDepth / parentAgent 任何血统字段", threatEnv.creates[0]?.meta?.origin === undefined && threatEnv.creates[0]?.meta?.parentSession === undefined && threatEnv.creates[0]?.meta?.parentAgent === undefined);
 check("U9 (c): 三处留痕齐全——① 版本史 recoveries(verb=reappoint, to=<minted>)；② roster.md 镜像；③ decisions.md 追加（带队名/角色/继任者）", at(threatEnv.role("b").recoveries, 0, {}).verb === "reappoint" && at(threatEnv.role("b").recoveries, 0, {}).from === TI_DEAD_B && at(threatEnv.role("b").recoveries, 0, {}).to === tiMinted && at(threatEnv.role("b").recoveries, 0, {}).by === "session-ti-coord" && String(at(threatEnv.role("b").recoveries, 0, {}).note).includes("recovery(reappoint, vacant-due-to-death,"));
 // The trails and the hand-over document are read from DISK (the mirror and the
@@ -7763,7 +7772,7 @@ check("U10 (c，批次 4 收窄): 宿主没有 agents.create 时**弹框照开**
 		&& noCreateEnv.creates.length === 0
 		&& noCreateEnv.role().pending !== null
 		&& noCreateEnv.role().pending.session === "session-worker-b"
-		&& noCreateEnv.team().rotationBackup !== null;
+		&& (noCreateEnv.team().rotationBackups ?? []).length === 1;
 	return ok || (console.log(`     实测读数 ${JSON.stringify({ labels, dialogs: noCreateEnv.uq.requests.length, creates: noCreateEnv.creates.length, pending: noCreateEnv.role().pending?.session ?? null })}`), false);
 })());
 // ② 两条路同时不存在（无 agents.create + 零活成员候选）⇒ 仍是 fail-closed 报告 + 零弹框。
@@ -8798,7 +8807,7 @@ check("B/U12 零回归（rotate / recover）: 两个工具的动词闭集锁定�
 		&& rgEnv.tool("team_link_rotate").parameters.properties.action.enum.join(",") === "prepare,claim"
 		&& rgEnv.tool("team_link_recover").parameters.properties.action.enum.join(",") === "revive,reappoint");
 check("B/U12 只动两个键: 切档只改 mode / leadSessionId —— 团队行的键集恰是规范形状（多出来的正是那两个），roles / policy / workspace / createdAt 逐字节不变",
-	Object.keys(smOk.ns.data.teams[0]).sort().join(",") === "createdAt,leadSessionId,mode,name,policy,roles,rotationBackup,workspace"
+	Object.keys(smOk.ns.data.teams[0]).sort().join(",") === "createdAt,leadSessionId,mode,name,policy,roles,rotationBackup,rotationBackups,workspace"
 		&& JSON.stringify(smOk.ns.data.teams[0].policy) === JSON.stringify({ writer: "coordinator" })
 		&& smOk.ns.data.teams[0].roles.length === 1 && smOk.ns.data.teams[0].roles[0].current === "session-self");
 
@@ -15084,12 +15093,12 @@ console.log(`[PI-DIAG] ${JSON.stringify({
 //   ③ **收口单（本单）追加 Rr1 / Rr2 / Rr4 / Rr7 / Rr8**（拆分已落地、套件 1722/0 为前置）：
 //      Rr1 逐档字节 · Rr2 入口与对外面逐字不变 · Rr4 模块图无环 · Rr7 合规档数字与实测一致 ·
 //      Rr8 行为零变更（**既有断言**全绿 ＋ 条数对齐）。
-//   ★ **Rr4 的诚实读数（本单实测，不粉饰）**：`lib/shared.js` 与 `lib/rotation.js` **互导** ⇒
-//     静态导入图有一个真实的 2 环（`R-5` 起就存在，见 `lib/shared.js` 档头对它的论证）。
-//     设计档的 D3 / §6 不变量 ③ / §9 边界都要求「禁循环」，而本单**写域不含 `lib/**`** ⇒
-//     这条判据**按设计原口径保持严格**（不设例外），因此它**现读红**。修法（改 `lib/**`，需另立单）：
-//     把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` /
-//     `fmtWindowRest` 从 `rotation.js` 下沉到 `shared.js`（或新的低层档），`shared → rotation` 那条边即消失。
+//   ★ **Rr4 的读数（2026-10-18 更正，B-5）**：收口单当时记的「`lib/shared.js` ⇄ `lib/rotation.js`
+//     真环」**已经不是事实** —— `fdfc832` 把 `ROTATION_TTL_MS` ／ `ROTATION_RATE_LIMIT_MS` ／
+//     `ROTATION_TOKEN_LABEL` ／ `pairKey` ／ `fmtWindowRest` 下沉之后，`lib/shared.js` **没有**
+//     `from "./rotation.js"` 的任何一行，`lib/rotation.js` 只剩**单向** `import … from "./shared.js"`。
+//     因此本块不再保留那句旧结论：Rr4 的环读数由判据**当场实测**（`rrLibCycles`），零环即绿；
+//     设计档的 D3 / §6 不变量 ③ / §9 边界要求的「禁循环」判据**原样保留**（不设例外）。
 
 const rrPkg = JSON.parse(readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"));
 const rrReadme = readFileSync(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
@@ -15353,7 +15362,7 @@ const rrNonRr = assertionRecords.filter((record) => !record.label.startsWith("�
 const rrNonRrRed = rrNonRr.filter((record) => !record.ok).map((record) => record.label);
 const rrA7 = rrNonRr.filter((record) => record.label.startsWith("A-7 "));
 const rrRrCount = assertionRecords.filter((record) => record.label.startsWith("批 R · Rr")).length;
-check(`批 R · Rr8 行为零变更（红相＝本轮改到任何既有判据的文本/期望值，或搬运动到逻辑 ⇒ 既有判据红；或判据条数变了 ⇒ 条数那一半红）: 本轮**之前**已有的断言现读 **${rrBeforeThisRound.length}** 条、**全部绿**（红项 ${show(rrExistingRed)}）；其中**非 Rr** 既有判据 **${rrNonRr.length}** 条 = **${RR_BASELINE_1697}**（拆分前的宿主套件基线）＋ **${RR_FR7_15}**（批 34 / FR-7 的 \`A-7\` 判据，**非批 R**；现读 ${rrA7.length} 条），非 Rr 红项 ${show(rrNonRrRed)}；批 R 自己的 \`Rr*\` 判据现读 **${rrRrCount}**（本单之前 10 条 ＋ 本单新增 4 条；本行即第 **${rrRrCount + 1}** 条）；本行求值时 \`assertions\` = **${assertions}**（＋本行 ⇒ **${assertions + 1}**）。★ 判定面**只**是「行为零变更」：既有断言全绿 ＋ 条数对齐；\`client-half\` 的 310 条由它自己的运行自报（本套件不代跑）。★ 如实：Rr4 现读**红**（\`lib/shared.js ⇄ lib/rotation.js\` 真环）—— 那是**结构**发现，不是行为漂移；本条不替它背书、也不掩盖它`,
+check(`批 R · Rr8 行为零变更（红相＝本轮改到任何既有判据的文本/期望值，或搬运动到逻辑 ⇒ 既有判据红；或判据条数变了 ⇒ 条数那一半红）: 本轮**之前**已有的断言现读 **${rrBeforeThisRound.length}** 条、**全部绿**（红项 ${show(rrExistingRed)}）；其中**非 Rr** 既有判据 **${rrNonRr.length}** 条 = **${RR_BASELINE_1697}**（拆分前的宿主套件基线）＋ **${RR_FR7_15}**（批 34 / FR-7 的 \`A-7\` 判据，**非批 R**；现读 ${rrA7.length} 条），非 Rr 红项 ${show(rrNonRrRed)}；批 R 自己的 \`Rr*\` 判据现读 **${rrRrCount}**（本单之前 10 条 ＋ 本单新增 4 条；本行即第 **${rrRrCount + 1}** 条）；本行求值时 \`assertions\` = **${assertions}**（＋本行 ⇒ **${assertions + 1}**）。★ 判定面**只**是「行为零变更」：既有断言全绿 ＋ 条数对齐；\`client-half\` 的 310 条由它自己的运行自报（本套件不代跑）。★ 如实：Rr4 现读环 = ${show(rrLibCycles)}（\`fdfc832\` 之后 \`lib/shared.js\` 已无 \`from "./rotation.js"\`、\`lib/rotation.js\` 只剩单向 \`import … from "./shared.js"\` ⇒ 旧注释里那句「真环」作废；本条按 Rr4 的**实际读数**给出，不另立断言、也不掩盖它）`,
 	rrBeforeThisRound.length === RR_BASELINE_1697 + RR_FR7_15 + 10
 		&& rrExistingRed.length === 0
 		&& rrNonRr.length === RR_BASELINE_1697 + RR_FR7_15
@@ -15361,6 +15370,185 @@ check(`批 R · Rr8 行为零变更（红相＝本轮改到任何既有判据的
 		&& rrNonRrRed.length === 0
 		&& rrRrCount === 14
 		&& assertions === 1726);
+
+
+// ===========================================================================
+// 批 Q · 换届的「撤销依据」按换届各存一份（设计档 2026-10-14-rotation-backup-per-rotation-design.md）
+// 判据 Qr1–Qr11（§8）。★ 本块刻意放在 Rr8 **之后**：Rr8 的判定面（既有断言全绿 ＋ 条数对齐）
+//   一个字符未动 —— 它求值时 assertions 仍是拆分期的 1726，本块这 11 条只落在它之后。
+// ★ 修复前红相（本次审计实测，见 docs/verification-log.md 的 2026-10-18 节）：Qr1 / Qr2 / Qr3 / Qr4 / Qr5 / Qr7 / Qr9 / Qr10 / Qr11 共 9 条红；
+//   Qr6 / Qr8 属覆盖缺口类（修复前绿，如实标注）；同批既有断言连带红 8 条（M4 prepare / U20 / U27 / Y1 / U9 (c) / U10 (c) / B/U12 / Rr8）。
+// ===========================================================================
+/** 真函数读数面 —— 用**模块命名空间**而不是具名 import：批 Q 之前这些名字不存在，
+ *  具名导入会在**链接期**失败，把「修复前红相」变成「整套件跑不起来」（本仓最反对的假红）。 */
+const qEntriesOf = (team) => (typeof qRotation.rotationEntriesOf === "function" ? qRotation.rotationEntriesOf(team) : []);
+const qEntryOf = (team, rid) => (typeof qRotation.rotationEntryOf === "function" ? qRotation.rotationEntryOf(team, rid) : null);
+const qRidOf = (entry) => (typeof qRotation.pendingRotationRid === "function" ? qRotation.pendingRotationRid(entry) : null);
+const qReadText = async (target) => { try { return await readFile(target, "utf8"); } catch { return ""; } };
+/** 批 Q 的团队行 / 角色行 / 旧槽（raw settings 形状；policy.get() 的归一化照常跑）。 */
+const qRole = (role, current, pending = null) => ({ role, current, pending, rotationAt: 0, provisional: null, rotationStatus: "", history: [{ session: current, from: 1_700_000_000_000, until: null }] });
+const qRow = (roles, extra = {}) => ({ name: "q-team", createdAt: 1_700_000_000_000, workspace: TEAM_WS, policy: { writer: "coordinator" }, roles, rotationBackup: null, rotationBackups: [], mode: "sessions", leadSessionId: "", ...extra });
+const qSlot = (extra = {}) => ({ at: 1_700_000_500_000, pairs: [], trustedSenders: [], rememberTargets: [], roster: { name: "q-team", roles: [] }, ...extra });
+const Q_NEXT = "session-q-next";
+const qAgents = [{ id: "session-worker-a", status: "idle" }, { id: "session-worker-b", status: "idle" }, { id: SUCCESSOR, status: "idle" }, { id: Q_NEXT, status: "idle" }];
+const qPair = (b, createdAt = 1) => ({ a: ROT_SELF, b, createdAt });
+const qQr8Base = { approvalPolicy: "qr9-approval" };
+
+// --- Qr1：两次 prepare 互不覆盖（本批的存在理由） ----------------------------
+const qr1Env = rotateEnv({ askScript: [], pairs: [qPair("session-worker-a")], extraAgents: qAgents, teams: [qRow([qRole("coordinator", ROT_SELF), qRole("worker-a", "session-worker-a")])] });
+const qr1PrepA = String(await qr1Env.rotate.execute({ action: "prepare", team: "q-team", role: "coordinator", successor: SUCCESSOR }, execFor(qr1Env.senderAgent)));
+qr1Env.ns.data.pairs.push(qPair("session-worker-b", 2));
+const qr1PrepB = String(await qr1Env.rotate.execute({ action: "prepare", team: "q-team", role: "worker-a", successor: Q_NEXT }, execFor(qr1Env.agentFor("session-worker-a"))));
+const qr1Entries = qr1Env.team().rotationBackups ?? [];
+const qr1RidA = qr1Env.role("coordinator").pending?.rotationId ?? null;
+const qr1RidB = qr1Env.role("worker-a").pending?.rotationId ?? null;
+const qr1A = qEntryOf(qr1Env.team(), qr1RidA);
+const qr1B = qEntryOf(qr1Env.team(), qr1RidB);
+check("批 Q · Qr1 两次 prepare 互不覆盖（红相＝保持团队级单槽 ⇒ 第二次 prepare 整队覆写 ⇒ 第一条消失 ⇒ 本条红 —— 这正是本批的存在理由）: 同队两个角色**先后** prepare（串行写面口径：单进程 ＋ policy.update 单写点；本批不对并发做断言，评审 🔵#7）⇒ 集合里**恰两条**、rid 互不相同且各自等于对应 pending 的 rotationId、两份快照**逐字段可辨**（第一次 1 条 pairs / 第二次 2 条，用不同值种防同值恒真）；两条回执各自点名自己的 rid"
+	+ (qr1Entries.length === 2 && qr1A !== null && qr1B !== null && qr1A.backup.pairs.length !== qr1B.backup.pairs.length ? "" : "（实测：" + show({ entries: qr1Entries.map((entry) => [entry.rid, entry.backup.pairs.length]), ridA: qr1RidA, ridB: qr1RidB }) + "）"),
+	qr1Entries.length === 2 && qr1RidA !== null && qr1RidB !== null && qr1RidA !== qr1RidB
+		&& qr1A !== null && qr1B !== null && qr1A.backup.pairs.length === 1 && qr1B.backup.pairs.length === 2
+		&& qr1PrepA.includes("rid=" + qr1RidA) && qr1PrepB.includes("rid=" + qr1RidB));
+
+// --- Qr2：旧档无损折叠（修复前红：旧码没有 normalizeRotationBackups/rotationEntriesOf） --------------
+const qr2SlotValue = qSlot({ pairs: [{ a: "p1", b: "p2", createdAt: 1, provisional: false, expiresAt: 0 }, { a: "p3", b: "p4", createdAt: 2, provisional: false, expiresAt: 0 }], trustedSenders: ["ts-1", "ts-2"], rememberTargets: ["rt-1"], roster: { name: "q-team", roles: [qRole("coordinator", "old-c"), qRole("worker-a", "old-w")] } });
+const qr2Row = qRow([qRole("coordinator", ROT_SELF), qRole("worker-a", "session-worker-a")], { rotationBackup: qr2SlotValue });
+const qr2Entries = qEntriesOf(qr2Row);
+const qr2Mirror = __testing.renderRosterMirror(qr2Row);
+check("批 Q · Qr2 旧档无损折叠（修复前红：旧码没有 normalizeRotationBackups/rotationEntriesOf；红相＝丢弃旧槽或只搬一半字段 ⇒ 本条红）: 旧格式单槽 ≠ null（零 pending）⇒ 读取视图里**恰一条**折叠条目，rid 是确定性推导 legacy:<at ISO>（绝不 legacy:undefined），pairs / trustedSenders / rememberTargets / roster **逐字段**与旧槽一致；名册镜像照实列出它（升级之后仍看得见、仍能按它还原）"
+	+ (qr2Entries.length === 1 ? "" : "（实测：" + show(qr2Entries) + "）"),
+	qr2Entries.length === 1
+		&& typeof qr2Entries[0].rid === "string" && qr2Entries[0].rid.startsWith("legacy:20") && !qr2Entries[0].rid.includes("undefined")
+		&& JSON.stringify(qr2Entries[0].backup.pairs) === JSON.stringify(qr2SlotValue.pairs)
+		&& JSON.stringify(qr2Entries[0].backup.trustedSenders) === JSON.stringify(qr2SlotValue.trustedSenders)
+		&& JSON.stringify(qr2Entries[0].backup.rememberTargets) === JSON.stringify(qr2SlotValue.rememberTargets)
+		&& JSON.stringify(qr2Entries[0].backup.roster) === JSON.stringify(qr2SlotValue.roster)
+		&& qr2Mirror.includes("rid " + qr2Entries[0].rid) && qr2Mirror.includes("pairs 2 条"));
+
+// --- Qr3/Qr4/Qr5 共用同一个两在飞夹具 ----------------------------------------
+const qr3Env = rotateEnv({ askScript: [], pairs: [qPair("session-worker-a")], extraAgents: qAgents, teams: [qRow([qRole("coordinator", ROT_SELF), qRole("worker-a", "session-worker-a")])] });
+const qr3TokenA = tokenOf(await qr3Env.rotate.execute({ action: "prepare", team: "q-team", role: "coordinator", successor: SUCCESSOR }, execFor(qr3Env.senderAgent)));
+qr3Env.ns.data.pairs.push(qPair("session-worker-b", 2));
+await qr3Env.rotate.execute({ action: "prepare", team: "q-team", role: "worker-a", successor: Q_NEXT }, execFor(qr3Env.agentFor("session-worker-a")));
+const qr3RidA = qr3Env.role("coordinator").pending?.rotationId ?? null;
+const qr3RidB = qr3Env.role("worker-a").pending?.rotationId ?? null;
+const qr3CountA = qEntryOf(qr3Env.team(), qr3RidA)?.backup.pairs.length ?? -1;
+const qr3CountB = qEntryOf(qr3Env.team(), qr3RidB)?.backup.pairs.length ?? -2;
+const qr3BeforeB = JSON.stringify(qEntryOf(qr3Env.team(), qr3RidB));
+
+// Qr4 先读（claim 之前）：镜像 / roster get 的详情各列**全部**在飞条目
+const qr4Get = String(await qr3Env.roster.execute({ action: "get", team: "q-team" }, execFor(qr3Env.senderAgent)));
+const qr4Mirror = await qReadText(path.join(TEAM_WS, "team", "q-team", "roster.md"));
+const qr4Rows = (text) => text.split("\n").filter((line) => (qr3RidA !== null && line.includes("rid " + qr3RidA)) || (qr3RidB !== null && line.includes("rid " + qr3RidB))).length;
+check("批 Q · Qr4 读面列全部在飞条目（红相＝只显示「最近一份」⇒ 两条在飞只出现一行 ⇒ 本条红）: 名册镜像与 roster get 的详情**各列全部**在飞条目的摘要（两条 ⇒ 两行），每条点名自己的 rid —— 这是排障的人第一次看得见并发/连续的多次换届"
+	+ (qr4Rows(qr4Get) === 2 && qr4Rows(qr4Mirror) === 2 ? "" : "（实测：" + show({ get: qr4Rows(qr4Get), mirror: qr4Rows(qr4Mirror), ridA: qr3RidA, ridB: qr3RidB }) + "）"),
+	qr3RidA !== null && qr3RidB !== null && qr4Rows(qr4Get) === 2 && qr4Rows(qr4Mirror) === 2);
+
+const qr3Claim = String(await qr3Env.rotate.execute({ action: "claim", team: "q-team", role: "coordinator", token: qr3TokenA }, qr3Env.exec(SUCCESSOR)));
+/** 回执里的**撤销依据行**（只有它该出现「本次那一条」的读数；对称撤销行另有自己的 pairs 计数，不能整段判）。 */
+const qr3BasisLine = () => qr3Claim.split("\n").find((line) => line.includes("撤销依据（本次换届 rid=")) ?? "";
+const qr3TeamAfter = qr3Env.team();
+const qr3AfterB = JSON.stringify(qEntryOf(qr3TeamAfter, qr3RidB));
+check("批 Q · Qr3 claim 取对那份（红相＝取「团队第一条 / 最近一条」⇒ 张冠李戴 ⇒ 本条红）: 两个角色各有一份在飞（A 的快照 1 条 pairs / B 的 2 条，刻意不同值）⇒ 用 A 的令牌 claim ⇒ 回执的撤销依据行是 **A 的 rid ＋ A 的读数**（不是 B 的 2 条），旧任来自 A 那份快照的 roster"
+	+ (qr3BasisLine().includes("rid=" + qr3RidA) ? "" : "（实测：" + show({ rid: qr3RidA, countA: qr3CountA, line: qr3BasisLine() }) + "）"),
+	qr3RidA !== null && qr3CountA === 1 && qr3CountB === 2
+		&& qr3BasisLine().includes("rid=" + qr3RidA)
+		&& qr3BasisLine().includes("pairs " + qr3CountA + " 条")
+		&& !qr3BasisLine().includes("pairs " + qr3CountB + " 条")
+		&& qr3Claim.includes("旧任 " + ROT_SELF + " → 新任 " + SUCCESSOR));
+
+// Qr5 的第二半：过期取消同理（只清扫 A 时 B 的条目与 pending 都还在）
+const qr5Env = rotateEnv({ askScript: [], pairs: [], extraAgents: qAgents, teams: [qRow([qRole("coordinator", ROT_SELF), qRole("worker-a", "session-worker-a")])] });
+await qr5Env.rotate.execute({ action: "prepare", team: "q-team", role: "coordinator", successor: SUCCESSOR }, execFor(qr5Env.senderAgent));
+await qr5Env.rotate.execute({ action: "prepare", team: "q-team", role: "worker-a", successor: Q_NEXT }, execFor(qr5Env.agentFor("session-worker-a")));
+const qr5RidA = qr5Env.role("coordinator").pending?.rotationId ?? null;
+const qr5RidB = qr5Env.role("worker-a").pending?.rotationId ?? null;
+const qr5BeforeB = JSON.stringify(qEntryOf(qr5Env.team(), qr5RidB));
+qr5Env.role("coordinator").pending.expiresAt = 1;
+await qr5Env.rotation.sweep({ now: Date.now() });
+const qr5SweepOk = qr5RidA !== null && qr5RidB !== null && qEntryOf(qr5Env.team(), qr5RidA) === null
+	&& JSON.stringify(qEntryOf(qr5Env.team(), qr5RidB)) === qr5BeforeB && qr5Env.role("worker-a").pending !== null;
+check("批 Q · Qr5 收尾只删自己（红相＝清空整个集合 ⇒ 别人在飞的那份也被删 ⇒ 本条红）: A claim 成功 ⇒ A 那条消失、pending 清空，B 那条**逐字节原样在**（JSON 相等）；过期取消同理（只清扫 A ⇒ A 的条目消失、A 的 pending 清空，B 的条目与 pending 都原样）"
+	+ (qr3AfterB === qr3BeforeB && qr5SweepOk ? "" : "（实测：" + show({ claimKeptB: qr3AfterB === qr3BeforeB, sweepKeptB: qr5SweepOk }) + "）"),
+	qr3RidA !== null && qr3RidB !== null && qr3AfterB === qr3BeforeB
+		&& (qr3TeamAfter.rotationBackups ?? []).length === 1 && qr3Env.role("coordinator").pending === null
+		&& qEntryOf(qr3TeamAfter, qr3RidA) === null && qr5SweepOk);
+
+// --- Qr6：零新增顶层键 / 零新依赖 -------------------------------------------
+check("批 Q · Qr6 零新增顶层键 / 零新依赖（红相＝往 policy.json 加一个顶层键、或加一条宿主 import ⇒ 本条红）: policy.json 顶层键仍**恰十一键（键集不变）**（复用权威读数 U19_POLICY_KEYS 的真读数 —— 本批改动只发生在**团队行内部**），宿主半边文件集汇总出的宿主说明符仍**恰 8 条**"
+	+ (sameJson(Object.keys(qr3Env.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS) ? "" : "（实测：顶层 " + show(Object.keys(qr3Env.settings.namespaces.get("team-link").base).sort()) + "）"),
+	sameJson(Object.keys(qr3Env.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS)
+		&& hostSpecifierSetMatches(hostHalfSpecifiers(), HOST_IMPORTS));
+
+// --- Qr7：不回归 ------------------------------------------------------------
+const qr7Family = assertionRecords.filter((record) => !record.label.startsWith("批 Q · Qr") && /(M4|U9|U10|U11|U20|U26|U27|U36|U37|Pi3|Pi4|Pi7|Pi8|Pi9)/.test(record.label));
+const qr7Red = qr7Family.filter((record) => !record.ok).map((record) => record.label);
+check("批 Q · Qr7 不回归（红相＝顺手改了 claim 的信任迁移语义 / 令牌三段绑定 / provisional 回退 / 过期清扫 ⇒ 既有判据族当场红）: 既有的 rotate / reappoint / claim / 过期清扫 / 恢复判据族（M4 · U9–U11 · U20 · U26 · U27 · U36 · U37 · Pi3/Pi4/Pi7/Pi8/Pi9）现读 " + qr7Family.length + " 条**全部绿**（红项 " + show(qr7Red) + "）",
+	qr7Family.length >= 40 && qr7Red.length === 0);
+
+// --- Qr8：结转-1 / Pi7④ 审批写面**抛错**分支（覆盖缺口类） --------------------
+const qr8Env = rotateEnv({ askScript: ["创建并交班"], teams: handoffTeam(path.join(HANDOFF_WS, "qr8")), permissionPresetsOptions: { refuseSet: true }, projectionsReadings: { permissions: { currentValue: PI_APPROVAL } } });
+const qr8Out = String(await qr8Env.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: PI_HANDOFF }, execFor(qr8Env.senderAgent)));
+// ★ 期望子串 = 实施首步回读到的**逐字**文案（审批档落地（FR-P4）失败：permissionPresets.set 抛错（…）
+//   ——**新会话的审批档仍是宿主缺省**（…）），不是事后改写的一句。
+check("批 Q · Qr8 结转-1 / Pi7④ 审批写面抛错分支（**期望子串按实施首步回读的逐字文案钉死**；红相＝去掉 catch 里那条如实报（换成功行或删掉）⇒ 本条红）: 桩 refuseSet:true ⇒ ① creates 恰 1 ② 审批写面**被调恰 1 次**（calls 账本）且**一次都没写成功**（sets 为空）③ 回执含那句逐字失败文案（含抛错原因与新会话仍是宿主缺省）且**不含**成功分支的「已在创建返回之后调用」"
+	+ (qr8Out.includes("审批档落地（FR-P4）失败") ? "" : "（实测：" + show(qr8Out.slice(-300)) + "）"),
+	qr8Env.creates.length === 1 && qr8Env.permissionPresets.calls.length === 1 && qr8Env.permissionPresets.sets.length === 0
+		&& qr8Out.includes("审批档落地（FR-P4）失败：permissionPresets.set 抛错（")
+		&& qr8Out.includes("stub permissionPresets.set refused")
+		&& qr8Out.includes("新会话的审批档仍是宿主缺省")
+		&& !qr8Out.includes("已在创建返回之后调用"));
+
+// --- Qr9：结转-2 / session 在场守卫（修复前红：旧码没有 session 守卫） ----------------------------
+const qApplyApproval = (await import("./lib/team-session-creation.js")).applyInheritedApprovalPolicy;
+const qr9Service = { calls: [], async set() { this.calls.push(1); } };
+const qr9Out = await qApplyApproval(qQr8Base, { face: "writable", service: qr9Service, reason: "" }, { agent: {} });
+check("批 Q · Qr9 结转-2 / session 在场守卫（红相＝拿 undefined 去调写面 ⇒ 桩记账一次调用 ⇒ 本条红）: handle 形状缺 agent.session ⇒ **不调写面**（calls 为空）、返回**具名**「写面入参形状断层」行，且绝不读起来像设成了（不含「已在创建返回之后调用」）"
+	+ (qr9Service.calls.length === 0 ? "" : "（实测：" + show(qr9Out) + "）"),
+	qr9Out.attempted === false && qr9Out.applied === false && qr9Service.calls.length === 0
+		&& String(qr9Out.line ?? "").includes("写面入参形状断层")
+		&& !String(qr9Out.line ?? "").includes("已在创建返回之后调用"));
+
+// --- Qr10 ★：升级窗口端到端（评审 🔴#1 折入 —— 本批最危险那一刻） -------------
+const qr10SlotValue = qSlot({ pairs: [{ a: ROT_SELF, b: "session-worker-b", createdAt: 3, provisional: false, expiresAt: 0 }], trustedSenders: ["ts-legacy"], rememberTargets: ["rt-legacy"], roster: { name: "q-team", roles: [{ role: "coordinator", current: "legacy-old", pending: null }, { role: "worker-a", current: "session-worker-a", pending: null }] } });
+const qr10Pending = { session: SUCCESSOR, token: "qr10-token", team: "q-team", role: "coordinator", expiresAt: Date.now() + 600000, createdAt: Date.now(), migratedPairs: [] };
+const qr10Env = rotateEnv({ askScript: [], pairs: [], extraAgents: qAgents, teams: [qRow([qRole("coordinator", ROT_SELF, qr10Pending), qRole("worker-a", "session-worker-a")], { rotationBackup: qr10SlotValue })] });
+const qr10Folded = qEntriesOf(qr10Env.team());
+const qr10RidSide = qRidOf(qr10Env.role("coordinator"));
+const qr10FoldOk = qr10Folded.length === 1 && qr10Folded[0].rid === "legacy:coordinator" && qr10RidSide === qr10Folded[0].rid;
+// ② 同一团队上的另一次 prepare（reappoint 走的就是 prepare）⇒ 旧槽被**实体化**进集合，一个字不丢
+await qr10Env.rotate.execute({ action: "prepare", team: "q-team", role: "worker-a", successor: Q_NEXT }, execFor(qr10Env.agentFor("session-worker-a")));
+const qr10KeptOk = JSON.stringify(qEntryOf(qr10Env.team(), "legacy:coordinator")?.backup) === JSON.stringify(qr10SlotValue) && (qr10Env.team().rotationBackups ?? []).length === 2;
+const qr10Claim = String(await qr10Env.rotate.execute({ action: "claim", team: "q-team", role: "coordinator", token: "qr10-token" }, qr10Env.exec(SUCCESSOR)));
+const qr10AfterClaim = qr10Env.team();
+check("批 Q · Qr10 ★ 升级窗口端到端（红相①＝折叠条目与 claim 侧推导对不上 ⇒ 取到 null ⇒ 本条红（评审指出的正是这个洞）；红相②＝去掉写回吸收 ⇒ 被吃掉的那份在下一次读时复活 ⇒ 本条红）: 夹具 = 旧单槽 ≠ null ＋ **恰一个升级前就存在的 pending（其内没有 rotationId）** ⇒ ① 折叠 rid 与 claim 侧推导**都**是 legacy:coordinator（两边一致）② claim 真的取到那份折叠备份（撤销依据行点名该 rid 与快照读数、旧任来自快照 roster 的 legacy-old）③ 同团队另一次 prepare 把旧槽**实体化**进集合（字段逐项仍在）④ 收尾之后旧槽 null、该条消失、下一次读**不再长回来**"
+	+ (qr10FoldOk && qr10KeptOk ? "" : "（实测：" + show({ fold: qr10Folded.map((entry) => entry.rid), side: qr10RidSide, kept: qr10KeptOk }) + "）"),
+	qr10FoldOk && qr10KeptOk
+		&& qr10Claim.includes("rid=legacy:coordinator")
+		&& qr10Claim.includes("旧任 legacy-old → 新任 " + SUCCESSOR)
+		&& qr10Claim.includes("trustedSenders 1 项")
+		&& qr10AfterClaim.rotationBackup === null
+		&& qEntryOf(qr10AfterClaim, "legacy:coordinator") === null
+		&& qEntriesOf(qr10AfterClaim).length === 1);
+
+// --- Qr11 ★：那一份不存在 ⇒ 具名拒绝、绝不回退 -------------------------------
+const qr11Pending = { session: SUCCESSOR, token: "qr11-token", team: "q-team", role: "coordinator", rotationId: "rot-missing", expiresAt: Date.now() + 600000, createdAt: Date.now(), migratedPairs: [] };
+const qr11Other = { rid: "rot-other", at: 1_700_000_000_000, backup: { at: 1_700_000_000_000, pairs: [], trustedSenders: ["ts-other"], rememberTargets: [], roster: { name: "q-team", roles: [] } } };
+const qr11Env = rotateEnv({ askScript: [], pairs: [qPair("session-worker-a")], extraAgents: qAgents, teams: [qRow([qRole("coordinator", ROT_SELF, qr11Pending), qRole("worker-a", "session-worker-a")], { rotationBackups: [qr11Other] })] });
+const qr11PairsBefore = JSON.stringify(qr11Env.ns.data.pairs);
+const qr11Out = String(await qr11Env.rotate.execute({ action: "claim", team: "q-team", role: "coordinator", token: "qr11-token" }, qr11Env.exec(SUCCESSOR)));
+const qr11After = qr11Env.team();
+// 对照面：团队里**一条快照都没有**（升级前的手写行 / 夹具）⇒ 没有可借的条目 ⇒ 照既有语义继续并如实报缺
+const qr11bPending = { session: SUCCESSOR, token: "qr11b-token", team: "q-team", role: "coordinator", rotationId: "rot-alone", expiresAt: Date.now() + 600000, createdAt: Date.now(), migratedPairs: [] };
+const qr11bEnv = rotateEnv({ askScript: [], pairs: [], extraAgents: qAgents, teams: [qRow([qRole("coordinator", ROT_SELF, qr11bPending), qRole("worker-a", "session-worker-a")])] });
+const qr11bOut = String(await qr11bEnv.rotate.execute({ action: "claim", team: "q-team", role: "coordinator", token: "qr11b-token" }, qr11bEnv.exec(SUCCESSOR)));
+check("批 Q · Qr11 ★ 那一份不存在 ⇒ 具名拒绝、绝不回退（红相＝回退到「团队第一条 / 最近一条」⇒ 拿 rot-other 来还原本次 ⇒ 本条红 —— 它同时独立锁死 Qr3 的红相）: 本次 pending 的 rid 不在集合里、而团队里**确实有别的换届的快照** ⇒ claim 具名拒绝、零迁移、零落定、零写入（trustedSenders / current / pending / 别人那条快照逐字未动）；对照面：团队里一条快照都没有时没有可借的条目 ⇒ 照既有语义继续，并把「本次换届的快照不在集合里」如实写进回执"
+	+ (qr11Out.includes("撤销依据不在团队集合里") ? "" : "（实测：" + show(qr11Out.slice(0, 300)) + "）"),
+	qr11Out.includes("撤销依据不在团队集合里") && qr11Out.includes("绝不借用")
+		&& qr11After.roles[0].current === ROT_SELF && qr11After.roles[0].pending !== null && qr11After.roles[0].pending.token === "qr11-token"
+		&& JSON.stringify(qr11Env.ns.data.pairs) === qr11PairsBefore
+		&& JSON.stringify(qr11After.rotationBackups) === JSON.stringify([qr11Other])
+		&& qr11bOut.includes("换届完成（claim）") && qr11bOut.includes("本次换届的快照不在集合里"));
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
