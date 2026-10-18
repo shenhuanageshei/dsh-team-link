@@ -138,3 +138,9 @@
   （无 lockfile、被 gitignore ⇒ **逐字节无法还原**）；受控复核（临时目录放 junction 再删父目录）`targetSurvived=false` 坐实机制。
   处置：按 Node 的解析报错**迭代重建导入闭包**（全部真副本、零 junction），两套件在真 node 下全绿 ⇒ **功能等价、但不是字节级还原**。
   ⇒ 规矩：**在 `%TEMP%` 建副本做对照实验时，`node_modules` 一律用真副本；任何含 junction 的树在删除前先拆链接。**
+
+## 九、壳与 git 的三条坑（2026-10-18 立；交接档 B-3 落档）
+
+- **`git apply` 按「新侧」行号定位**：补丁头的 `@@ -旧起,旧数 +新起,新数 @@` 里，`git apply` 找上下文用的是**新侧起始行**（`+` 后那个数）。手数偏移时按旧侧算 ⇒ 补丁会 fuzz 到别处或被拒。行号只作 as-of 提示，**定位一律用符号名 / 原文**。
+- **PowerShell 的 `$null -ne ''` 是 `True`**：空串与 `$null` 不是同一个值，所以 `if ($x -ne '')` **挡不住 `$null`**（反过来 `$x -eq ''` 也挡不住）。判断「缺值」用 `[string]::IsNullOrEmpty($x)`，或先 `$null -eq $x` 再判空串 —— 本仓所有「可选参数给没给」的分支都按这条写。
+- **管道会吃掉退出码**：`node host-half.test.mjs 2>&1 | Select-Object -Last 5` 之后 `$LASTEXITCODE` 反映的不再是 node 的退出码（实测给过假 0）。**取退出码必须无管道**：`$o = node host-half.test.mjs 2>&1; $c = $LASTEXITCODE` —— 本仓「修复前必红 / 修复后全绿」的两次实测一律按这个写法取证。

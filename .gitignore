@@ -5,3 +5,5 @@ node_modules/
 .DS_Store
 # team blackboard root (<workspace>/team/<name>/) - appears when this repo is used as a workspace
 /team/
+# 任务台账（task_* 工具的工作区落点；不入库）
+.thincoder/
