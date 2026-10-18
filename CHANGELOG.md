@@ -18,7 +18,7 @@
 
 ### 改了什么（逐面）
 
-- **形状与归一化**：`lib/policy-store.js` 新增 `normalizeRotationBackups`（无 `rid` 或快照读不出可还原字段的行丢弃 —— 不编造空壳），`normalizeTeams` 读时补齐 `rotationBackups`（旧行零迁移），`normalizePending` 的**固定键白名单**补 `rotationId`（不补就会被每次读写循环静默丢掉，与批 G 的 `renewedAt` 同一坑）。**`TeamConfig` 不加声明**：`schemastery` 保留未声明键（既有注释与实测都成立）⇒ 入口档字节数不变 ⇒ `Rr1`/`Rr7` 的合规读数不需要动。
+- **形状与归一化**：`lib/policy-store.js` 新增 `normalizeRotationBackups`（无 `rid` 或快照读不出可还原字段的行丢弃 —— 不编造空壳），`normalizeTeams` 读时补齐 `rotationBackups`（旧行零迁移），`normalizePending` 的**固定键白名单**补 `rotationId`（不补就会被每次读写循环静默丢掉，与批 G 的 `renewedAt` 同一坑）。**`TeamConfig` 不加声明**：`schemastery` 保留未声明键（既有注释与实测都成立）。★ **2026-10-18 更正**：交付时写的是「入口档字节数不变 ⇒ `Rr1`/`Rr7` 不需要动」—— 该句在**分歧修复轮**之后**作废**：修复轮改了入口档 4 处描述/兜底文案（+145 B）⇒ `lib/index.js` **254,947 B**，`Rr1`/`Rr7` 的合规读数已重取（合规档 §六 同批改准）。**声明面仍是零新增**。
 - **读视图与写回**：`lib/rotation.js` 新增 `pendingRotationRid` / `rotationEntriesOf`（旧槽**读取时折叠**，D3）/ `rotationEntryOf` / `appendRotationBackup` / `removeRotationBackup` / `clearRotation`。`append` 与 `remove` 都在**同一次写**里把旧槽置 `null`（§7 的唯一吸收形态，**不采用** `absorbedAt`），并把折叠出来的那一份**实体化**进集合（所以既不丢、也不复活）。
 - **写面**：prepare 追加本次条目并生成 `rot-<base36 时间>-<uuid8>` 作为 `rid`；回执那一行改成「撤销依据（本次换届 rid=…）」＋「团队内另有 N 条在飞快照原样保留」。
 - **读面**：`claim` 按 `pendingRotationRid(entry)` 取快照（回执新增「撤销依据（本次换届 rid=…）」一行，旧任取**本次快照的 roster**）；`replayClaim` 与过期清扫的 `snapshotIncumbent` 同样按 rid 取；`roster.md` 镜像与 `team_link_roster action=get` 的详情**列全部在飞条目**（两条在飞 ⇒ 两行）。
