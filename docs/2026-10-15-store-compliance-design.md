@@ -69,7 +69,7 @@ DSH STORE 的**上架自动检查**（每 8 小时扫固定 commit）在 [issue 
 | FR | 内容 | 落点 |
 | --- | --- | --- |
 | **FR-R0 ★（实施中发现的设计缺口，2026-10-15 折入）** | **测试档就绪（前置，只动 `host-half.test.mjs`）**：① `hostHalfSpecifiers()`（`:3156`）**去重 + 排序**（集合口径 —— 「一组宿主依赖」的正确语义）；② 那 **8 条**零新依赖断言（`U19` · 批 H `NF-H5` · 批 I `U17` · 批 K `U9` · 批 L `Aw7` · 批 J `U8` · 批 P `Pi5②` · 批 R `Rr3①`）改成**集合比较**（去掉字面 `length===8`，但**闸门不许失明**：第 9 个宿主依赖仍必红）；③ `hostSource`（`:3118`）改为 **`hostHalfFiles()` 的拼接**（今日逐字等于只读 `index.js` ⇒ 那 23 处文本锁与框定 token 残留扫描**读数一字不变**，拆分后自动跟随）；④ 改掉 R-1 写在 `:3137-3138` 的**错注释**。★ **为什么必须是前置**：R-2 在动手前用**真 helper 投影**证明「任何拆分都会让扁平聚合值 = **16** ⇒ 8 条断言同时红」，且 `hostSource` 只读单文件 ⇒ **不先修这层，拆分第一步就撞墙**（实施方按「发现设计缺口即停下上报」停下，本档据此折入） | `host-half.test.mjs`（**唯一写域**） |
-| **FR-R1** | **领域拆分**：宿主半边从 `lib/index.js` 拆出 ≥4 个域模块（+入口共 ≥5 档），每档 **< 262,144 B**（目标 ≤220 KB）；入口保持 `lib/index.js` | `lib/index.js` + 新 `lib/*.js` |
+| **FR-R1** | **领域拆分**：宿主半边从 `lib/index.js` 拆出 ≥4 个域模块（+入口共 ≥5 档），每档 **< 262,144 B**（目标 ≤220 KB）；入口保持 `lib/index.js`。★ **落地读数（批 R 收口，2026-10-18 实测）**：入口 ＋ **23 个域档** = 宿主半边 **24 档**，最大单档 `lib/index.js` = **254,802 B**（逐档清单见 §6.1「落地模块图」） | `lib/index.js` + 新 `lib/*.js` |
 | **FR-R2** | **闸门改写**：把「顶层 `^import` 恰 8 条」改成「**汇总宿主半边文件的宿主说明符**恰 8 条」（白名单逐字不变），并新增「模块图无环」断言。★ **要改的既有断言恰 7 处**（评审 🟡#3 折入：按**判定文本前缀** grep 定位，逐处给出，不靠判据 ID 猜）—— `U19 日志事件`（`host-half.test.mjs:7337`）· `批 H · NF-H5 零新依赖`（`:13137`）· `批 I · U17 零新依赖`（`:13422`）· `批 K · U9 零新依赖`（`:13785`）· `批 L · Aw7 零新依赖`（`:14120`）· `批 J · U8 零新依赖`（`:14426`）· `批 P · Pi5② 零新依赖`（`:14653`）；七处**都读 `lib/index.js` 的顶层 import 行**（`HOST_IMPORTS` 白名单在 `:7332`）⇒ 拆分后**全部会失效**，**必须同批改齐** | `host-half.test.mjs` 上述七处 · `lib/index.js` |
 | **FR-R3** | **`engines` 声明**：`package.json` 加 `"engines": {"node": ">=22"}`；★ README 的「宿主版本支持」表**已核实在场**（`README.md:1224`「### 宿主版本支持（先读这一节）」），但**它只列 DSH 版本、没有 Node** ⇒ 本 FR 是**新增一行 Node 范围**（不是「同步既有值」） | `package.json` · `README.md:1224` 起那张表 |
 | **FR-R4** | **装/启/卸证据**：按 D7 做一次并记入证据账本（三段输出原文） | `docs/verification-log.md`（只追加） |
@@ -100,6 +100,15 @@ DSH STORE 的**上架自动检查**（每 8 小时扫固定 commit）在 [issue 
 
 **边界规则**：**共享物**（`PLUGIN_LABEL`、`wellFormed`、`noticeField`、`POLICY_KEYS` 等被多域使用的符号）**抽到一个 `lib/shared.js`**，各域从它导入 ⇒ **共享档也不许超过上限**（实施首步先量它）。
 **禁止**：为了「少一次导入」把函数复制两份（**双事实源必漂移**）。
+
+### 6.1 落地模块图（批 R 收口实测，2026-10-18）
+
+**入口 `lib/index.js` = 254,802 B**（对外契约逐字未动：`main` / `exports` 四项 / `dsh.bundle.patch` / `dsh.client`，判据 `Rr2`）。
+宿主半边共 **24 档**（入口 ＋ **23 个域档**），**每档 < 262,144 B**（判据 `Rr1` 逐档打印实数）；浏览器半边 `lib/client.js` = 156,665 B（本批未动）。
+
+**23 个域档**（名 · 字节）：`rotation.js` 81,812 · `registration.js` 67,282 · `team-session-surface.js` 66,464 · `policy-store-lifecycle.js` 65,731 · `messaging.js` 62,510 · `team-session-creation.js` 59,767 · `read-surface.js` 59,206 · `recovery.js` 58,966 · `handover.js` 55,761 · `watchdog-helpers.js` 55,028 · `roster-write.js` 54,315 · `team-session-command.js` 52,038 · `watchdog.js` 51,357 · `team-registration.js` 48,999 · `policy-store.js` 34,955 · `team-tools.js` 33,169 · `forensics.js` 32,980 · `sections.js` 32,034 · `ledger.js` 26,070 · `shared.js` 22,325 · `sections-lifecycle.js` 19,126 · `team-ledger-tools.js` 17,366 · `block.js` 14,609（均 `lib/` 下）。
+
+**模块图的实测状态（如实登记）**：`lib/shared.js` 与 `lib/rotation.js` **互导**（各有一条 `from "./…"`），静态导入图里存在一个**真实的 2 环** ⇒ **D3 / §6 不变量 ③ 的「无环」尚未满足**，判据 `Rr4` 因此**现读红**（本条判据不设例外）。修法需改 `lib/**`（收口单写域之外，另立单）：把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` / `fmtWindowRest` 从 `rotation.js` 下沉到 `shared.js`（或新的低层档），`shared → rotation` 那条边即消失。
 
 ---
 

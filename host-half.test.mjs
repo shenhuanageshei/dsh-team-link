@@ -18,8 +18,13 @@ let failures = 0;
 /** Assertions executed in this run, printed at the end so the README figure is
  * checkable against the run instead of remembered (§9.6 ⑧). */
 let assertions = 0;
+/** ★ 批 R · 收口单（Rr8）：每条断言的 `{label, ok}` 只增不改 —— 既有断言**一个字符没动**。
+ *  Rr8 用它把「本轮之前的既有判据」与「批 R 新增的 `Rr*` 判据」**逐条分离**：前者必须全绿
+ *  且条数等于拆分前基线（行为零变更），后者按本批的落地条数计数（详见「批 R」块 Rr8）。 */
+const assertionRecords = [];
 function check(label, cond) {
 	assertions += 1;
+	assertionRecords.push({ label, ok: cond });
 	console.log(`${cond ? "PASS" : "FAIL"}  ${label}`);
 	if (!cond) failures += 1;
 }
@@ -15061,24 +15066,30 @@ console.log(`[PI-DIAG] ${JSON.stringify({
 })}`);
 
 // ===========================================================================
-// 批 R · 上架合规（DSH STORE 契约）—— **首批判据** Rr3 / Rr5 / Rr6
+// 批 R · 上架合规（DSH STORE 契约）—— 判据 Rr0①–④ / Rr1 / Rr2 / Rr3①–④ / Rr4 / Rr5 / Rr6 / Rr7 / Rr8
 // ===========================================================================
 // 归属：设计档 docs/2026-10-15-store-compliance-design.md
 //   §4 D1–D7 · §5 FR-R0（第 0 小单：测试档就绪）/ FR-R2（闸门改写）/ FR-R3（`engines`）
 //   · §8 判据表 Rr1–Rr8（＋ 第 0 小单的 Rr0①–④，见本块 Rr0 一段）· §9 边界；
 //   需求档 docs/2026-10-15-store-compliance-requirements.md §四（NF-R1…NF-R7）；
-//   契约逐条回答 docs/2026-10-15-store-compliance.md（§一 兼容范围 · §二 依赖）。
+//   契约逐条回答 docs/2026-10-15-store-compliance.md（§一 兼容范围 · §二 依赖 · §六 达标状态）。
 //
-// ★ 本单（R-1 = `engines` 声明 ＋ 闸门口径改写 ＋ 首批判据）只落 **Rr3 / Rr5 / Rr6** 三条：
-//   · Rr1（每档字节）/ Rr4（模块图无环）/ Rr7（合规档数字与实测一致）依赖**拆分后的产物**
-//     —— 本批的红线是「本单零行为变更、不拆分」，现在写它们只能是**恒真或恒假的假判据**
-//     （本仓纪律 ①：恒真/不存在的断言永远是绿的，测试自己看不见）；
-//   · Rr2（入口与对外面逐字不变）/ Rr8（行为零变更）的口径就是**既有套件自身的红绿读数**
-//     ＋ 入口面在本单**本就一字未动**（`package.json` 只新增了 `engines`）⇒ 由后续拆分单承接。
-//   ⇒ 本单不写「还不成立」的判据，也不把既有套件的读数再抄一遍充数。
-// ★ **第 0 小单（FR-R0，2026-10-15）追加 Rr0①–④**：合成三文件投影的去重等价（去重生效）、
-//   第 9 个宿主说明符仍必红（闸门未失明）、真文件集未被投影顶替、合成投影零落盘 ——
-//   它们把「拆分不再撞闸门」这件事从「本单的手工改造」变成**可复跑的判据**。
+// ★ **批次沿革（三张单、顺序不可换）**：
+//   ① R-1（`engines` 声明 ＋ 闸门口径改写 ＋ 首批判据）落 **Rr3 / Rr5 / Rr6** —— 那三张单
+//      **依赖拆分后的产物**（Rr1 每档字节 / Rr4 模块图 / Rr7 合规档数字）当时还写不了，写了只能是
+//      **恒真或恒假的假判据**（本仓纪律 ①：恒真/不存在的断言永远是绿的，测试自己看不见）；
+//   ② R-0（FR-R0，测试档就绪）追加 **Rr0①–④**：合成三文件投影的去重等价（去重生效）、第 9 个
+//      宿主说明符仍必红（闸门未失明）、真文件集未被投影顶替、合成投影零落盘 —— 它们把「拆分不再
+//      撞闸门」从「本单的手工改造」变成**可复跑的判据**；
+//   ③ **收口单（本单）追加 Rr1 / Rr2 / Rr4 / Rr7 / Rr8**（拆分已落地、套件 1722/0 为前置）：
+//      Rr1 逐档字节 · Rr2 入口与对外面逐字不变 · Rr4 模块图无环 · Rr7 合规档数字与实测一致 ·
+//      Rr8 行为零变更（**既有断言**全绿 ＋ 条数对齐）。
+//   ★ **Rr4 的诚实读数（本单实测，不粉饰）**：`lib/shared.js` 与 `lib/rotation.js` **互导** ⇒
+//     静态导入图有一个真实的 2 环（`R-5` 起就存在，见 `lib/shared.js` 档头对它的论证）。
+//     设计档的 D3 / §6 不变量 ③ / §9 边界都要求「禁循环」，而本单**写域不含 `lib/**`** ⇒
+//     这条判据**按设计原口径保持严格**（不设例外），因此它**现读红**。修法（改 `lib/**`，需另立单）：
+//     把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` /
+//     `fmtWindowRest` 从 `rotation.js` 下沉到 `shared.js`（或新的低层档），`shared → rotation` 那条边即消失。
 
 const rrPkg = JSON.parse(readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"));
 const rrReadme = readFileSync(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
@@ -15218,6 +15229,138 @@ check(`批 R · Rr6 零新依赖 / 零构建（红相＝加一条依赖、或加
 	sameJson(Object.keys(rrPkg.dependencies ?? {}), ["schemastery"])
 		&& !("build" in (rrPkg.scripts ?? {})) && !("prepare" in (rrPkg.scripts ?? {}))
 		&& rrArtifactDirs.every((name) => !existsSync(fileURLToPath(new URL(`./${name}/`, import.meta.url)))));
+
+// --- Rr1：每档字节（FR-R1 的硬指标；设计档 §8 Rr1）-------------------------------
+/** 商城口径：**单文件**自动审查上限（字节）。 */
+const RR_STORE_LIMIT = 262144;
+/** 拆分前的**历史读数（工作树字节）**：`lib/index.js` blob **1,077,286 B** ＋ **16,343** 个
+ * CRLF（`git cat-file -p 88b9694:lib/index.js` 逐字节实测）⇒ **1,093,629 B**。
+ * ★ 合规档旧版写的是 **1,092,693**（差 **936 B** 的旧读数）—— 本单已按实测改准（§六）。
+ * 本判据只把这个历史值当**红相说明**写进文案：拆分前它必红（越限 4.17 倍）。 */
+const RR_HISTORICAL_MAX = 1093629;
+/** `lib/*.js` 逐档真读数：**字节数**（`Buffer.length` —— 不是字符串 `.length`）＋ 正文。 */
+const rrLibReads = readdirSync(fileURLToPath(new URL("./lib/", import.meta.url)), { withFileTypes: true })
+	.filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+	.map((entry) => `lib/${entry.name}`)
+	.sort()
+	.map((file) => {
+		const buffer = readFileSync(fileURLToPath(new URL(`./${file}`, import.meta.url)));
+		return { file, bytes: buffer.length, text: buffer.toString("utf8") };
+	});
+const rrLibBytes = rrLibReads.map(({ file, bytes }) => [file, bytes]);
+const rrLibLargest = rrLibBytes.reduce((largest, row) => (row[1] > largest[1] ? row : largest), ["-", -1]);
+
+check(`批 R · Rr1 每档字节（**覆盖缺口类 · 修复前红（历史实测）**：拆分前 \`lib/index.js\` = **${RR_HISTORICAL_MAX} B**（越商城上限 ${(RR_HISTORICAL_MAX / RR_STORE_LIMIT).toFixed(2)} 倍）⇒ 本条红；拆分落地后转绿、归覆盖缺口类）: 遍历 \`lib/*.js\` 现读 **${rrLibReads.length}** 档，逐档**实数字节** = ${show(Object.fromEntries(rrLibBytes))} —— 每档 < **${RR_STORE_LIMIT}**（商城口径：单文件 ≤ 262,144 字节）；最大档 \`${rrLibLargest[0]}\` = **${rrLibLargest[1]}** B（余量 ${RR_STORE_LIMIT - rrLibLargest[1]} B）`,
+	rrLibReads.length > 0
+		&& rrLibBytes.every(([, bytes]) => bytes > 0 && bytes < RR_STORE_LIMIT)
+		&& rrLibLargest[1] > 0 && rrLibLargest[1] < RR_STORE_LIMIT);
+
+// --- Rr2：入口与对外面逐字不变（D2 红线；设计档 §8 Rr2）--------------------------
+/** 期望值是**写死的字面量**（不读快照、不读 git）—— 入口面是对外契约，改一个字都必须是显式决定。 */
+const RR_ENTRY_FACE = {
+	main: "lib/index.js",
+	exports: {
+		".": "./lib/index.js",
+		"./client": "./lib/client.js",
+		"./cordis.patch.yml": "./cordis.patch.yml",
+		"./package.json": "./package.json",
+	},
+	bundlePatch: "./cordis.patch.yml",
+	clientPlatform: "web",
+	clientInject: [
+		"@deepseek-ai/dsh-client-locale",
+		"@deepseek-ai/dsh-client-ui-conversation",
+		"@deepseek-ai/dsh-client-ui-workspace",
+		"@deepseek-ai/dsh-api-session-controller",
+		"@deepseek-ai/dsh-api-workspace-controller",
+	],
+};
+const rrEntryFaceNow = {
+	main: rrPkg.main,
+	exports: rrPkg.exports,
+	bundlePatch: rrPkg.dsh?.bundle?.patch,
+	clientPlatform: rrPkg.dsh?.client?.platform,
+	clientInject: rrPkg.dsh?.client?.inject,
+};
+check(`批 R · Rr2 入口与对外面逐字不变（红相＝顺手改 \`main\` / \`exports\` 任一项 / \`dsh.bundle.patch\` / \`dsh.client.platform\` 或 \`inject\` ⇒ 本条红）: 期望值是**写死的字面量**（不读快照）—— ${show(RR_ENTRY_FACE)}；\`package.json\` 现读 ${show(rrEntryFaceNow)}；逐项相等 ${show(Object.keys(RR_ENTRY_FACE).map((key) => [key, sameJson(RR_ENTRY_FACE[key], rrEntryFaceNow[key])]))}（\`exports\` 按对象**逐键逐值**比较 ⇒ 多一项、少一项、值改一个字都红）`,
+	sameJson(rrEntryFaceNow, RR_ENTRY_FACE));
+
+// --- Rr4：模块图无环（D3 不变量 ③；设计档 §8 Rr4）--------------------------------
+/** 一个 `lib/*.js` 的**相对导入目标**（`from "./x.js"` ⇒ `lib/x.js`）。只认**静态导入行**
+ * （行首 `import `）；本仓 `lib/` 实测无 `export … from`、无运行时 `import()`。 */
+const rrRelativeTargetsOf = (source) => source.split(/\r?\n/u)
+	.filter((line) => line.startsWith("import "))
+	.flatMap((line) => [...line.matchAll(/from\s+"(\.[^"]+)"/gu)].map((match) => match[1]))
+	.map((specifier) => `lib/${specifier.replace(/^\.\//u, "")}`);
+/** 纯函数：在有向图上找环（DFS 三色）。返回**环路径数组**（空数组 = 无环）。
+ * 红相自证：`rrCycleFixture`（A→B→A）必被检出、`rrDagFixture`（A→B）必为空。 */
+const rrCyclesOf = (graph) => {
+	const color = new Map();
+	const cycles = [];
+	const visit = (node, stack) => {
+		color.set(node, 1);
+		stack.push(node);
+		for (const target of graph.get(node) ?? []) {
+			if (!graph.has(target)) continue;
+			if (color.get(target) === 1) cycles.push([...stack.slice(stack.indexOf(target)), target].join(" → "));
+			else if (!color.get(target)) visit(target, stack);
+		}
+		stack.pop();
+		color.set(node, 2);
+	};
+	for (const node of graph.keys()) if (!color.get(node)) visit(node, []);
+	return cycles;
+};
+const rrLibGraph = new Map(rrLibReads.map(({ file, text }) => [file, rrRelativeTargetsOf(text)]));
+const rrLibEdgeCount = [...rrLibGraph.values()].reduce((sum, targets) => sum + targets.length, 0);
+const rrLibCycles = rrCyclesOf(rrLibGraph);
+const rrDanglingEdges = [...rrLibGraph].flatMap(([from, targets]) => targets.filter((target) => !rrLibGraph.has(target)).map((target) => `${from} → ${target}`));
+const rrCycleFixtureHits = rrCyclesOf(new Map([["lib/rr-a.js", ["lib/rr-b.js"]], ["lib/rr-b.js", ["lib/rr-a.js"]]]));
+const rrDagFixtureHits = rrCyclesOf(new Map([["lib/rr-a.js", ["lib/rr-b.js"]], ["lib/rr-b.js", []]]));
+
+check(`批 R · Rr4 模块图无环（红相＝人为造 A→B→A ⇒ 本条红；本判据在**合成夹具**上自证那个红相，不往 \`lib/\` 落盘）: 静态解析 \`lib/*.js\`（现读 ${rrLibReads.length} 档）的相对导入（\`from "./x.js"\`）建图 ⇒ **${rrLibEdgeCount}** 条相对导入边、**环 = ${show(rrLibCycles)}**（环路径为空数组才算无环）、指向不存在档的悬空边 = ${show(rrDanglingEdges)}；★ 红相自证：合成夹具 A→B→A 检出 ${show(rrCycleFixtureHits)}（必非空），DAG 对照 A→B 检出 ${show(rrDagFixtureHits)}（必为空）。★ 诚实口径：设计档 D3 / §6 不变量 ③ / §9 边界要求**禁循环**，本条**不设例外**；现读若有环，那是拆分落地后**真实存在**的结构偏差（拆掉它要改 \`lib/**\`，见本块头注的修法）`,
+	rrLibCycles.length === 0 && rrDanglingEdges.length === 0 && rrCycleFixtureHits.length === 1 && rrDagFixtureHits.length === 0);
+
+// --- Rr7：合规档数字与实测一致（NF-R6「计数与列表同改」；设计档 §8 Rr7）-------------
+/** 合规档 §六 的正文（到下一个二级标题为止）—— 「最大单档字节」只在这一节里找。 */
+const rrComplianceDoc = readFileSync(fileURLToPath(new URL("./docs/2026-10-15-store-compliance.md", import.meta.url)), "utf8");
+const rrComplianceSix = (() => {
+	const start = rrComplianceDoc.indexOf("## 六、");
+	if (start < 0) return "";
+	const rest = rrComplianceDoc.slice(start);
+	const next = rest.indexOf("\n## ", 1);
+	return next < 0 ? rest : rest.slice(0, next);
+})();
+/** §六 写下的「最大单档字节 = N」（数字里可以带千分位逗号）。 */
+const rrDocMaxReading = (() => {
+	const match = /最大单档字节\s*=\s*([\d,]+)/u.exec(rrComplianceSix);
+	return match === null ? null : Number(match[1].replace(/,/gu, ""));
+})();
+check(`批 R · Rr7 合规档数字与实测一致（红相＝文档留着旧数（1,092,693）或与 Rr1 实测不一致 ⇒ 本条红）: \`docs/2026-10-15-store-compliance.md\` §六 写下的「最大单档字节 = ${rrDocMaxReading === null ? "读不到" : rrDocMaxReading.toLocaleString("en-US")}」**等于** Rr1 实测最大值 ${rrLibLargest[1].toLocaleString("en-US")}（\`${rrLibLargest[0]}\`），且 < ${RR_STORE_LIMIT}；§六 同时写明「已达标」= ${rrComplianceSix.includes("已达标")}（★ 计数与列表同改：§六 的档数与历史值也由 Rr1 的同一读数支撑）`,
+	rrDocMaxReading !== null && rrDocMaxReading === rrLibLargest[1] && rrDocMaxReading < RR_STORE_LIMIT && rrComplianceSix.includes("已达标"));
+
+// --- Rr8：行为零变更（NF-R1 红线；设计档 §8 Rr8）----------------------------------
+/** 本单（收口单）新增的 5 条 —— 它们**不算**「既有判据」（既有 = 本轮开始前的 1722 条）。 */
+const RR_THIS_ROUND_PREFIXES = ["批 R · Rr1", "批 R · Rr2", "批 R · Rr4", "批 R · Rr7", "批 R · Rr8"];
+/** 拆分前的宿主套件基线（设计档 §0 / §4 D4 / §8 Rr8 的 **1697**）。 */
+const RR_BASELINE_1697 = 1697;
+/** 批 34 / FR-7（**不是批 R**，commit 1a61668）落进本套件的 15 条 `A-7` 判据。 */
+const RR_FR7_15 = 15;
+const rrThisRound = (label) => RR_THIS_ROUND_PREFIXES.some((prefix) => label.startsWith(prefix));
+const rrBeforeThisRound = assertionRecords.filter((record) => !rrThisRound(record.label));
+const rrExistingRed = rrBeforeThisRound.filter((record) => !record.ok).map((record) => record.label);
+const rrNonRr = assertionRecords.filter((record) => !record.label.startsWith("批 R · Rr"));
+const rrNonRrRed = rrNonRr.filter((record) => !record.ok).map((record) => record.label);
+const rrA7 = rrNonRr.filter((record) => record.label.startsWith("A-7 "));
+const rrRrCount = assertionRecords.filter((record) => record.label.startsWith("批 R · Rr")).length;
+check(`批 R · Rr8 行为零变更（红相＝本轮改到任何既有判据的文本/期望值，或搬运动到逻辑 ⇒ 既有判据红；或判据条数变了 ⇒ 条数那一半红）: 本轮**之前**已有的断言现读 **${rrBeforeThisRound.length}** 条、**全部绿**（红项 ${show(rrExistingRed)}）；其中**非 Rr** 既有判据 **${rrNonRr.length}** 条 = **${RR_BASELINE_1697}**（拆分前的宿主套件基线）＋ **${RR_FR7_15}**（批 34 / FR-7 的 \`A-7\` 判据，**非批 R**；现读 ${rrA7.length} 条），非 Rr 红项 ${show(rrNonRrRed)}；批 R 自己的 \`Rr*\` 判据现读 **${rrRrCount}**（本单之前 10 条 ＋ 本单新增 4 条；本行即第 **${rrRrCount + 1}** 条）；本行求值时 \`assertions\` = **${assertions}**（＋本行 ⇒ **${assertions + 1}**）。★ 判定面**只**是「行为零变更」：既有断言全绿 ＋ 条数对齐；\`client-half\` 的 310 条由它自己的运行自报（本套件不代跑）。★ 如实：Rr4 现读**红**（\`lib/shared.js ⇄ lib/rotation.js\` 真环）—— 那是**结构**发现，不是行为漂移；本条不替它背书、也不掩盖它`,
+	rrBeforeThisRound.length === RR_BASELINE_1697 + RR_FR7_15 + 10
+		&& rrExistingRed.length === 0
+		&& rrNonRr.length === RR_BASELINE_1697 + RR_FR7_15
+		&& rrA7.length === RR_FR7_15
+		&& rrNonRrRed.length === 0
+		&& rrRrCount === 14
+		&& assertions === 1726);
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
