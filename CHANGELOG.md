@@ -4,6 +4,32 @@
 
 格式：每个版本按 **修了什么 → 为什么 → 怎么验证** 组织。凡涉及行为修复的条目都附**变异验证**证据（修复前必红 / 修复后全绿），这是本仓库的验收文化。
 
+## 未发布 — 批 S：整队换届（批量准备 ＋ 各自认领）
+
+**一句话**：现任协调者用**一条命令 ＋ 一道确认框**把整队 N 个角色的换届**准备阶段（Phase A）**一次做完 —— 每个角色各有一条 pending、各有一份撤销依据、各有一枚绑定三元组的令牌；**认领（Phase B）一个不省**，仍由每个继任者本人凭令牌 `claim`。
+
+### 三段话（用户视角）
+
+**① 现象与根因（前因）**：`team_link_rotate action=prepare` 的 `role` 必填，且 `prepareAdmission` → `rotateGate` 只承认**该角色的现任**发起 ⇒ 5 人队今天要 **5 个不同调用方会话各跑一次**；协调者**无权代 worker 发起**。批 Q 已把撤销依据从「团队级单槽」改成「按换届各存一份」⇒ 批量准备的**存储前置**成立，本批才有意义（会诊 #66 四席独立指认）。
+**② 现在怎么做的**：在**既有** `team_link_rotate` 上加第三个动作 `action=prepare-batch`（不建新工具）—— 发起权 = **该队现任协调者** ＋ 既有 writer gate ＋ **一道**人类确认框；先做**预检（all-or-nothing）**：逐角色限速 / 继任者≠现任 / 显式继任者**在场**、auto 角色的交接文档由**插件从 roster 事实生成**（五硬节，读不到的如实标未知），任一不过 ⇒ 整批拒绝、零副作用；确认后**一次** `policy.update` 落下 N 条 pending（各带 `rotationId` ＋ `batchId` ＋ 批次清单）＋ N 份撤销依据，广播**一条**批次级 `rotation-freeze`；批量令牌 **2 小时**（单角色仍 30 分钟）。**协调者自己的角色排最后**（否则驱动批次的人先把自己换掉）。批次在飞期间：单角色 `prepare` 与再发 `prepare-batch` 都**具名拒绝 + 指路**。
+**③ 怎么验证**：判据 **`Sr1`–`Sr15`**（首交付共 **15 条** `check()`，落在 `host-half.test.mjs` 的「批 S」块，标识符 `Sr` 中缀，紧跟「批 Q」块之后、`rmTestRoot()` 之前）—— 一次写盘 / 令牌三元组与 2h TTL / 确认失败零副作用 / auto 交接文档生成与预检拒绝 / 发起权两档 / 协调者排最后 / 部分认领只取消过期那个 / 批次互斥两条 / 零顶层键与零新依赖（**唯一真回归锁**）/ 每份撤销依据按 rid 可回 / 授权路径分开 / 写前重读指纹 / 限速按角色 / `batchId` 写→读→重启三面存活 / 显式继任者在场。**分歧修复轮**再补 **5 条**（`Sr16`–`Sr20`：批次级 freeze 恰一条并点名两角色 + batchId / 读面在 pending 时分组（roster get ＋ 镜像）/ 执行期失败回执点名失败角色自己的已建会话 / auto 投递的令牌与「120 分钟」＋ 意图先增后删 / 3 分钟未确认的超时档）⇒ **合计 20 条**（其中 `Sr18` 为修复前红，其余四条为覆盖缺口）。**实测**（本地复跑，`docs/verification-log.md` 的「批 S（整队换届）」节与其后的「批 S 分歧审计修复轮」节）：修复轮前 `node host-half.test.mjs` ⇒ `ALL PASS / assertion total: 1753 (failed: 0)`、`node client-half.test.mjs` ⇒ `310 (failed: 0)`；修复轮后 ⇒ **`ALL PASS / assertion total: 1758 (failed: 0)` / `310 (failed: 0)`**（EXIT=0）。
+
+### 改了什么（逐面）
+
+- **入口（`lib/index.js`）**：`team_link_rotate` 的 action 闭集扩到 `prepare` / `claim` / **`prepare-batch`**，参数面新增 `successors`（`角色=会话 id, …`，与 `successor:"auto"` 二选一 —— v1 不做混合批次），`role` 在批量动作下**不收**（另两个动作的必填性一字未改）；工具层先跑既有 `writerGate` 再交给换届域（发起权的第二道门在域内）。整队换届的**执行面**（建继任者会话 / 写交接文档 / 投递 / 在场读面 / 事实读数）经 `handoverDomain.batchRotationExtras()` 注入 —— 它住在交接域，因为换届域导入交接域会成**环**（`Rr4`）。
+- **换届域（`lib/rotation.js`）**：`prepareAdmission` 现由 `rotateGate`（现任门，**只**属单角色动词）＋ `successorChecksOf`（门禁无关：限速 / 继任者≠现任）组合；批量入口 `prepareBatch` 走 `admissionChecks`（= `successorChecksOf` ＋ 可选的 `successorPresent` 在场探针）——「协调者代发起」与「只有该角色现任可发起」不再混在一个带开关的函数里（会诊 #101 [1]-①）；新增 `prepareBatch`、`askBatchDialog`（一道确认框，无服务 / 取消 / 超时一律 fail-closed）、`rosterFingerprint`（写前重读）、`batchHandoffBody`（五硬节正文，按注入的节名分派内容）、`batchFreezeNotice`（一条批次级 freeze）、`inFlightBatchOf` / `batchGroupsOf` / `batchStateLines`（批次互斥判定与读面三态）、`batchReceiptLines` / `batchExecutionFailureReading`（D11 的两段契约）。`sweep` 的取消行点名批次归属（**只**取消这一个角色）。
+- **交接域（`lib/handover.js`）**：新增 `batchRotationExtras({ ctx, policy, teamSession })` —— 批量铸造的**执行面**（pending-create 意图 → 同一 `createRootAgent` 创建路径 → 审批档落位 → 交接文档 abort-before-prepare → followup 投递）。它与 `autoHandover` 共用**同一个创建落点**，所以 DEFECT-1/3/4 与批 P 的继承四件套在批量路径上同样成立。
+- **归一化（`lib/policy-store.js`）**：`normalizePending` 的**固定键白名单**补 `batchId` 与 `batchRoles`（与批 G 的 `renewedAt`、批 Q 的 `rotationId` 同一坑：不补就会被「写 → 读」静默丢掉，重启后**批次互斥形同虚设**）。
+- **读面与镜像（`lib/team-registration.js` / `lib/roster-write.js`）**：`team_link_roster action=get` 的详情与 `roster.md` 镜像按 `batchId` 分组报「已准备 / 已认领 / 已过期」逐角色三态（同一份渲染），pending 行带批次与清单规模；两处**都不新增工具**。
+- **文档面（同批）**：README 的徽标 / 稳定性行 / 当前读数行（**1738 → 1753 → 1758**；末项为分歧修复轮 +5）· 本档 · 本批需求/设计两档的**实施状态行** · 合规档 §六 的逐档字节（入口 `254,947 → 261,720`、`lib/rotation.js` `93,422 → 140,582`（批 S 首交付实测；旧文写的 140,540 是差 42 B 的旧读数）`→ 143,899`（分歧修复轮后）、`lib/handover.js` `55,761 → 66,531`，仍 < 262,144，余量 424 字节）。
+
+### 已知边界（如实登记）
+
+- **批次分组只在「同批次仍有 pending」时归因**：`batchRoles` 清单落在 pending 行内（`NF-S4` 允许的两个落点之一）——claim 会清掉该角色自己的 pending，所以「已认领」只能靠同批次**其它** pending 的清单归因；整批全部落定/取消后分组自然消失（`D7`：批次标识只在 pending 行内，**不新增顶层键、不落团队行字段**）。设计与需求档都按这条口径实现，不假装更持久。
+- **确认后执行期失败不再承诺零副作用**（`D11`）：已建会话**逐项点名**（含失败角色自己那个）、**pending / 撤销依据**零写入而 `pendingCreates` 意图按实数报出、给幂等重试指路；平台没有「删会话」原语 ⇒ **不做假补偿**。崩溃在 mint 循环之后、单次写盘之前留下的**孤儿会话**登记为已知窗口（设计档 §9）。
+- **恢复路径不受批次互斥限制**：`team_link_recover` 的 `revive` / `reappoint` 是救场路径（设计档 `D8` / `FR-S6` 只说「单角色 prepare」），被一个在飞批次锁死会让「死的现任」无路可走。
+- **不做** agent-team 档的 Lead 更换 / 「一把换完」/ 混合批次 / 交接文档格式变更 / claim 的信任迁移语义变更 / 黑板与台账改动 / 自动归档 —— 需求档 §五 的七条非目标全部保持。
+
 ## 未发布 — 批 Q：换届的「撤销依据」按换届各存一份
 
 **一句话**：把换届的**撤销依据**（信任状态快照）从「每个团队一个槽」改成「**每一次换届各存一份**」—— 同一个团队里先后/连续换两个角色时，前一次的快照**不再被后一次的 prepare 抹掉**；旧格式的单槽**读取时无损折叠**、下一次写回收尾时**吸收为 null**（不复活），而 `policy.json` 的**顶层键一个没加**。

@@ -3841,7 +3841,7 @@ const rotRoles = () => [
  * and the trust state a rotation operates on. `receiveMode: accept` keeps notice
  * delivery out of the receiver dialog; the notice cases set their mode explicitly.
  */
-function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, agentPresetsOptions = undefined, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitPermissionPresets = false, permissionPresetsOptions = undefined, projectionsReadings = undefined, omitResume = false, extraAgents = undefined, omitAgentsCreate = false } = {}) {
+function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trustedSenders = [], rememberTargets = [], blockedSenders = [], receiveMode = "accept", goals, teams, failCreateAt = -1, omitCommands = false, lateCommands = false, omitAgentPresets = false, agentPresetsOptions = undefined, omitWorkspaceRegistry = false, omitSessionTitle = false, sessionTitleOptions = undefined, omitAgentDefaultModel = false, agentDefaultModelOptions = undefined, omitPermissionPresets = false, permissionPresetsOptions = undefined, projectionsReadings = undefined, omitResume = false, extraAgents = undefined, omitAgentsCreate = false, createdHook = undefined } = {}) {
 	const env = setup({
 		sessions: [],
 		useSettings: true,
@@ -3891,6 +3891,8 @@ function rotateEnv({ askScript = [], omitUserQuestions = false, pairs = [], trus
 		omitResume,
 		// 批次 2 §4.2 (c): the synthetic successor's capability gate (U10).
 		omitAgentsCreate,
+		// ★ 批 S 分歧修复轮：执行期失败 / 意图计数的夹具缝（透传给 setup 的 onCreated）。
+		createdHook,
 		extraAgents: extraAgents ?? [
 			{ id: "session-worker-a", status: "idle" },
 			{ id: "session-worker-b", status: "idle" },
@@ -8804,7 +8806,9 @@ check("B/U12 零回归（既有四动词）: upsert-team / set-role / retire 的
 // 真正钉住门的是上面那几条行为断言与动词闭集锁。
 check("B/U12 零回归（rotate / recover）: 两个工具的动词闭集锁定，三道门函数的**形参个数**同上（元数探测器，见上三行的标注——它不是行为锁）",
 	__testing.writerGate.length === 2 && __testing.retireGate.length === 2 && __testing.rotateGate.length === 3
-		&& rgEnv.tool("team_link_rotate").parameters.properties.action.enum.join(",") === "prepare,claim"
+		// ★ 批 S（D1：扩 action、不建新工具）：闭集多了第三个动词 `prepare-batch` —— 本行是**列表同改**，
+		//   两个动词的顺序与 recover 的闭集一字未动。
+		&& rgEnv.tool("team_link_rotate").parameters.properties.action.enum.join(",") === "prepare,claim,prepare-batch"
 		&& rgEnv.tool("team_link_recover").parameters.properties.action.enum.join(",") === "revive,reappoint");
 check("B/U12 只动两个键: 切档只改 mode / leadSessionId —— 团队行的键集恰是规范形状（多出来的正是那两个），roles / policy / workspace / createdAt 逐字节不变",
 	Object.keys(smOk.ns.data.teams[0]).sort().join(",") === "createdAt,leadSessionId,mode,name,policy,roles,rotationBackup,rotationBackups,workspace"
@@ -15549,6 +15553,383 @@ check("批 Q · Qr11 ★ 那一份不存在 ⇒ 具名拒绝、绝不回退（�
 		&& JSON.stringify(qr11Env.ns.data.pairs) === qr11PairsBefore
 		&& JSON.stringify(qr11After.rotationBackups) === JSON.stringify([qr11Other])
 		&& qr11bOut.includes("换届完成（claim）") && qr11bOut.includes("本次换届的快照不在集合里"));
+
+// ===========================================================================
+// 批 S · 整队换届（批量准备 ＋ 各自认领）—— Sr1–Sr20
+// ===========================================================================
+// 归属：docs/2026-10-18-team-rotation-requirements.md §四 · docs/2026-10-18-team-rotation-design.md
+//       §5 FR-S1…S6 / §6 伪代码 / §7 schema / §9 边界 · 会诊 #101 裁定层 §3（D10–D13）。
+// ★ 修复前红（旧实现没有 `prepare-batch` 动词）：Sr1–Sr8 与 Sr10–Sr15。
+//   Sr10 虽然断的是「每份撤销依据按 rid 可取回」，但它**用 sBatch 建两条 pending** ⇒ 旧实现同样红；
+//   **只有 Sr9 是回归锁**（零新增顶层键 / 零新依赖 / 既有 M4 族全绿，修复前绿，如实标注）。
+// ★ 分歧修复轮补的 Sr16–Sr20：Sr18 属**修复前红**（旧实现丢掉失败角色自己的 sessionId；变异实测
+//   `1758 (failed: 1)` 只红它）；Sr16/Sr17/Sr19/Sr20 属**覆盖缺口**（相关实现本轮零改动，只补正相断言）。
+// ★ 读数面：`batchGroupsOf` 等新名字走**模块命名空间** `qRotation`（批 Q 起就导入）—— 具名导入会在
+//   链接期失败，把「修复前红相」变成「整套件跑不起来」（本仓最反对的假红）。
+
+const S_TEAM = "s-team";
+const S_NEXT = "session-s-next";
+const S_NEXT2 = "session-s-next2";
+const S_CONFIRM = "确认整队换届";
+const S_CANCEL = "取消";
+const sGroupsOf = (team, now = Date.now()) => (typeof qRotation.batchGroupsOf === "function" ? qRotation.batchGroupsOf(team, now) : []);
+const sStateText = (group) => (group === undefined || typeof qRotation.batchStateLines !== "function" ? "" : qRotation.batchStateLines(group).join("\n"));
+const sBatchTtl = typeof qRotation.ROTATION_BATCH_TTL_MS === "number" ? qRotation.ROTATION_BATCH_TTL_MS : -1;
+const sAgents = [
+	{ id: "session-worker-a", status: "idle" },
+	{ id: "session-worker-b", status: "idle" },
+	{ id: SUCCESSOR, status: "idle" },
+	{ id: S_NEXT, status: "idle" },
+	{ id: S_NEXT2, status: "idle" },
+];
+/** 批 S 的角色行 / 团队行（raw settings 形状；policy.get() 的归一化照常跑）。 */
+const sRole = (role, current, pending = null) => ({ role, current, pending, rotationAt: 0, provisional: null, rotationStatus: "", history: [] });
+const sRow = (roles, extra = {}) => ({ name: S_TEAM, createdAt: 1_700_000_000_000, workspace: TEAM_WS, policy: { writer: "coordinator" }, roles, rotationBackup: null, rotationBackups: [], mode: "sessions", leadSessionId: "", ...extra });
+const sRoles = () => [sRole("coordinator", ROT_SELF), sRole("worker-a", "session-worker-a")];
+const sMap = () => `coordinator=${SUCCESSOR}, worker-a=${S_NEXT}`;
+/** 一条命令发起整队换届（整队显式 id 路径：全局 auto 与显式二选一，v1 不做混合批次）。 */
+const sBatch = (env, exec = undefined, extra = {}) => env.rotate.execute({ action: "prepare-batch", team: S_TEAM, successors: sMap(), ...extra }, exec ?? execFor(env.senderAgent));
+/**
+ * ★ 修复轮（批 S 七红之「每档都多了一次计数」）：建夹具后**先等 attach 后置链落定**再取基线。
+ * 为什么：attach 后置链里的 `ensureTeamAutoWatchdogs`（FR-10/FR-17）是 **fire-and-forget**，
+ * 它会写一次 `policy.update({ watchdogs })`；夹具在它落地前取 `ns.updates.length` 当基线，
+ * 这一笔就会落进「恰 1 次写盘 / 零副作用」的测量窗里 —— 读数多 1，判据假红。
+ * 纪律与批 G / 批 L 的同类夹具一致（`await tick()` 后再种行 / 再取基线；见 rgRefuseRun 与
+ * U27 块头的注释），不是给实现放宽：本夹具只把**与本次动作无关的那一笔**移到窗口之外。
+ */
+const sNewEnv = async (options) => {
+	const env = rotateEnv(options);
+	await tick();
+	return env;
+};
+/** 该 env 的**归一化**读视图（政策 store 的真读面 —— 不是 ns.data 的 raw 形状）。 */
+const sView = (env) => __testing.policyFor(env.ctx).get();
+const sViewRole = (env, role) => {
+	const team = sView(env).teams.find((entry) => entry.name === S_TEAM) ?? null;
+	return team === null ? null : team.roles.find((entry) => entry.role === role) ?? null;
+};
+
+// --- Sr1：一次 prepare-batch ⇒ 恰 1 次 policy.update；每角色一条 pending（带 rotationId）；N 份撤销依据 ---
+const sr1Env = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr1Up0 = sr1Env.ns.updates.length;
+const sr1Out = String(await sBatch(sr1Env));
+const sr1Team = sr1Env.team();
+const sr1Pend = sr1Team.roles.map((entry) => entry.pending).filter((pending) => pending !== null && pending !== undefined);
+const sr1Backups = sr1Team.rotationBackups ?? [];
+const sr1TeamsPatches = sr1Env.ns.updates.slice(sr1Up0).filter((patch) => patch.teams !== undefined);
+const sr1Rids = sr1Pend.map((pending) => pending.rotationId);
+check("批 S · Sr1 一次 prepare-batch ⇒ 恰 **1 次** policy.update 落盘、每角色一条 pending（带 rotationId）、团队 rotationBackups 恰 N 条且各自快照按 rid 可辨（红相＝逐角色各写一次 / 只写最后一个 ⇒ 本条红；修复前红：旧实现没有批量动词）: 2 个角色的整队准备 ⇒ 写次数恰 1（带 teams 的补丁恰 1 条）、pending 恰 2 条且各自 rotationId 都能在集合里按 rid 取回、集合恰 2 条且 rid 互不相同"
+	+ (sr1Env.ns.updates.length - sr1Up0 === 1 && sr1Pend.length === 2 && sr1Backups.length === 2 && new Set(sr1Rids).size === 2 ? "" : "（实测：" + show({ updates: sr1Env.ns.updates.length - sr1Up0, teamsPatches: sr1TeamsPatches.length, pendings: sr1Pend.length, backups: sr1Backups.length, rids: sr1Rids }) + "）"),
+	sr1Env.ns.updates.length - sr1Up0 === 1 && sr1TeamsPatches.length === 1
+		&& sr1Pend.length === 2 && sr1Backups.length === 2 && new Set(sr1Rids).size === 2
+		&& sr1Pend.every((pending) => typeof pending.rotationId === "string" && qEntryOf(sr1Team, pending.rotationId) !== null)
+		&& sr1Out.includes("批次汇总：2/2 角色已准备"));
+
+// --- Sr16（分歧修复轮 🟡#4a）：freeze 是**一条批次级**，不是每角色一条 ----------------
+const sr16BatchId = sViewRole(sr1Env, "worker-a")?.pending?.batchId ?? null;
+const sr16Freezes = (id) => (sr1Env.calls(id)?.followedup ?? []).filter((message) => String(message?.content?.[0]?.text ?? "").includes("[rotation-freeze]"));
+const sr16Worker = sr16Freezes("session-worker-a");
+const sr16Text = sr16Worker.map((message) => String(message.content[0].text)).join("\n");
+check("批 S · Sr16 批次级 freeze 恰**一条**（分歧修复轮 🟡#4a；红相＝按角色各发一条 ⇒ 2 角色批次会出现 2 条 ⇒ 本条红）: 2 角色批次 ⇒ 接收成员（非发起者的 session-worker-a）恰 1 条 `[rotation-freeze]`、发起者 0 条，正文点名两个角色与 batchId",
+	typeof sr16BatchId === "string" && sr16Worker.length === 1
+		&& (sr1Env.senderCalls?.followedup ?? []).filter((message) => String(message?.content?.[0]?.text ?? "").includes("[rotation-freeze]")).length === 0
+		&& sr16Text.includes(sr16BatchId) && sr16Text.includes("worker-a") && sr16Text.includes("coordinator"));
+
+// --- Sr17（分歧修复轮 🟡#4b）：读面分组在**仍有 pending 时**就成立 --------------------
+const sr17Get = String(await sr1Env.roster.execute({ action: "get", team: S_TEAM }, execFor(sr1Env.senderAgent)));
+const sr17Mirror = (() => { try { return readFileSync(path.join(TEAM_WS, "team", S_TEAM, "roster.md"), "utf8"); } catch { return ""; } })();
+check("批 S · Sr17 读面在**仍有 pending 时**按 batchId 分组（分歧修复轮 🟡#4b；红相＝分组只在 sweep 之后才成立 / 只在 roster get 有而镜像没有 ⇒ 本条红）: 批次刚落盘、两个 pending 都在 ⇒ `roster get` 与 `roster.md` 镜像**都**含「整队换届批次」与「已认领 0/2」",
+	sr17Get.includes("整队换届批次") && sr17Get.includes("已认领 0/2")
+		&& sr17Mirror.includes("整队换届批次") && sr17Mirror.includes("已认领 0/2"));
+
+// --- Sr2：令牌绑三元组 ＋ TTL 2h ＋ 一次性 -----------------------------------
+const sr2TokenA = sViewRole(sr1Env, "worker-a")?.pending?.token ?? "";
+const sr2Claim = String(await sr1Env.rotate.execute({ action: "claim", team: S_TEAM, role: "worker-a", token: sr2TokenA }, sr1Env.exec(S_NEXT)));
+const sr2Replay = String(await sr1Env.rotate.execute({ action: "claim", team: S_TEAM, role: "worker-a", token: sr2TokenA }, sr1Env.exec(S_NEXT)));
+check("批 S · Sr2 每枚令牌绑定 (team, role, successor) 三元组、TTL = 2h、一次性（红相＝TTL 仍 30min 或未绑定 ⇒ 本条红；修复前红：没有批量令牌）: 两条 pending 的 expiresAt − createdAt 都恰 " + sBatchTtl + "ms 且各绑定自己的 (team, role, successor)；令牌明文在回执里出现一次；用 worker-a 的令牌 claim 成功之后**同一令牌重放被拒**（成功即作废）"
+	+ (sBatchTtl === 7200000 ? "" : "（实测 TTL 常量：" + show(qRotation.ROTATION_BATCH_TTL_MS) + "）"),
+	sBatchTtl === 7200000
+		&& sr1Pend.length === 2
+		&& sr1Pend.every((pending) => pending.expiresAt - pending.createdAt === 7200000 && pending.team === S_TEAM && pending.session !== "" && typeof pending.role === "string")
+		&& sr1Out.includes(sr2TokenA)
+		&& sr2Claim.includes("换届完成（claim）") && sr2Claim.includes("旧任 session-worker-a → 新任 " + S_NEXT)
+		&& sr2Replay.includes("没有 pending"));
+
+// --- Sr3：无确认服务 / 取消 / 对话框失败 ⇒ 零副作用 --------------------------
+const sr3CancelEnv = await sNewEnv({ askScript: [S_CANCEL], extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr3CancelUp = sr3CancelEnv.ns.updates.length;
+const sr3CancelOut = String(await sBatch(sr3CancelEnv));
+const sr3NoSvcEnv = await sNewEnv({ askScript: [], omitUserQuestions: true, extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr3NoSvcUp = sr3NoSvcEnv.ns.updates.length;
+const sr3NoSvcOut = String(await sBatch(sr3NoSvcEnv));
+const sr3FailEnv = await sNewEnv({ askScript: [async () => { throw Object.assign(new Error("dialog aborted by bridge"), { code: "ABORT_ERR" }); }], extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr3FailUp = sr3FailEnv.ns.updates.length;
+const sr3FailOut = String(await sBatch(sr3FailEnv));
+const sr3Quiet = (env, up0) => env.creates.length === 0 && env.ns.updates.length === up0
+	&& Array.from(env.extraCalls.values()).every((calls) => calls.followedup.length === 0)
+	&& env.ns.data.teams[0].roles.every((entry) => entry.pending === null);
+check("批 S · Sr3 无确认服务 / 取消 / 对话框失败（超时与中止的同一归宿）⇒ agents.create 零调用、policy.update 零次、广播零次（红相＝先建会话再问 / 取消后仍有写 ⇒ 本条红；修复前红：没有批量动词）: 三档各自零副作用，读数各自具名（取消 / 服务缺席 / 确认框失败）"
+	+ (sr3Quiet(sr3CancelEnv, sr3CancelUp) && sr3Quiet(sr3NoSvcEnv, sr3NoSvcUp) && sr3Quiet(sr3FailEnv, sr3FailUp) ? "" : "（实测：" + show({ cancel: [sr3CancelEnv.creates.length, sr3CancelEnv.ns.updates.length - sr3CancelUp], noSvc: [sr3NoSvcEnv.creates.length, sr3NoSvcEnv.ns.updates.length - sr3NoSvcUp], fail: [sr3FailEnv.creates.length, sr3FailEnv.ns.updates.length - sr3FailUp] }) + "）"),
+	sr3Quiet(sr3CancelEnv, sr3CancelUp) && sr3Quiet(sr3NoSvcEnv, sr3NoSvcUp) && sr3Quiet(sr3FailEnv, sr3FailUp)
+		&& sr3CancelOut.includes("未发起整队换届") && sr3CancelOut.includes("零建会话")
+		&& sr3NoSvcOut.includes("确认服务（userQuestions）不可用")
+		&& sr3FailOut.includes("确认框失败"));
+
+// --- Sr20（分歧修复轮 🔵#5）：3 分钟未确认 ⇒ 具名超时、零副作用 -----------------------
+const sr20Env = await sNewEnv({ askScript: [], extraAgents: sAgents, teams: [sRow(sRoles())] });
+sr20Env.uq.script.push((request) => new Promise((_resolve, reject) => {
+	request.signal.addEventListener("abort", () => reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORTED" })));
+}));
+const sr20Up = sr20Env.ns.updates.length;
+const sr20RealSetTimeout = globalThis.setTimeout;
+let sr20Out;
+globalThis.setTimeout = (fn, ms, ...rest) => {
+	if (!(typeof ms === "number" && ms >= 60000)) return sr20RealSetTimeout(fn, ms, ...rest);
+	const timer = sr20RealSetTimeout(fn, 0, ...rest);
+	timer.unref = () => timer;
+	return timer;
+};
+try { sr20Out = String(await sBatch(sr20Env)); } finally { globalThis.setTimeout = sr20RealSetTimeout; }
+check("批 S · Sr20（分歧修复轮 🔵#5）3 分钟未确认 ⇒ 具名超时、零副作用（红相＝把超时当成功 / 走无人值守落盘 ⇒ 本条红）: 计时器到点 ⇒ 回执点名「3 分钟内未获确认（按取消处理）」；零建会话、零写入、零 pending、零广播",
+	sr20Out.includes("3 分钟内未获确认（按取消处理）") && sr3Quiet(sr20Env, sr20Up));
+
+// --- Sr4：auto 角色的交接文档由插件从 roster 事实生成；生成失败 ⇒ 整批拒绝 ---
+const sr4IntentCounts = [];
+const sr4Env = await sNewEnv({
+	askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())],
+	// ★ 分歧修复轮 🟡#4c：建会话时读 `pendingCreates` 的条数（意图先增；成功投递后应归零）。
+	createdHook: () => sr4IntentCounts.push((sr4Env.ns.data.pendingCreates ?? []).length),
+});
+const sr4Out = String(await sr4Env.rotate.execute({ action: "prepare-batch", team: S_TEAM, successor: "auto" }, execFor(sr4Env.senderAgent)));
+const sr4Ids = sr4Env.creates.map((options) => options.sessionId);
+const sr4Dir = path.join(TEAM_WS, "team", S_TEAM);
+const sr4Files = (() => { try { return readdirSync(sr4Dir).filter((name) => name.startsWith("handoff-") && name.endsWith(".md")).sort(); } catch { return []; } })();
+const sr4Docs = sr4Files.map((name) => readFileSync(path.join(sr4Dir, name), "utf8"));
+const sHardSections = ["mission", "in-flight", "commitments", "unknowns", "task-and-goal"];
+const sr4Complete = sr4Docs.length === 2 && sr4Docs.every((text) => sHardSections.every((name) => text.split("\n").includes("## " + name)));
+const sr4Honest = sr4Docs.length === 2 && sr4Docs.every((text) => text.includes("未知") || text.includes("读不到"));
+const sr4BadEnv = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles(), { workspace: "" })] });
+const sr4BadUp = sr4BadEnv.ns.updates.length;
+const sr4BadOut = String(await sr4BadEnv.rotate.execute({ action: "prepare-batch", team: S_TEAM, successor: "auto" }, execFor(sr4BadEnv.senderAgent)));
+const sr4BadQuiet = sr4BadEnv.creates.length === 0 && sr4BadEnv.ns.updates.length === sr4BadUp
+	&& Array.from(sr4BadEnv.extraCalls.values()).every((calls) => calls.followedup.length === 0)
+	&& sr4BadEnv.ns.data.teams[0].roles.every((entry) => entry.pending === null);
+// ★ v1 不收调用方提交的逐角色正文（FR-S2）：给了就**具名拒绝**，不静默丢弃
+const sr4HandoffEnv = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr4HandoffUp = sr4HandoffEnv.ns.updates.length;
+const sr4HandoffOut = String(await sr4HandoffEnv.rotate.execute({ action: "prepare-batch", team: S_TEAM, successor: "auto", handoff: "## mission\n代写的交接" }, execFor(sr4HandoffEnv.senderAgent)));
+const sr4HandoffQuiet = sr4HandoffEnv.creates.length === 0 && sr4HandoffEnv.ns.updates.length === sr4HandoffUp;
+check("批 S · Sr4 预检：auto 角色的交接文档由**插件从 roster 事实生成**（五硬节齐全，读不到的如实标未知）；生成失败 ⇒ 整批拒绝、零副作用、逐角色点名缺什么（红相＝生成失败照建 ⇒ 本条红；修复前红：没有批量动词）: 生成的 2 份文档各含五个硬节标题且带「未知 / 读不到」的如实行；workspace 缺失档 ⇒ 具名「交接文档无法生成」＋逐角色点名＋零建会话、零写入、零广播；调用方提交逐角色正文 ⇒ 具名拒绝（v1 不收调用方正文，不静默丢弃）"
+	+ (sr4Complete && sr4Honest ? "" : "（实测：" + show({ ids: sr4Ids, files: sr4Files, complete: sr4Complete, honest: sr4Honest }) + "）"),
+	sr4Ids.length === 2 && sr4Complete && sr4Honest
+		&& sr4Out.includes("整队换届（prepare-batch）") && sr4Out.includes("handoff-")
+		&& sr4BadOut.includes("交接文档无法生成") && sr4BadOut.includes("角色 worker-a：") && sr4BadOut.includes("角色 coordinator：")
+		&& sr4BadOut.includes("零建会话") && sr4BadQuiet
+		&& sr4HandoffOut.includes("不接受调用方提交的交接正文") && sr4HandoffQuiet);
+
+// --- Sr19（分歧修复轮 🟡#4c）：auto 投递（令牌 ＋「120 分钟」）＋ 意图先增后删 ----------
+const sr4Deliveries = sr4Env.created.map((item) => {
+	const role = sView(sr4Env).teams.find((entry) => entry.name === S_TEAM).roles.find((entry) => entry.pending !== null && entry.pending.session === item.agent.id) ?? null;
+	return { session: item.agent.id, token: role?.pending?.token ?? null, followed: item.calls?.followedup?.length ?? 0, text: String(item.calls?.followedup?.[0]?.content?.[0]?.text ?? "") };
+});
+check("批 S · Sr19 auto 继任者收到令牌 ＋「120 分钟」，且 `pendingCreates` 意图**先增后删**（分歧修复轮 🟡#4c；红相＝投递仍写 30 分钟 / 意图没删或投递前就删 ⇒ 本条红）: 两个自建继任者各恰 1 条 followup，正文含各自 pending 的令牌与「120 分钟内有效」；建会话时意图计数逐次 1→2，成功后归零",
+	sr4Env.created.length === 2
+		&& sr4Deliveries.every((row) => row.followed === 1 && typeof row.token === "string" && row.token !== "" && row.text.includes(row.token) && row.text.includes("120 分钟内有效"))
+		&& sr4IntentCounts.join(",") === "1,2"
+		&& (sr4Env.ns.data.pendingCreates ?? []).length === 0);
+
+// --- Sr5：发起权（非现任协调者 ⇒ 拒绝；writer=any 也不放宽） ------------------
+const sr5GateEnv = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr5GateUp = sr5GateEnv.ns.updates.length;
+const sr5GateOut = String(await sBatch(sr5GateEnv, execFor(sr5GateEnv.agentFor("session-worker-a"))));
+const sr5AnyEnv = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles(), { policy: { writer: "any" } })] });
+const sr5AnyUp = sr5AnyEnv.ns.updates.length;
+const sr5AnyOut = String(await sBatch(sr5AnyEnv, execFor(sr5AnyEnv.agentFor("session-worker-a"))));
+const sr5Quiet = (env, up0) => env.creates.length === 0 && env.ns.updates.length === up0 && env.ns.data.teams[0].roles.every((entry) => entry.pending === null);
+check("批 S · Sr5 发起权：非现任协调者 ⇒ 拒绝；writer gate = coordinator 时非现任一律拒；**writer=any 也不放宽整队发起**（红相＝放宽为任一成员 ⇒ 本条红；修复前红：没有批量动词）: ① writer=coordinator ＋ worker 发起 ⇒ 既有 writer gate 拒（零副作用）② writer=any ＋ worker 发起 ⇒ 仍被「只有现任协调者会话」具名拒（批量授权是独立入口，D10）"
+	+ (sr5GateOut.includes("写操作被拒绝") && sr5AnyOut.includes("整队换届被拒绝") ? "" : "（实测：" + show({ gate: sr5GateOut.slice(0, 160), any: sr5AnyOut.slice(0, 160) }) + "）"),
+	sr5Quiet(sr5GateEnv, sr5GateUp) && sr5Quiet(sr5AnyEnv, sr5AnyUp)
+		&& sr5GateOut.includes("写操作被拒绝") && sr5GateOut.includes("只有现任协调者会话")
+		&& sr5AnyOut.includes("整队换届被拒绝") && sr5AnyOut.includes("可以发起整队换届"));
+
+// --- Sr6：协调者自己的角色排最后 ---------------------------------------------
+const sr6WorkerA = sr1Out.indexOf("  - worker-a：");
+const sr6Coordinator = sr1Out.indexOf("  - coordinator：");
+check("批 S · Sr6 排序：协调者自己的角色**最后**准备（回执顺序可核对）（红相＝协调者排第一 ⇒ 本条红；修复前红：没有批量动词）: 回执里 worker-a 的角色行出现在 coordinator 的角色行之前，且回执自报「协调者自己的角色排在最后」这条规则"
+	+ (sr6WorkerA > 0 && sr6Coordinator > sr6WorkerA ? "" : "（实测：" + show({ workerA: sr6WorkerA, coordinator: sr6Coordinator }) + "）"),
+	sr6WorkerA > 0 && sr6Coordinator > sr6WorkerA && sr1Out.includes("协调者自己的角色排在最后"));
+
+// --- Sr7：部分认领（role1 认领成功 / role2 令牌过期 ⇒ 只取消 role2） ----------
+const sr7Env = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())] });
+await sBatch(sr7Env);
+const sr7TokenA = sViewRole(sr7Env, "worker-a")?.pending?.token ?? "";
+await sr7Env.rotate.execute({ action: "claim", team: S_TEAM, role: "worker-a", token: sr7TokenA }, sr7Env.exec(S_NEXT));
+sr7Env.role("coordinator").pending.expiresAt = 1;
+const sr7Group = sGroupsOf(sr7Env.team(), Date.now())[0];
+const sr7GroupText = sStateText(sr7Group);
+const sr7Sweep = await sr7Env.rotation.sweep({ now: Date.now() });
+const sr7SweepText = sr7Sweep.lines.join("\n");
+const sr7After = sr7Env.team();
+const sr7Role = (name) => sr7After.roles.find((entry) => entry.role === name);
+const sr7Get = String(await sr7Env.roster.execute({ action: "get", team: S_TEAM }, execFor(sr7Env.senderAgent)));
+check("批 S · Sr7 部分认领：role1 认领成功、role2 令牌过期 ⇒ 清扫**只**取消 role2，roster 呈 mixed 态，读面报 k/N（红相＝整批一起取消 / 假装全成功 ⇒ 本条红；修复前红：没有批量动词）: ① 清扫前读面：已认领 1/2、role2 已过期（逐角色三态）② 清扫只取消 coordinator（cancelled 恰 1 条且点名该角色与批次）③ 之后 roster 是 mixed：worker-a 现任已是继任者、coordinator 现任仍是旧任且 pending 已清 ④ roster get 照实列出（不假装整批成功）—— ★ 边界如实：批次分组只在「同批次仍有 pending」时归因，整批落定/取消后分组自然消失（D7：批次标识只在 pending 行内）"
+	+ (sr7GroupText.includes("已认领 1/2") ? "" : "（实测：" + show({ group: sGroupsOf(sr7Env.team(), Date.now()), text: sr7GroupText.slice(0, 200) }) + "）"),
+	sr7Group !== undefined && sr7Group.claimed === 1 && sr7Group.expired === 1 && sr7Group.total === 2
+		&& sr7GroupText.includes("已认领 1/2") && sr7GroupText.includes("已过期")
+		&& sr7Sweep.cancelled.length === 1 && sr7Sweep.cancelled[0].role === "coordinator" && sr7Sweep.cancelled[0].batchId !== null
+		&& sr7SweepText.includes("整队换届批次") && sr7SweepText.includes("取消这一个角色")
+		&& sr7Role("worker-a").current === S_NEXT && sr7Role("worker-a").pending === null
+		&& sr7Role("coordinator").current === ROT_SELF && sr7Role("coordinator").pending === null
+		&& sr7Get.includes("团队 " + S_TEAM + " 详情") && sGroupsOf(sr7After, Date.now()).length === 0);
+
+// --- Sr8：批次互斥（单角色 prepare ＋ 二次 prepare-batch 都具名拒绝） ----------
+const sr8Env = await sNewEnv({ askScript: [S_CONFIRM, S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr8BatchOut = String(await sBatch(sr8Env));
+const sr8BatchId = sViewRole(sr8Env, "worker-a")?.pending?.batchId ?? null;
+const sr8Single = String(await sr8Env.rotate.execute({ action: "prepare", team: S_TEAM, role: "worker-a", successor: S_NEXT2 }, execFor(sr8Env.agentFor("session-worker-a"))));
+const sr8Again = String(await sBatch(sr8Env));
+const sr8Team = sr8Env.team();
+check("批 S · Sr8 批次在飞期间再发单角色 prepare ⇒ 具名拒绝 ＋ 指路；再发 prepare-batch 亦具名拒绝并列出批次进度（红相＝允许并发 ⇒ 本条红；修复前红：没有批量动词）: ① 单角色 prepare 被拒且点名 batchId 与三个指路出口，worker-a 的 pending **逐字未变** ② 二次 prepare-batch 被拒且列出「本批次当前进度」（逐角色三态）"
+	+ (sr8BatchOut.includes("2/2 角色已准备") ? "" : "（实测：" + show(sr8BatchOut.slice(0, 200)) + "）"),
+	typeof sr8BatchId === "string" && sr8BatchId.startsWith("bat-")
+		&& sr8Single.includes("整队换届批次") && sr8Single.includes(sr8BatchId) && sr8Single.includes("team_link_recover")
+		&& sr8Team.roles.find((entry) => entry.role === "worker-a").pending.session === S_NEXT
+		&& sr8Again.includes("已经有一个批次在飞") && sr8Again.includes("本批次当前进度") && sr8Again.includes("已认领 0/2"));
+
+// --- Sr9：回归锁（零新增顶层键 / 零新依赖 / 既有 M4 族全绿） -----------------
+const sr9Family = assertionRecords.filter((record) => !record.label.startsWith("批 S · Sr") && /(M4|U9|U10|U11|U20|U26|U27|U36|U37|Pi3|Pi4|Pi7|Pi8|Pi9|Qr)/.test(record.label));
+const sr9Red = sr9Family.filter((record) => !record.ok).map((record) => record.label);
+check("批 S · Sr9 零新增顶层键（十一键）／零新依赖（8 条）／既有 M4 族全绿（红相＝加顶层键 / 改 claim ⇒ 本条红；**回归锁：修复前绿**，如实标注）: policy.json 顶层键仍逐字等于权威读数 U19_POLICY_KEYS 的十一键；宿主半边文件集汇总出的宿主说明符仍恰 8 条；既有 rotate / claim / 恢复 / 交接族（M4·U9–U11·U20·U26·U27·U36·U37·Pi3/Pi4/Pi7/Pi8/Pi9·Qr）现读 " + sr9Family.length + " 条**全部绿**（红项 " + show(sr9Red) + "）"
+	+ (sameJson(Object.keys(sr1Env.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS) ? "" : "（实测：顶层 " + show(Object.keys(sr1Env.settings.namespaces.get("team-link").base).sort()) + "）"),
+	sameJson(Object.keys(sr1Env.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS)
+		&& hostSpecifierSetMatches(hostHalfSpecifiers(), HOST_IMPORTS)
+		&& sr9Family.length >= 40 && sr9Red.length === 0);
+
+// --- Sr10：每份撤销依据按 rid 可取回；claim 只删自己那条（修复前红：依赖 prepare-batch 产物） ---
+const sr10Env = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())] });
+await sBatch(sr10Env);
+const sr10Team = sr10Env.team();
+const sr10RidA = sViewRole(sr10Env, "worker-a")?.pending?.rotationId ?? null;
+const sr10RidC = sViewRole(sr10Env, "coordinator")?.pending?.rotationId ?? null;
+const sr10A = qEntryOf(sr10Team, sr10RidA);
+const sr10C = qEntryOf(sr10Team, sr10RidC);
+const sr10CBefore = JSON.stringify(sr10C);
+const sr10TokenA = sViewRole(sr10Env, "worker-a")?.pending?.token ?? "";
+await sr10Env.rotate.execute({ action: "claim", team: S_TEAM, role: "worker-a", token: sr10TokenA }, sr10Env.exec(S_NEXT));
+const sr10After = sr10Env.team();
+check("批 S · Sr10 每份撤销依据**按 rid 可取回**：N 条各自 previous 与还原依据在场；claim 只删自己那条（红相＝共用一份 / 张冠李戴 ⇒ 本条红；**修复前红：依赖 prepare-batch 产物**）: 两条待换届各自按 rid 取回自己的条目且 rid 互不相同（快照里都是**批次前**的名单）；worker-a claim 成功之后只有它那条消失，coordinator 那条**逐字节原样**"
+	+ (sr10A !== null && sr10C !== null ? "" : "（实测：" + show({ ridA: sr10RidA, ridC: sr10RidC, a: sr10A, c: sr10C }) + "）"),
+	typeof sr10RidA === "string" && typeof sr10RidC === "string" && sr10RidA !== sr10RidC
+		&& sr10A !== null && sr10C !== null
+		&& JSON.stringify((sr10A.backup?.roster?.roles ?? []).map((entry) => entry.role)) === JSON.stringify(["coordinator", "worker-a"])
+		&& JSON.stringify((sr10C.backup?.roster?.roles ?? []).map((entry) => entry.role)) === JSON.stringify(["coordinator", "worker-a"])
+		&& qEntryOf(sr10After, sr10RidA) === null
+		&& JSON.stringify(qEntryOf(sr10After, sr10RidC)) === sr10CBefore);
+
+// --- Sr11：授权路径分开（协调者能准备 worker；单角色现任门一字不动） ----------
+const sr11Env = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr11BatchOut = String(await sBatch(sr11Env));
+const sr11Worker = sViewRole(sr11Env, "worker-a");
+const sr11CleanEnv = await sNewEnv({ askScript: [], extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr11Single = String(await sr11CleanEnv.rotate.execute({ action: "prepare", team: S_TEAM, role: "worker-a", successor: S_NEXT }, execFor(sr11CleanEnv.senderAgent)));
+check("批 S · Sr11 ★（会诊 #101 [1]-①）授权路径分开：协调者能成功准备 worker（逐角色不走现任门）；**单角色 prepare 的现任门一字不动**（协调者代 worker 发起单角色仍被拒）（红相＝把现任门放宽到单角色路径 / 非协调者也能批量 ⇒ 本条红；修复前红：没有批量动词）: ① 协调者一条命令批量准备了 worker-a（pending.session=" + S_NEXT + "）② 同一协调者以**单角色** prepare 代 worker-a 发起 ⇒ 仍被「只有该角色的现任会话 session-worker-a 可以发起换届」拒绝、零写入"
+	+ (sr11BatchOut.includes("2/2 角色已准备") ? "" : "（实测：" + show(sr11BatchOut.slice(0, 200)) + "）"),
+	sr11Worker !== null && sr11Worker.pending !== null && sr11Worker.pending.session === S_NEXT
+		&& sr11BatchOut.includes("2/2 角色已准备")
+		&& sr11Single.includes("只有该角色的现任会话 session-worker-a 可以发起换届")
+		&& sr11CleanEnv.role("worker-a").pending === null);
+
+// --- Sr12：写前重读（确认期间名册变了 ⇒ 整批中止、零写入） --------------------
+const sr12Env = await sNewEnv({ askScript: [async () => { sr12Env.role("worker-a").current = "session-worker-b"; return [S_CONFIRM]; }], extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr12Up = sr12Env.ns.updates.length;
+const sr12Out = String(await sBatch(sr12Env));
+check("批 S · Sr12 ★（会诊 #101 [1]-③）写前重读：确认框返回后 roster / 写策略若已变 ⇒ **整批中止、零写入**（policy.update 零次、agents.create 零次）（红相＝用预热 view 覆盖 ⇒ 本条红；修复前红：没有批量动词）: 对话框脚本在**等待期间**改掉 worker-a 的现任 ⇒ 回执具名「写前重读」、零建会话、零写入、零 pending"
+	+ (sr12Out.includes("写前重读") ? "" : "（实测：" + show(sr12Out.slice(0, 240)) + "）"),
+	sr12Out.includes("写前重读") && sr12Out.includes("指纹不一致") && sr12Out.includes("零写入")
+		&& sr12Env.creates.length === 0 && sr12Env.ns.updates.length === sr12Up
+		&& sr12Env.ns.data.teams[0].roles.every((entry) => entry.pending === null));
+
+// --- Sr13：限速按角色（10 分钟内重发整批 ⇒ 逐角色具名拒绝并列出剩余窗口） ------
+// ★ 修复轮（判据场景纠正）：旧夹具由**原发起会话**（session-self）重发，但它整批 claim 之后
+//   协调者的现任已经落到继任者身上 —— 原会话不再是现任协调者 ⇒ 工具层先撞 writer gate
+//   （「写操作被拒绝：…只有现任协调者会话 session-new 可写」），永远走不到逐角色限速那一段。
+//   设计语义（NF-S6「限速键仍是 (team, role, 10min)」＋ D10「发起权 = 现任协调者」）要求的是
+//   「窗口内重发整批」，唯一可达的发起人就是**整批 claim 之后的新现任协调者**；且两个继任者
+//   都不能等于各自现任（否则先撞「继任者不能是现任自己」那条准入）。断言一字未改：
+//   逐角色点名「换届速率限制」＋「窗口剩余约」，零建会话、零写入、零 pending。
+const sr13Env = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())] });
+await sBatch(sr13Env);
+await sr13Env.rotate.execute({ action: "claim", team: S_TEAM, role: "worker-a", token: sViewRole(sr13Env, "worker-a")?.pending?.token ?? "" }, sr13Env.exec(S_NEXT));
+await sr13Env.rotate.execute({ action: "claim", team: S_TEAM, role: "coordinator", token: sViewRole(sr13Env, "coordinator")?.pending?.token ?? "" }, sr13Env.exec(SUCCESSOR));
+const sr13Up = sr13Env.ns.updates.length;
+const sr13Creates = sr13Env.creates.length;
+// 新现任协调者 = SUCCESSOR（claim 的继任者）。两个 successor 都取「在场且不等于各自现任」的 id。
+const sr13Out = String(await sBatch(sr13Env, sr13Env.exec(SUCCESSOR), { successors: `coordinator=${S_NEXT2}, worker-a=session-worker-b` }));
+check("批 S · Sr13 ★（设计评审折入）限速按角色：10 分钟内重发整批 ⇒ **逐角色**具名拒绝并列出剩余窗口，零副作用（红相＝静默允许重发 / 只拒第一个角色 ⇒ 本条红；修复前红：没有批量动词）: 整批认领完毕（rotationAt 落在窗口内）后由**claim 之后的新现任协调者**重发整批（旧夹具由已卸任的原发起会话重发 ⇒ 不可达，只会先撞 writer gate）⇒ refusal 里两个角色**各自**点名「换届速率限制」与「窗口剩余约」，且零建会话、零写入、零 pending"
+	+ (sr13Out.includes("换届速率限制") ? "" : "（实测：" + show(sr13Out.slice(0, 260)) + "）"),
+	sr13Out.includes("换届速率限制") && sr13Out.includes("窗口剩余约")
+		&& sr13Out.includes("角色 worker-a：") && sr13Out.includes("角色 coordinator：")
+		&& sr13Env.creates.length === sr13Creates && sr13Env.ns.updates.length === sr13Up
+		&& sr13Env.ns.data.teams[0].roles.every((entry) => entry.pending === null));
+
+// --- Sr14：batchId 三面存活（写 → 读 → 重启后互斥仍生效） ---------------------
+const sr14Env = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())] });
+await sBatch(sr14Env);
+const sr14Raw = JSON.parse(JSON.stringify(sr14Env.ns.data.teams));
+const sr14Written = sr14Raw[0]?.roles?.find((entry) => entry.role === "worker-a")?.pending ?? null;
+const sr14Read = sViewRole(sr14Env, "worker-a")?.pending ?? null;
+const sr14RestartEnv = await sNewEnv({ askScript: [], extraAgents: sAgents, teams: sr14Raw });
+const sr14Restart = sViewRole(sr14RestartEnv, "worker-a")?.pending ?? null;
+const sr14Mutex = String(await sr14RestartEnv.rotate.execute({ action: "prepare", team: S_TEAM, role: "worker-a", successor: S_NEXT2 }, execFor(sr14RestartEnv.agentFor("session-worker-a"))));
+check("批 S · Sr14 ★（设计评审折入）batchId 三面存活：写盘后读回带 batchId；**重启（重新读取 policy）后仍在**；批次互斥判定据此生效（红相＝白名单漏 batchId ⇒ 重启后静默丢失 ⇒ 本条红；修复前红：没有批量动词）: ① 落盘的 raw 行里有 batchId（bat- 前缀）与批次清单 ② 归一化读视图里仍在 ③ 用同一份 raw 行重建 store（模拟重启）后仍在 —— 且**单角色 prepare 仍被批次互斥拒绝**（互斥不是内存态）"
+	+ (typeof sr14Read?.batchId === "string" ? "" : "（实测：" + show({ written: sr14Written?.batchId, read: sr14Read?.batchId, restart: sr14Restart?.batchId }) + "）"),
+	typeof sr14Written?.batchId === "string" && sr14Written.batchId.startsWith("bat-")
+		&& typeof sr14Read?.batchId === "string" && sr14Read.batchId === sr14Written.batchId
+		&& Array.isArray(sr14Read.batchRoles) && sr14Read.batchRoles.length === 2
+		&& typeof sr14Restart?.batchId === "string" && sr14Restart.batchId === sr14Written.batchId
+		&& sr14Mutex.includes("整队换届批次"));
+
+// --- Sr15：显式继任者在场校验（不存在 ⇒ 整批拒绝、零副作用） ------------------
+const sr15Env = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow(sRoles())] });
+const sr15Up = sr15Env.ns.updates.length;
+const sr15Out = String(await sr15Env.rotate.execute({ action: "prepare-batch", team: S_TEAM, successors: `coordinator=${SUCCESSOR}, worker-a=session-does-not-exist` }, execFor(sr15Env.senderAgent)));
+check("批 S · Sr15 ★（设计评审折入）显式继任者在场校验：显式 id 指向不存在的会话 ⇒ 整批拒绝（预检期、零副作用）（红相＝不校验直接建 / 铸令牌 ⇒ 本条红；修复前红：没有批量动词）: 一个继任者指向不存在的会话 ⇒ 具名拒绝并点名该角色，零建会话、零写入、零 pending（对照面：各批次夹具里的在场 id 全部通过）"
+	+ (sr15Out.includes("不是一个存在的会话") ? "" : "（实测：" + show(sr15Out.slice(0, 240)) + "）"),
+	sr15Out.includes("不是一个存在的会话") && sr15Out.includes("角色 worker-a：") && sr15Out.includes("整批拒绝")
+		&& sr15Env.creates.length === 0 && sr15Env.ns.updates.length === sr15Up
+		&& sr15Env.ns.data.teams[0].roles.every((entry) => entry.pending === null));
+
+// --- Sr18（分歧修复轮 🟡#1）：执行期失败回执点名**失败角色自己**的已建会话 ---------------
+const sr18Ws = path.join(TEST_ROOT, "sr18-ws");
+mkdirSync(path.join(sr18Ws, "team", S_TEAM), { recursive: true });
+let sr18Creates = 0;
+const sr18Env = await sNewEnv({
+	askScript: [S_CONFIRM],
+	extraAgents: sAgents,
+	teams: [sRow(sRoles(), { workspace: sr18Ws })],
+	createdHook: () => {
+		sr18Creates += 1;
+		if (sr18Creates !== 2) return;
+		// 第二个角色（coordinator）的交接文档写入失败：把团队目录换成同名普通文件 ⇒ mkdir/write 失败。
+		const dir = path.join(sr18Ws, "team", S_TEAM);
+		rmSync(dir, { recursive: true, force: true });
+		writeFileSync(dir, "blocked", "utf8");
+	},
+});
+const sr18Up = sr18Env.ns.updates.length;
+const sr18Out = String(await sr18Env.rotate.execute({ action: "prepare-batch", team: S_TEAM, successor: "auto" }, execFor(sr18Env.senderAgent)));
+const sr18Team = sr18Env.team();
+const sr18Ids = sr18Env.created.map((item) => item.agent.id);
+const sr18Pend = sr18Team.roles.filter((entry) => entry.pending !== null && entry.pending !== undefined);
+const sr18TeamsPatches = sr18Env.ns.updates.slice(sr18Up).filter((patch) => patch.teams !== undefined).length;
+const sr18CreatedLine = sr18Out.split("\n").find((line) => line.startsWith("- 已建会话")) ?? "";
+check("批 S · Sr18 执行期失败回执点名**失败角色自己**的已建会话（分歧修复轮 🟡#1；红相＝把它丢掉 ⇒ 回执说「零新增会话」而盘上其实多了一个 ⇒ 本条红）: 第二个角色（coordinator）的交接文档写盘失败 ⇒ 回执具名「角色 coordinator」与「交接文档写入失败」，逐项点名**两个**已建会话（worker-a 与 coordinator 的 id），并如实报出 2 条 pendingCreates 意图；盘上零 pending、零撤销依据、零笔写 teams 的 policy.update",
+	sr18Ids.length === 2 && sr18Out.includes("角色 coordinator") && sr18Out.includes("交接文档写入失败")
+		&& sr18CreatedLine.includes(sr18Ids[0]) && sr18CreatedLine.includes(sr18Ids[1])
+		&& !sr18Out.includes("已尝试但**未建成**")
+		&& sr18Out.includes("pendingCreates 意图")
+		&& sr18Pend.length === 0 && (sr18Team.rotationBackups ?? []).length === 0 && sr18TeamsPatches === 0
+		&& (sr18Env.ns.data.pendingCreates ?? []).length === 2);
 
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。

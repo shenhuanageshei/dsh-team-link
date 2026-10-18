@@ -27,7 +27,7 @@
 | **运行时依赖（npm）** | **恰好 1 个**：`schemastery@^3.0.0` | **用途**：插件选项（`team-link` 命名空间的配置 schema）校验 —— 与宿主/`cordis` 自己用的**同一个** schema 库，不是自选的外来依赖。**许可**：MIT。**为什么不内联**：手写一个等价的 schema 校验器会引入**行为差异**（边界/强制转换），而它正是配置面的安全阀；保留 + 在此声明比内联更可审。 |
 | **宿主提供的包**（不在本仓 `dependencies` 里） | `@deepseek-ai/dsh-tools` · `@deepseek-ai/dsh-session-reference` · `@deepseek-ai/cordis` 等 | 由**宿主**在运行时提供；本仓编译期不解析它们（见 [`AGENTS.md`](../AGENTS.md) §四） |
 | **开发/测试依赖** | **零**：两套件是**纯 Node 脚本**（`node host-half.test.mjs` / `node client-half.test.mjs`），不需要测试框架 | ⇒ 本仓**不存在** `devDependencies`，也没有 `prepare` / 构建步骤（**无构建产物、无安装期脚本**）。`scripts.test` 只是这两条命令的封装。 |
-| 固定 commit 的运行文件 | `files` 白名单：`lib` · `cordis.patch.yml` · `dsh-open.cmd` · `register-protocol.ps1` · `LICENSE` · `README.md` · `CHANGELOG.md` · `docs` | ★ **批 R 已达标**：`lib/` 共 **25** 个 `.js` —— 宿主半边 **24 档**（入口 `lib/index.js` **254,802 字节** ＋ **23** 个域档）＋ 浏览器半边 `lib/client.js`（**156,665 字节**）；**最大单档字节 = 254,802**（`lib/index.js`）**< 商城上限 262,144**；历史 **1,093,629 → 现 254,802** ⇒ 见 §六「达标状态」。★ **2026-10-18 批 Q 修复轮后读数**：入口档因 4 处描述文案更正为 **254,947 字节**（仍 < 262,144）；本节保留批 R 当时的读数作历史，**现行值以 §六 为准**。 |
+| 固定 commit 的运行文件 | `files` 白名单：`lib` · `cordis.patch.yml` · `dsh-open.cmd` · `register-protocol.ps1` · `LICENSE` · `README.md` · `CHANGELOG.md` · `docs` | ★ **批 R 已达标**：`lib/` 共 **25** 个 `.js` —— 宿主半边 **24 档**（入口 `lib/index.js` **254,802 字节** ＋ **23** 个域档）＋ 浏览器半边 `lib/client.js`（**156,665 字节**）；**最大单档字节 = 254,802**（`lib/index.js`）**< 商城上限 262,144**；历史 **1,093,629 → 现 254,802** ⇒ 见 §六「达标状态」。★ **2026-10-18 批 Q 修复轮后读数**：入口档因 4 处描述文案更正为 **254,947 字节**（仍 < 262,144）；★ **2026-10-19 批 S 后读数**：入口档 **261,760 字节**（批量动作的入口路由 / 参数 / 描述 ＋ 批量执行面的装配缝；仍 < 262,144）；本节保留批 R 当时的读数作历史，**现行值以 §六 为准**。 |
 
 ---
 
@@ -67,33 +67,33 @@
 | 场景 | 状态 | 证据 |
 | --- | --- | --- |
 | **一次性 Profile 的装 / 启 / 卸** | **待补**（用户 2026-10-15 已就绪重启时机） | 计划：新建一个空 profile → 从**本地路径**（`link:`）装入 → 启动 DSH 并确认工具面在场（`team_link_status` 出卡）→ 卸载 → 启动确认工具面消失且**无残留目录**；三段输出原文记进 [`docs/verification-log.md`](verification-log.md) |
-| **现状（本机长期部署）** | **已验证但非「一次性 profile」形态** | 本插件自 2026-09 起在本机 desktop profile 持续运行：工具面 11 个、套件**现行 1738 + 310** 条断言（2026-10-18 批 Q 交付后实测；批 R 收口时点为 **1727 + 310**，见 [`README.md`](../README.md) §十）；★ **`Rr4` 现读绿**（`fdfc832` 之后环 = `[]`）—— 旧文「唯一红项是 `Rr4`」**作废**（as-of：批 R 收口时点曾红）；批 K 的崩溃现场读数已在真机取出 |
+| **现状（本机长期部署）** | **已验证但非「一次性 profile」形态** | 本插件自 2026-09 起在本机 desktop profile 持续运行：工具面 11 个、套件**现行 1758 + 310** 条断言（2026-10-19 批 S 分歧修复轮后实测；批 S 交付时为 1753 + 310，批 Q 交付时为 1738 + 310，批 R 收口时点为 **1727 + 310**，见 [`README.md`](../README.md) §十与 [`docs/verification-log.md`](verification-log.md)）；★ **`Rr4` 现读绿**（`fdfc832` 之后环 = `[]`）—— 旧文「唯一红项是 `Rr4`」**作废**（as-of：批 R 收口时点曾红）；批 K 的崩溃现场读数已在真机取出 |
 
 ---
 
 ## 六、达标状态（原「未达标项」；批 R 收口后逐条改准）
 
 **商城口径**：单文件 **≤ 262,144 字节**（自动审查上限）。
-**最大单档字节 = 254,947**（`lib/index.js`；**现行值 = 2026-10-18 批 Q 修复轮后重测**，与判据 `Rr1` 的**同一读数**；as-of：批 R 收口时点为 **254,802** —— 差值来自批 Q 修复轮的 4 处描述文案更正）。
+**最大单档字节 = 261,720**（`lib/index.js`；**现行值 = 2026-10-19 批 S 分歧修复轮后重测**，与判据 `Rr1` 的**同一读数**；as-of 链：批 R 收口时点为 **254,802** → 批 Q 修复轮后 **254,947**（4 处描述文案更正）→ 批 S 后 **261,760**（批量动作的入口路由 / 参数 / 描述 ＋ 批量执行面的装配缝）→ 批 S 分歧修复轮后 **261,720**（新增守卫全部下沉 `lib/rotation.js`，入口档以三处注释压缩抵掉参数传递，净 −40 B）；仍 **< 262,144**，余量 **424 字节**）。
 
 | # | 商城口径 | 现状 | 判据 / 说明 |
 | --- | --- | --- | --- |
-| 1 | 单文件 **≤ 262,144 字节** | **已达标**：`lib/` 共 **25** 个 `.js` —— 宿主半边 **24 档**（入口 `lib/index.js` **254,947 字节** ＋ **23** 个域档，逐档见下表）＋ 浏览器半边 `lib/client.js`（**156,665 字节**）；**历史 1,093,629 → 现 254,947**（历史值是拆分前 `lib/index.js` 的**工作树字节**：blob **1,077,286 B** ＋ **16,343** 个 CRLF；旧版本档写的 **1,092,693** 是差 **936 B** 的旧读数，本批按实测改准） | 判据 `Rr1`（遍历 `lib/*.js`、逐档打印实数字节）；域档清单见设计档 §5/§6 |
+| 1 | 单文件 **≤ 262,144 字节** | **已达标**：`lib/` 共 **25** 个 `.js` —— 宿主半边 **24 档**（入口 `lib/index.js` **261,720 字节** ＋ **23** 个域档，逐档见下表）＋ 浏览器半边 `lib/client.js`（**156,665 字节**）；**历史 1,093,629 → 现 261,720**（历史值是拆分前 `lib/index.js` 的**工作树字节**：blob **1,077,286 B** ＋ **16,343** 个 CRLF；旧版本档写的 **1,092,693** 是差 **936 B** 的旧读数，批 R 按实测改准；批 Q 修复轮后为 254,947，批 S 后为 261,760，批 S 分歧修复轮后为 261,720） | 判据 `Rr1`（遍历 `lib/*.js`、逐档打印实数字节）；域档清单见设计档 §5/§6 |
 | 2 | 「固定源扫描不完整」/「未观察的能力信号未知」 | 很可能是 #1 的**连带结果**（单文件过大 ⇒ 自动扫描做不完）；#1 已达标，等商城复检判定 | 本档**不猜死**：复检结论按新开单另行跟进 |
 | 3 | 「运行时或可选依赖需要单独的供应链审查」 | 运行时依赖**恰 1 个** `schemastery`（已在 §二声明用途 / 许可 / 不内联的理由） | 若商城仍要求单独审查材料，按 §二扩写（固定版本 + 完整性哈希） |
 
-**逐档字节（现行值 = 2026-10-18 批 Q 修复轮后重测；`Rr1` 的同一份读数。as-of：批 R 收口时点为 `index.js` 254,802 / `rotation.js` 81,812 / `shared.js` 22,325 / `policy-store.js` 34,955 等，见 git 历史）**
+**逐档字节（现行值 = 2026-10-19 批 S **分歧修复轮**后重测；`Rr1` 的同一份读数。本批三档变动：`index.js` 261,760 → **261,720**（入口只减不增）、`rotation.js` 140,582 → **143,899**、`handover.js` 66,033 → **66,531**。as-of：批 Q 修复轮后为 `index.js` 254,947 / `rotation.js` 93,422 / `handover.js` 55,761 / `roster-write.js` 55,060 / `team-registration.js` 49,631 / `policy-store.js` 37,634；批 R 收口时点为 `index.js` 254,802 / `rotation.js` 81,812 / `shared.js` 22,325 / `policy-store.js` 34,955 等，见 git 历史）**
 
 | 档 | 字节 | 档 | 字节 |
 | --- | --- | --- | --- |
-| `lib/index.js`（入口） | 254,947 | `lib/rotation.js` | 93,422 |
+| `lib/index.js`（入口） | 261,720 | `lib/rotation.js` | 143,899 |
 | `lib/registration.js` | 67,282 | `lib/team-session-surface.js` | 66,464 |
-| `lib/policy-store-lifecycle.js` | 65,731 | `lib/messaging.js` | 62,510 |
-| `lib/team-session-creation.js` | 61,103 | `lib/read-surface.js` | 59,206 |
-| `lib/recovery.js` | 59,037 | `lib/handover.js` | 55,761 |
-| `lib/roster-write.js` | 55,060 | `lib/watchdog-helpers.js` | 55,028 |
+| `lib/policy-store-lifecycle.js` | 65,731 | `lib/handover.js` | 66,531 |
+| `lib/messaging.js` | 62,510 | `lib/team-session-creation.js` | 61,103 |
+| `lib/read-surface.js` | 59,206 | `lib/recovery.js` | 59,037 |
+| `lib/roster-write.js` | 55,715 | `lib/watchdog-helpers.js` | 55,028 |
 | `lib/team-session-command.js` | 52,038 | `lib/watchdog.js` | 51,357 |
-| `lib/team-registration.js` | 49,631 | `lib/policy-store.js` | 37,634 |
+| `lib/team-registration.js` | 50,591 | `lib/policy-store.js` | 38,803 |
 | `lib/team-tools.js` | 33,169 | `lib/forensics.js` | 32,980 |
 | `lib/sections.js` | 32,034 | `lib/ledger.js` | 26,070 |
 | `lib/shared.js` | 25,270 | `lib/sections-lifecycle.js` | 19,126 |
@@ -102,7 +102,7 @@
 
 **判据终态（2026-10-18 更正：`Rr4` 已绿，旧登记作废但保留为 as-of）**
 
-★ **现行读数：`Rr4`（模块图无环）现读绿，环 = `[]`** —— `fdfc832` 把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` / `fmtWindowRest` 从 `lib/rotation.js` 下沉到 `lib/shared.js` 之后，`lib/shared.js` 已无任何 `from "./rotation.js"` 行，`lib/rotation.js` 只剩**单向** `import … from "./shared.js"`；`host` 现读 **`1738 (failed: 0)`**。
+★ **现行读数：`Rr4`（模块图无环）现读绿，环 = `[]`** —— `fdfc832` 把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` / `fmtWindowRest` 从 `lib/rotation.js` 下沉到 `lib/shared.js` 之后，`lib/shared.js` 已无任何 `from "./rotation.js"` 行，`lib/rotation.js` 只剩**单向** `import … from "./shared.js"`；`host` 在批 Q 时点为 **`1738 (failed: 0)`**，批 S 新增 15 条后为 **1753**，批 S 分歧修复轮再新增 5 条后为 **1758 (`failed: 0`)**（两次实测均已落 [`docs/verification-log.md`](verification-log.md) 的「批 S（整队换届）红相与绿相」节与其后的「批 S 分歧审计修复轮」节；[README](../README.md) §十 为同一读数）。
 
 **as-of（批 R 收口时点，曾经为真，勿再当现状引用）**：当时 `lib/shared.js` 与 `lib/rotation.js` **互导**、静态导入图里有一个**真实的 2 环**（自 `R-5` 起就在），收口单写域不含 `lib/**` ⇒ 判据按设计原口径保持严格、当时为红；修法即上面的下沉，已由 `fdfc832` 完成。**在这一处修掉之前，本档不宣称「模块图无环」。**
 

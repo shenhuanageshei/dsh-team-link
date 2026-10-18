@@ -4955,6 +4955,76 @@ node client-half.test.mjs  → ALL PASS / assertion total: 310 (failed: 0)    EX
 
 连带读数：`Rr1` 最大单档字节 **254,802 → 254,947**（仍 < 262,144）；合规档 §六 同批改准（4 处），§二 保留批 R 当时读数并加 as-of 注记；`lib/` 相对导入图 0 环、宿主说明符 8 条、仓根无 `.tmp-*`、顶层键仍 11。断言总数**未变**（1738 / 310）—— 修复轮刻意未新增判据（三条测试债登记在台账 t-11）。
 
+---
+
+## 批 S（整队换届）红相与绿相（2026-10-19）
+
+**判据**：`Sr1`–`Sr15`（`host-half.test.mjs` 批 S 块）⇒ 总数 **1753 = 1738 + 15**。
+
+### 修复前（批 S 首交付态，父侧实跑）
+
+```text
+7 FAILURE(S)
+assertion total: 1753 (failed: 7)
+EXIT=1
+```
+
+红名单：`Sr1` / `Sr3` / `Sr4` / `Sr5` / `Sr12` / `Sr13` / `Sr15`。根因分三类（修复轮回执逐条给出）：
+
+1. **六条同源 = 夹具时序**：attach 后置链的 `ensureTeamAutoWatchdogs`（fire-and-forget）会写一笔 `policy.update({ watchdogs })`，夹具在它落定前取了写次数基线 ⇒ 「恰 1 次写盘 / 零副作用」各多算 1。修法 = 夹具先 `await tick()` 再取基线（新增夹具助手 `sNewEnv`，19 处改走它；**不放宽任何断言**）。
+2. **`Sr12` = 实现文案偏离设计**：设计写「零写入」、实现写「零写盘」⇒ 改 `lib/rotation.js` 两处拒绝文案（语义零变更）。
+3. **`Sr13` = 判据场景不可达**：整批 claim 后协调者现任已换人，原发起会话必然先撞 writer gate（D10 的发起权语义**正确**，不该被绕过）⇒ 夹具换「claim 后的新现任协调者」重发，断言仍逐角色点名「换届速率限制 + 剩余窗口」，**未降级为 writer gate 拒绝**。
+
+### 修复后（父侧实跑，连续两次）
+
+```text
+node host-half.test.mjs    → ALL PASS / assertion total: 1753 (failed: 0)   EXIT=0
+node client-half.test.mjs  → ALL PASS / assertion total: 310 (failed: 0)    EXIT=0
+```
+
+★ 上面 1753 是**分歧审计修复轮之前**的读数；审计修复轮补了 `Sr16`–`Sr20` 五条判据 ⇒ **现行总数 1758**，读数见下一节。
+
+### 同批裁定（写入设计档 §7）
+
+**D3 的「一次 `policy.update`」口径边界**：只约束 pending ＋ `rotationBackups` 的那一笔 teams 写；auto 路径每角色在建会话前写一条 `pendingCreates` 意图是既有 §10.2.6 纪律，**不属 D3 口径** ⇒ 显式 id 路径恰 1 笔、auto 路径 = N 笔意图 + 1 笔 teams。
+
+### 旁注
+
+- `Aw5`（批 L 重试耗尽判据）在批 S 首跑红、复跑绿 —— 已知偶发，按「红一次先复跑」处置，未据此改代码。
+- `lib/index.js` 批 S 后 = **261,760 B**，距商城上限 262,144 只剩 **384 B** ⇒ 后续批次不得再长入口档，需要新逻辑一律下沉。
+
+---
+
+## 批 S 分歧审计修复轮（2026-10-19 凌晨，本仓本地复跑）
+
+**处置**：🟡#1 执行期失败回执补点名**失败角色自己**的已建会话（created / attempted 分开；「零写入」限定为 pending / 撤销依据并报出 `pendingCreates` 意图条数）· 🟡#2 把 `Sr10` 的「回归锁：修复前绿」假声称改为「修复前红（依赖 `prepare-batch` 产物）」· 🟡#3 `prepare-batch` 收非空 `role` / `successors` 未知角色键 / 重复键一律具名拒绝 · 🟡#4 补三面零正相断言（批次级 freeze / pending 时读面分组 / auto 投递与意图先增后删）· 🔵#5 补 3 分钟超时档 · 🔵#6–#9 文档、措辞与死参数清理。新增判据 **5 条**（`Sr16`–`Sr20`）⇒ 总数 **1758 = 1738 + 20**（批 S 首交付 15 ＋ 本修复轮 5）。
+
+**红相（变异靶，本仓实跑）**：把 `minted, failed: made` 改回 `minted`（即旧实现丢弃失败角色的 `sessionId`）⇒
+
+```text
+1 FAILURE(S)
+assertion total: 1758 (failed: 1)
+EXIT=1
+```
+
+只红 `Sr18`（唯一 1 条），其余 1757 条全绿 —— 该判据不是空锁。
+
+**绿相（本仓本地复跑；变异还原后再跑一次）**：
+
+```text
+ALL PASS
+assertion total: 1758 (failed: 0)
+EXIT=0
+```
+
+`node client-half.test.mjs` ⇒ `ALL PASS / assertion total: 310 (failed: 0)`，`EXIT=0`。
+
+**同批读数**：`lib/index.js` **261,720 B**（净 −40；仍 < 262,144，余量 424）· `lib/rotation.js` **143,899 B** · `lib/handover.js` **66,531 B**；顶层键仍 11、宿主说明符仍 8、模块图 0 环、仓根无 `.tmp-*`。
+
+**判据分类（如实）**：`Sr18` = 修复前红（上列变异实测）；`Sr16` / `Sr17` / `Sr19` / `Sr20` = **覆盖缺口类**（相关实现本轮零改动，只补正相断言，**不宣称修复前红**）。
+
+**`#3` 参数误用守卫的直接探针（非套件判据）**：`prepareBatch({ roleGiven: "worker-a", … })` ⇒ `整队换届被拒绝（参数误用）…不收 role…`；`successors: { "ghost": "s2" }` ⇒ `successors 里的角色键「ghost」不在团队 t 的名册里…`。重复键由入口解析器的 `Object.hasOwn` 拒绝（对象赋值会覆盖，域里看不见）。
+
 
 
 
