@@ -4,6 +4,55 @@
 
 格式：每个版本按 **修了什么 → 为什么 → 怎么验证** 组织。凡涉及行为修复的条目都附**变异验证**证据（修复前必红 / 修复后全绿），这是本仓库的验收文化。
 
+## 未发布 — 批 U：看门狗运维面（update / mute / unmute）＋「提醒不许唤醒坏会话」（2026-10-23）
+
+**一句话**：`team_link_watch` 不再只有「注册 → 等 TTL」两扇门 —— 注册后可**就地调整**间隔 / 静默阈 / TTL / 是否唤醒，可**临时静音**（auto 那一条也能由观察者本人按）；而投递在两种情况下改走 `inject`（只进收件箱、**不唤醒新回合**）：注册里 `wake:false`，或观察者上一拍 tick 之后**没有 assistant 回复**（会话可能已在错误循环里）。
+
+### 三段话（用户视角）
+
+**① 现象与根因（前因）**：用户反馈三件事 ——「注册完不能调整间隔」「只能等注册自动过期」「提醒消息可能把会话直接搞坏，一直报错」。前两条是工具面缺口（只有 register / clear；auto 那一档连 clear 都拿不走、租约还会随名册续期）。第三条实测定位：会话 400 的根因是**工具结果里的孤立代理项（lone surrogate）** —— `72d1b89b` 的 `seq 3622`、`1a253727` 的 `seq 131/132` 各有一处（全档扫描只命中这些），由 `String.slice` 在 UTF-16 码元边界切断代理对产生；请求序列化层未消毒 ⇒ DeepSeek 对**之后每一次请求**回 400 INVALID_REQUEST（细节被宿主折成通用文案）。插件自己的消息全部经 `wellFormed()`（`toWellFormed`），**不是污染源**；但 watchdog 的 `followup` 会**唤醒新回合** ⇒ 坏会话每 10 分钟被重新拉起、每拍都失败，用户看到的就是「一直报错」。
+
+**② 现在怎么做的**：`team_link_watch` 新增三条动作 —— `update`（按 id 就地改 `silentMinutes` / `intervalMinutes` / `ttlHours` / `wake`；TTL 从**现在**起算续租；定时器按新间隔重挂）、`mute`（观察者本人给自己任一条注册按暂停键，默认 12h、上限 24h；auto 行也受理）、`unmute`。行上新增两个**加性**字段：`mutedUntil`（静音截止）与 `wake:false`（不唤醒）；两者都进 `watchdogList` 白名单（与 `renewedAt` 同一纪律），**不新增命名空间顶层键**。投递侧：`followup`（唤醒）与 `inject`（不唤醒）由 `deliverToWatcher` 统一分流；`patrolOne` 在本拍确实要投东西时多读一次**观察者自己的** surface，若末条 `slp-wd-` tick 之后没有 `assistant/message` ⇒ 判定「上一拍没跑起来」⇒ 本拍降级 `inject` 并留一行 warn（surface 读不到 ⇒ 证据不足 ⇒ **不降级**）。
+
+**③ 怎么验证**：判据 `批 U · U1`–`U5`（12 条 `check()`）：update 落盘与定时器重挂 / 越界与空参数拒绝 / 只能调整自己的注册 / auto 行可调 · mute 零投递 ＋ list 可见 ＋ unmute 恢复 / auto 行可静音但 `clear` 仍拒绝 · `wake:false` 走 `inject` · 上一拍无回复 ⇒ 降级 `inject` ＋ warn（对照：有回复 ⇒ 正常 `followup`）。**两次实测**：修复前（`git stash` 回旧实现、测试先落盘）⇒ 套件在 `host-half.test.mjs:16210` 的第一条 `update` 调用处抛 `ToolArgsError: invalid arguments: "action" must be one of ["register","list","clear","arm-team"]`（旧 action 闭集）⇒ **直接中止、无 `assertion total` 行**（同跑先红了 `U22` 与 `Rr7`：枚举缺新动词 / 合规档写 261,834 而旧实现 261,720）；修复后 ⇒ `ALL PASS / assertion total: 1783 (failed: 0)`，`EXIT=0`。另有一条**定向红→绿**：`wake` 未接线时 `U3` 读数为 `{"f":1,"i":0}`（followup 1 / inject 0），接线后绿。
+
+### 改了什么（逐面）
+
+- `lib/watchdog-helpers.js`：`buildWatchdogRegistration` 接受 `wake`（只在 `false` 时写键）；新增纯函数 `buildWatchdogUpdate`（就地改四字段，边界与 register 共用）与 `buildWatchdogMute`（静音截止，默认 12h / 上限 24h）。
+- `lib/watchdog.js`：`deliverToWatcher(watcher, wake, message)` 统一分流 `followup` / `inject`（tick / 摘要 / 两条告警四个出口）；`patrolOne` 增加静音门（静音 ⇒ 零投递、零目标读）与「上一拍没回复 ⇒ 降级 inject ＋ warn」；装配缝新增绑定 `WATCHDOG_TICK_ID_PREFIX`（判据用前缀，不抄常量）。
+- `lib/registration.js`：`team_link_watch` 三条新动作与参数（`wake` / `hours`）、list 渲染静音与不唤醒状态、`clear` 对 auto 的拒绝文案补一句 mute 出口；描述面同批改准。
+- `lib/policy-store.js`：`watchdogList` 白名单加入 `mutedUntil`（仅 >0）与 `wake`（仅 `false`）—— 与 `renewedAt` 同一纪律，读写循环不丢。
+- `lib/index.js`：`watchdogExtras()` 增一名绑定、`registrationExtras()` 增两条出口、按名导入两条新构建器；**命名空间 schema 一字未改**（加性字段走 schemastery 的未声明键保留，与 `renewedAt` 同例）。
+- 测试：`host-half.test.mjs` 的「批 U」块 **12 条** `check()`（放在 `rmTestRoot()` 之前）；`U22` 的 action 枚举期望同批改准。文档：本档、README（§二、§三、§八 schema 表、§十）、`docs/2026-10-15-store-compliance.md` §六字节读数（`lib/index.js` 261,720 → **261,834**，余量 310）。
+
+## 未发布 — 批 T：黑板归档 / 回收（只搬不删，显式动词）
+
+**一句话**：长期团队的 `decisions.md` / `tasks.md` 现在可以用**一个显式动词**把旧行**搬**进 `archive/`（只搬不删、归档文件**只写一次**），活跃文件留尾部 ＋ 一行指针；**阈值只提示、绝不自动搬**；而**序号与任务号永不回卷** —— 归档过的旧 `t-<n>` 仍被认、伪造的高号仍被拒。
+
+### 三段话（用户视角）
+
+**① 现象与根因（前因）**：黑板三档只增不减，`bac-1009` 这类长期团队的 `tasks` / `decisions` 已经千行；读面只给末 20 条、派生视图只扫 500 行 ⇒ 越攒越沉。命门不在「截断」本身，而在**计数器是从文件里扫出来的**：`seq` 由 `lastSeq` 扫全文取最大，任务号由 `registeredTaskIds` 扫全文件取最大，**「这个号登记过吗」也扫同一份文件** ⇒ 天真截断会重置序号、把用过号再发一次（claim 会指向歧义历史）。另有两个「彩蛋级耦合」（会诊 #66 四席独立命中的同一条）：**形态史行**被 `set-mode` 的幂等检查读取、**交接文档**按 `handoff-<role>-` 前缀扫目录。
+
+**② 现在怎么做的**：新增**第 12 个工具** `team_link_team_archive`（不塞进 `team_link_team_append` 的 `file` 枚举 —— 一个是追加一行，一个是新建归档 + 原子重写整个活跃文件，破坏面不同）：
+切点 = **min(位置切点 `keepTail`（默认 200）, 最新形态史行位置)**（最新形态史行**永不搬走**）；归档文件 = `archive/<file>-g<世代>-L<起>-L<止>.md`（`L` 是活跃文件 1-based **物理行号**、**不含墙钟**）且用 `wx` **只写一次**；**归档写之前**重读比对被搬前缀（变了 ⇒ 中止、零写入），**归档写之后、活跃重写之前**再读一次（前缀仍相等 ⇒ 用新读数的尾部，期间的 append 自然并入；前缀变了 ⇒ 中止并如实报孤儿归档）；活跃文件用**唯一临时名 + rename** 原子重写。分配与「已注册」校验改为扫**「活跃 ∪ `archive/`」**（只扩取值面，时机与格式一字不改）。世代只进**归档头**（各角色 `history` 条数快照），**不落 policy**。
+
+**③ 怎么验证**：判据 **`Tr1`–`Tr13`**（共 **13 条** `check()`，落在 `host-half.test.mjs` 的「批 T」块、标识符 `Tr` 中缀，放在「批 S」块之后、`rmTestRoot()` 之前）—— 阈值只提示且零写盘 / 显式归档逐字搬、留尾部与指针 / 归档文件只写一次 / 序号与任务号不回卷 / 归档头 + 零新增顶层键 + 宿主说明符仍 8 条 / 对账与交接扫描不相交 / 既有判据族不回归（**回归锁：修复前绿**）/ 边界（空档 · 单行 · 恰 500 · 无确认服务 · `keepTail` 误用）/ 形态史行钉住 / 归档 id 仍认 / 伪造高号仍拒 / 崩溃幂等（回滚活跃文件重现「归档已写、活跃未重写」后用**新的 now** 重跑）/ 归档索引常驻读面。**两次实测**（本单，本地复跑）：**修复前** `node host-half.test.mjs` ⇒ `ALL PASS / assertion total: 1758 (failed: 0)`，**退出码 0**（红相说明：这 13 条在旧实现上没有归档动词、也没有并集扫描 ⇒ 首交付时逐条红）；**修复后** ⇒ `ALL PASS / assertion total: 1771 (failed: 0)`，**退出码 0**（`1771 = 1758 + 13`）。
+
+### 改了什么（逐面）
+
+- **归档核心（`lib/team-tools.js`）**：行级切分 `splitArchiveRows` / 切点 `archiveCutOf` / 世代 `generationOf` / 确定性命名 `archiveFileName` / 归档文档 `renderArchiveDocument` / 归档头时间 `archiveStampOf` / 读面两行 `archiveReadFaceLines` / 确认框 `askArchiveDialog` / 动词本体 `archiveBlackboard`（含 D7 的两次核对、D8 的 `wx` 与幂等跳过、唯一临时名原子重写）；`MODE_HISTORY_PREFIX` 让「写形态史行」与「钉形态史行」共用同一个前缀。
+- **分配与注册面（`lib/ledger.js`）**：`lastSeq` / `registeredTaskIds` 扫「活跃 ∪ 归档」（同一判据喂两份正文）；新增 `BLACKBOARD_ARCHIVE_DIR` / `blackboardArchiveDir` / `readBlackboardArchive`（只读归档索引，零写入）。★ **取值面接缝如实声明**：分配与「已注册」的**调用点在 `lib/index.js`**（本批红线：入口一个字节都不改，它已顶到 256 KiB），它们只拿得到**正文**、拿不到路径 ⇒ 由**唯一读入口** `readBlackboardFile` 在读到台账档时，把「同目录 `archive/` 同族」的正文按文件路径登记进一张小表，取值助手按「正文逐字相等」取回并一并扫描；登记缺失 / 正文不等 / 归档读不出 ⇒ **只扫活跃档**（= 本批之前的行为），绝不猜别的队。
+- **读面与工具注册（`lib/team-ledger-tools.js`）**：`team_link_team_read` 的正文行排除归档指针行（指针不算一条账）、每个文件段头之后追加**归档索引行**（`archive/` 非空时始终给）与**阈值提示行**（> 500 才给）；新增第 12 个工具 `team_link_team_archive` 的注册（`lib/index.js` **零改动**，仍在 261,720 B）。
+- **文档面（同批）**：README 的徽标 / 稳定性行 / 当前读数行（**1758 → 1771**，`1771 = 1758 + 13`）· README 的架构图工具计数（**11 → 12 个工具**）与「覆盖全部 N 个工具」一句 · 能力清单与工具表新增该动词 · 黑板一节新增「归档 `archive/`」小节 · 本档 · 本批需求/设计两档的状态行与首步回读结论 · 合规档 §六 的逐档字节（`ledger.js` 26,070 → 32,556、`team-tools.js` 33,169 → 60,030、`team-ledger-tools.js` 17,366 → 22,742；入口仍 **261,720**，最大档余量 424 字节）。
+- **判据面的两处同改（不是放宽）**：`README 工具计数` 那把锁与实际工具数（11 → 12），以及批 I U9 文档同步锁里钉的那个数字（同源、同改）；两处都只改数字与列表，判定面（计数 == 实际）一字未动。
+
+### 已知边界（如实登记）
+
+- **两次写之间的窗口**：归档文件已写、活跃文件未重写之间崩溃 ⇒ 重跑按**确定性文件名**识别并跳过归档写（原归档字节不改），活跃文件逐字节相同（指针行不含墙钟）；若在这两步之间**前缀被改**（极罕见）⇒ 中止并如实报**孤儿归档**（行同时存在于两处、不丢数据），不假装零写入。
+- **归档与并发 append**：核对是「归档写之前一次、归档写之后一次」，只用**被搬前缀**做判据 ⇒ 归档窗口内的追加会自然并入尾部（不丢）；不用锁，黑板既有「无写门、无锁」的语义未改。
+- **`discipline.md` 与 `handoff-<role>-` 不在归档面**：前者是可锁定文档，后者是换届取证的活源头（`listHandoffDocuments` 按前缀扫黑板目录本层；归档落在 `archive/` 子目录、文件名不以 `handoff-` 开头 ⇒ 结构上撞不上）。
+- **不做**：自动归档（阈值只提示）· 删团队 / 删黑板 · 删除动词（**永远只有搬移**）· 跨团队批量归档 · 「世代」落 policy（只进归档头）· 改既有 append / read / set-mode 语义。
+
 ## 未发布 — 批 S：整队换届（批量准备 ＋ 各自认领）
 
 **一句话**：现任协调者用**一条命令 ＋ 一道确认框**把整队 N 个角色的换届**准备阶段（Phase A）**一次做完 —— 每个角色各有一条 pending、各有一份撤销依据、各有一枚绑定三元组的令牌；**认领（Phase B）一个不省**，仍由每个继任者本人凭令牌 `claim`。

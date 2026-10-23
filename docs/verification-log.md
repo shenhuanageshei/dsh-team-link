@@ -5025,6 +5025,44 @@ EXIT=0
 
 **`#3` 参数误用守卫的直接探针（非套件判据）**：`prepareBatch({ roleGiven: "worker-a", … })` ⇒ `整队换届被拒绝（参数误用）…不收 role…`；`successors: { "ghost": "s2" }` ⇒ `successors 里的角色键「ghost」不在团队 t 的名册里…`。重复键由入口解析器的 `Object.hasOwn` 拒绝（对象赋值会覆盖，域里看不见）。
 
+## 2026-10-23 批 U：看门狗运维面（update / mute / unmute）＋ 提醒不唤醒坏会话
+
+**起因（用户原话）**：「这个插件有问题，那个黑板任务提醒 1. 注册完不能调整间隔 2. 只能等注册自动过期 3. 提醒消息可能会把会话直接搞坏，一直报错。比如这个会话 72d1b89b… 最恶心的是我让这个会话 1a253727 排查，结果它自己也坏了」。
+
+**事实定位（只读实测，不是推断）**：
+
+- 两个会话的 400 根因 = 工具结果里的**孤立代理项（lone surrogate）**。扫描脚本 `.investigations/watchdog-break-2026-10-23/scan-surrogates.mjs`（逐事件遍历全部字符串字段；正则 `[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]`）读数：
+  - `session-72d1b89b`：3686 事件中**恰 1 个**毒事件 —— `seq 3622`（`tool/result`，advisor 评审输出 `len=7059` 被 `slice(0,3500)` 在 UTF-16 码元边界截断）⇒ 下一次请求（turn 102 step 2）起 400，之后每一拍都 400。
+  - `session-1a253727`：149 事件中**恰 2 个**毒事件 —— `seq 131/132`（`session_event_read` 读回上面那份毒文本）⇒ 下一步（turn 1 step 9）起 400。
+  - 两个会话的 **5 条 watchdog tick 消息**全部干净（`wellFormed` 的 `toWellFormed` 生效）—— **污染源不是插件**。
+- 但 `followup` = `send(..., "next-turn", true)` **唤醒新回合**（宿主 asar 实读），所以坏会话每 10 分钟被重新拉起一次、每拍都失败 —— 这是用户看到「一直报错」的那一半，也是本批要修的那一半。
+
+**修复面**：`team_link_watch` 新增 `update` / `mute` / `unmute`；行上两个加性字段 `mutedUntil` / `wake:false`；投递统一走 `deliverToWatcher`（`followup` / `inject` 分流）；`patrolOne` 加静音门与「上一拍 tick 无 assistant 回复 ⇒ 降级 inject ＋ warn」。
+
+**红相（修复前，`git stash` 回旧实现；新判据先落盘）**：
+
+```text
+ToolArgsError: invalid arguments: "action" must be one of ["register","list","clear","arm-team"]
+    at host-half.test.mjs:16210:37
+```
+
+⇒ 套件在「批 U · U1」的第一条 `update` 调用处**中止**（旧 action 闭集连参数门都过不去；无 `assertion total` 行）；同跑先红 `U22`（枚举缺新动词）与 `Rr7`（合规档 261,834 vs 旧实现 261,720）。另有一条定向红：`wake` 未接线时 `U3` 读数 `{"f":1,"i":0}`（followup 1 / inject 0）。
+
+**绿相（本仓本地复跑，两次一致）**：
+
+```text
+ALL PASS
+assertion total: 1783 (failed: 0)
+EXIT=0
+```
+
+`1783 = 1771（批 T 后）＋ 12（批 U）`；`Rr1` 最大单档 = `lib/index.js` **261,834 B**（< 262,144，余量 310）。
+
+**已知边界（如实登记）**：① 已写入历史的毒串本批不修 —— 两个会话需要在侧栏 rewind 到中毒事件之前，或由宿主/上游在请求序列化层做孤立代理项消毒；② 「上一拍没回复」是启发式（只认 `slp-wd-` tick，不覆盖摘要/两条告警通道）；surface 读不到 ⇒ **不降级**；③ `mute` 上限 24h（与 TTL 同一个防失控口径），不是永久关闸。
+
+**关联判据**：`批 U · U1`–`U5`（12 条）在 `host-half.test.mjs` 的「批 U」块；`U22` 的 action 枚举期望同批改准。';
+
+
 
 
 

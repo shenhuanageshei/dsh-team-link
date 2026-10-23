@@ -74,35 +74,35 @@
 ## 六、达标状态（原「未达标项」；批 R 收口后逐条改准）
 
 **商城口径**：单文件 **≤ 262,144 字节**（自动审查上限）。
-**最大单档字节 = 261,720**（`lib/index.js`；**现行值 = 2026-10-19 批 S 分歧修复轮后重测**，与判据 `Rr1` 的**同一读数**；as-of 链：批 R 收口时点为 **254,802** → 批 Q 修复轮后 **254,947**（4 处描述文案更正）→ 批 S 后 **261,760**（批量动作的入口路由 / 参数 / 描述 ＋ 批量执行面的装配缝）→ 批 S 分歧修复轮后 **261,720**（新增守卫全部下沉 `lib/rotation.js`，入口档以三处注释压缩抵掉参数传递，净 −40 B）；仍 **< 262,144**，余量 **424 字节**）。
+**最大单档字节 = 261,834**（`lib/index.js`；**现行值 = 2026-10-23 批 U 后重测**，与判据 `Rr1` 的**同一读数**；as-of 链：批 R 收口时点为 **254,802** → 批 Q 修复轮后 **254,947**（4 处描述文案更正）→ 批 S 后 **261,760**（批量动作的入口路由 / 参数 / 描述 ＋ 批量执行面的装配缝）→ 批 S 分歧修复轮后 **261,720**（新增守卫全部下沉 `lib/rotation.js`，入口档以三处注释压缩抵掉参数传递，净 −40 B）→ 批 U 后 **261,834**（看门狗 update / mute / 失联降级三条运维口令的装配缝与描述）；仍 **< 262,144**，余量 **310 字节**）。
 
 | # | 商城口径 | 现状 | 判据 / 说明 |
 | --- | --- | --- | --- |
-| 1 | 单文件 **≤ 262,144 字节** | **已达标**：`lib/` 共 **25** 个 `.js` —— 宿主半边 **24 档**（入口 `lib/index.js` **261,720 字节** ＋ **23** 个域档，逐档见下表）＋ 浏览器半边 `lib/client.js`（**156,665 字节**）；**历史 1,093,629 → 现 261,720**（历史值是拆分前 `lib/index.js` 的**工作树字节**：blob **1,077,286 B** ＋ **16,343** 个 CRLF；旧版本档写的 **1,092,693** 是差 **936 B** 的旧读数，批 R 按实测改准；批 Q 修复轮后为 254,947，批 S 后为 261,760，批 S 分歧修复轮后为 261,720） | 判据 `Rr1`（遍历 `lib/*.js`、逐档打印实数字节）；域档清单见设计档 §5/§6 |
+| 1 | 单文件 **≤ 262,144 字节** | **已达标**：`lib/` 共 **25** 个 `.js` —— 宿主半边 **24 档**（入口 `lib/index.js` **261,834 字节** ＋ **23** 个域档，逐档见下表）＋ 浏览器半边 `lib/client.js`（**156,665 字节**）；**历史 1,093,629 → 现 261,834**（历史值是拆分前 `lib/index.js` 的**工作树字节**：blob **1,077,286 B** ＋ **16,343** 个 CRLF；旧版本档写的 **1,092,693** 是差 **936 B** 的旧读数，批 R 按实测改准；批 Q 修复轮后为 254,947，批 S 后为 261,760，批 S 分歧修复轮后为 261,720，批 U 后为 261,834） | 判据 `Rr1`（遍历 `lib/*.js`、逐档打印实数字节）；域档清单见设计档 §5/§6 |
 | 2 | 「固定源扫描不完整」/「未观察的能力信号未知」 | 很可能是 #1 的**连带结果**（单文件过大 ⇒ 自动扫描做不完）；#1 已达标，等商城复检判定 | 本档**不猜死**：复检结论按新开单另行跟进 |
 | 3 | 「运行时或可选依赖需要单独的供应链审查」 | 运行时依赖**恰 1 个** `schemastery`（已在 §二声明用途 / 许可 / 不内联的理由） | 若商城仍要求单独审查材料，按 §二扩写（固定版本 + 完整性哈希） |
 
-**逐档字节（现行值 = 2026-10-19 批 S **分歧修复轮**后重测；`Rr1` 的同一份读数。本批三档变动：`index.js` 261,760 → **261,720**（入口只减不增）、`rotation.js` 140,582 → **143,899**、`handover.js` 66,033 → **66,531**。as-of：批 Q 修复轮后为 `index.js` 254,947 / `rotation.js` 93,422 / `handover.js` 55,761 / `roster-write.js` 55,060 / `team-registration.js` 49,631 / `policy-store.js` 37,634；批 R 收口时点为 `index.js` 254,802 / `rotation.js` 81,812 / `shared.js` 22,325 / `policy-store.js` 34,955 等，见 git 历史）**
+**逐档字节（现行值 = 2026-10-19 批 T 后**全表重测**；`Rr1` 的同一份读数（`Buffer.length`，工作树字节）。批 T 三档变动：`team-tools.js` 33,169 → **60,030**（归档核心：切分 / 钉形态史行 / 归档文档 / 两次核对 / 原子重写）、`ledger.js` 26,070 → **32,556**（归档目录 + 并集取值面）、`team-ledger-tools.js` 17,366 → **22,742**（读面两行 + 第 12 个工具注册）；入口 `index.js` 在批 T 时**一个字节没动**（261,720）；批 U 后为 **261,834**（余量 **310 字节**）：入口只加了看门狗 update / mute 的装配缝三条与描述面，域档 `registration.js` 67,282 → **72,291**、`watchdog.js` 51,357 → **54,690**、`watchdog-helpers.js` 55,028 → **58,955**、`policy-store.js` 38,803 → **39,329**。批 S 分歧修复轮的三档变动为：`index.js` 261,760 → **261,720**（入口只减不增）、`rotation.js` 140,582 → **143,899**（本次全表重测读作 144,736 —— 该档在批 S 之后还有一处 LF/CRLF 归一的字节差，入口那一档不受影响）、`handover.js` 66,033 → **66,531**。as-of：批 Q 修复轮后为 `index.js` 254,947 / `rotation.js` 93,422 / `handover.js` 55,761 / `roster-write.js` 55,060 / `team-registration.js` 49,631 / `policy-store.js` 37,634；批 R 收口时点为 `index.js` 254,802 / `rotation.js` 81,812 / `shared.js` 22,325 / `policy-store.js` 34,955 等，见 git 历史）**
 
 | 档 | 字节 | 档 | 字节 |
 | --- | --- | --- | --- |
-| `lib/index.js`（入口） | 261,720 | `lib/rotation.js` | 143,899 |
-| `lib/registration.js` | 67,282 | `lib/team-session-surface.js` | 66,464 |
+| `lib/index.js`（入口） | 261,834 | `lib/rotation.js` | 144,736 |
+| `lib/registration.js` | 72,291 | `lib/team-session-surface.js` | 66,464 |
 | `lib/policy-store-lifecycle.js` | 65,731 | `lib/handover.js` | 66,531 |
 | `lib/messaging.js` | 62,510 | `lib/team-session-creation.js` | 61,103 |
-| `lib/read-surface.js` | 59,206 | `lib/recovery.js` | 59,037 |
-| `lib/roster-write.js` | 55,715 | `lib/watchdog-helpers.js` | 55,028 |
-| `lib/team-session-command.js` | 52,038 | `lib/watchdog.js` | 51,357 |
-| `lib/team-registration.js` | 50,591 | `lib/policy-store.js` | 38,803 |
-| `lib/team-tools.js` | 33,169 | `lib/forensics.js` | 32,980 |
-| `lib/sections.js` | 32,034 | `lib/ledger.js` | 26,070 |
-| `lib/shared.js` | 25,270 | `lib/sections-lifecycle.js` | 19,126 |
-| `lib/team-ledger-tools.js` | 17,366 | `lib/block.js` | 14,609 |
+| `lib/team-tools.js` | 60,030 | `lib/read-surface.js` | 59,206 |
+| `lib/recovery.js` | 59,037 | `lib/roster-write.js` | 55,715 |
+| `lib/watchdog-helpers.js` | 58,955 | `lib/team-session-command.js` | 52,038 |
+| `lib/watchdog.js` | 54,690 | `lib/team-registration.js` | 50,591 |
+| `lib/policy-store.js` | 39,329 | `lib/forensics.js` | 32,980 |
+| `lib/ledger.js` | 32,556 | `lib/sections.js` | 32,034 |
+| `lib/shared.js` | 25,270 | `lib/team-ledger-tools.js` | 22,742 |
+| `lib/sections-lifecycle.js` | 19,126 | `lib/block.js` | 14,609 |
 | `lib/client.js`（浏览器半边） | 156,665 | — | — |
 
 **判据终态（2026-10-18 更正：`Rr4` 已绿，旧登记作废但保留为 as-of）**
 
-★ **现行读数：`Rr4`（模块图无环）现读绿，环 = `[]`** —— `fdfc832` 把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` / `fmtWindowRest` 从 `lib/rotation.js` 下沉到 `lib/shared.js` 之后，`lib/shared.js` 已无任何 `from "./rotation.js"` 行，`lib/rotation.js` 只剩**单向** `import … from "./shared.js"`；`host` 在批 Q 时点为 **`1738 (failed: 0)`**，批 S 新增 15 条后为 **1753**，批 S 分歧修复轮再新增 5 条后为 **1758 (`failed: 0`)**（两次实测均已落 [`docs/verification-log.md`](verification-log.md) 的「批 S（整队换届）红相与绿相」节与其后的「批 S 分歧审计修复轮」节；[README](../README.md) §十 为同一读数）。
+★ **现行读数：`Rr4`（模块图无环）现读绿，环 = `[]`** —— `fdfc832` 把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` / `fmtWindowRest` 从 `lib/rotation.js` 下沉到 `lib/shared.js` 之后，`lib/shared.js` 已无任何 `from "./rotation.js"` 行，`lib/rotation.js` 只剩**单向** `import … from "./shared.js"`；`host` 在批 Q 时点为 **`1738 (failed: 0)`**，批 S 新增 15 条后为 **1753**，批 S 分歧修复轮再新增 5 条后为 **1758 (`failed: 0`)**，批 T 新增 13 条（`Tr1`–`Tr13`）后为 **1771 (`failed: 0`)**（两次实测均已落 [`docs/verification-log.md`](verification-log.md) 的「批 S（整队换届）红相与绿相」节与其后的「批 S 分歧审计修复轮」节；[README](../README.md) §十 为同一读数）。
 
 **as-of（批 R 收口时点，曾经为真，勿再当现状引用）**：当时 `lib/shared.js` 与 `lib/rotation.js` **互导**、静态导入图里有一个**真实的 2 环**（自 `R-5` 起就在），收口单写域不含 `lib/**` ⇒ 判据按设计原口径保持严格、当时为红；修法即上面的下沉，已由 `fdfc832` 完成。**在这一处修掉之前，本档不宣称「模块图无环」。**
 

@@ -5897,8 +5897,10 @@ check("Y2 文档面=实现面: 发起域（现任成员 ∪ 该角色最近一�
 // 同改清单锁（② 轮「同一清单两处写、只改了一处」的教训）：README 里的工具计数必须
 // 等于**实际注册的工具数**——加一个工具而忘了改 README（或反过来）在这里立刻变红。
 // ★ 批 I 把常量从 10 抬到 11（新增 `team_link_block`，FR-I4）—— README 架构图行同批改准。
+// ★ 批 T 把它从 11 抬到 12（新增 `team_link_team_archive`，FR-T2）—— 同一把锁，README 架构图行与
+//   「覆盖全部 N 个工具」那一句同批改准（NF-T7：计数与列表同改）。
 const README_TOOL_COUNT = /(\d+) 个工具 \+ 2 条 \/ 命令/u.exec(handoffReadme)?.[1];
-check("§11.9 文档面=实现面（工具计数同改锁）: README 架构图里写的工具数 == 实际注册的工具数（加/删工具而不同改文档即红）", README_TOOL_COUNT !== undefined && Number(README_TOOL_COUNT) === diagEnv.registeredTools.length && diagEnv.registeredTools.length === 11 && diagEnv.registeredTools.some((tool) => tool.name === "team_link_recover") && diagEnv.registeredTools.some((tool) => tool.name === "team_link_status") && diagEnv.registeredTools.some((tool) => tool.name === "team_link_block"));
+check("§11.9 文档面=实现面（工具计数同改锁）: README 架构图里写的工具数 == 实际注册的工具数（加/删工具而不同改文档即红）", README_TOOL_COUNT !== undefined && Number(README_TOOL_COUNT) === diagEnv.registeredTools.length && diagEnv.registeredTools.length === 12 && diagEnv.registeredTools.some((tool) => tool.name === "team_link_recover") && diagEnv.registeredTools.some((tool) => tool.name === "team_link_team_archive") && diagEnv.registeredTools.some((tool) => tool.name === "team_link_status") && diagEnv.registeredTools.some((tool) => tool.name === "team_link_block"));
 
 // ---------------------------------------------------------------------------
 // §9 收尾修复（0.3.7）: U9 settings 时序锁 / U10 创建即认领 / U11 降级红线
@@ -11296,7 +11298,9 @@ await waitForChain(u22Env, 1);
 await tick();
 const u22Tool = u22Env.tool("team_link_watch");
 check("U22 描述面（模型可见）: 新动词进 action 枚举，描述正文同时写清「幂等补挂自己队」「非现任 / 队不在名册 ⇒ 拒绝并点名原因」「不占这 3 条手工额度」三件事 —— 描述面与实现面同一批更新（本仓「描述与代码不一致」的教训）",
-	u22Tool.parameters.properties.action.enum.join(",") === "register,list,clear,arm-team"
+	// ★ 批 U（2026-10-23）：看门狗新增 update / mute / unmute 三条运维口令 ⇒ 枚举**同批改准**
+	//   （描述面与实现面同一批更新，正是本条要守的那件事）。
+	u22Tool.parameters.properties.action.enum.join(",") === "register,update,mute,unmute,list,clear,arm-team"
 		&& u22Tool.parameters.properties.team !== undefined
 		&& u22Tool.description.includes("arm-team") && u22Tool.description.includes("幂等")
 		&& u22Tool.description.includes("非现任") && u22Tool.description.includes("不占这 3 条手工额度"));
@@ -13657,10 +13661,13 @@ check("批 I · U17 零新依赖（红相＝本批顺手新增一个 import ⇒ 
 const biReadmeSource = await readFile(fileURLToPath(new URL("./README.md", import.meta.url)), "utf8");
 const biChangelogSource = await readFile(fileURLToPath(new URL("./CHANGELOG.md", import.meta.url)), "utf8");
 const biBacklogSource = await readFile(fileURLToPath(new URL("./docs/backlog.md", import.meta.url)), "utf8");
-check("批 I · U9 文档同步（红相＝漏任何一处 ⇒ 本条红）: 新工具在册（工具 description 点名三个动作与两条权限口径 · README 能力清单含 `team_link_block` ＋ 架构图计数行同批改成 11 · CHANGELOG 有本批条目 · backlog 的 **B-2 标 ✅** 且 **B-3 仍在册**（重立即红））",
+// ★ 批 T 的同改：本锁钉的「架构图计数行」由 11 抬到 **12**（批 T 新增第 12 个工具
+//   `team_link_team_archive`，FR-T2）—— 判据本体（「计数行 == 实际工具数」）一字未变，只是跟着
+//   工具数一起走（NF-T7：计数与列表同改；原文的 11 是历史锚）。
+check("批 I · U9 文档同步（红相＝漏任何一处 ⇒ 本条红）: 新工具在册（工具 description 点名三个动作与两条权限口径 · README 能力清单含 `team_link_block` ＋ 架构图计数行同批改成 **12**（★ 批 I 原文是 11：批 T 新增 `team_link_team_archive` 之后本锁的数字同改，判据本体未变）· CHANGELOG 有本批条目 · backlog 的 **B-2 标 ✅** 且 **B-3 仍在册**（重立即红））",
 	biU1Env.blockTool.description.includes("list") && biU1Env.blockTool.description.includes("unblock") && biU1Env.blockTool.description.includes("clear-legacy")
 		&& biU1Env.blockTool.description.includes("只有发起屏蔽的那一方") && biU1Env.blockTool.description.includes("本人")
-		&& biReadmeSource.includes("team_link_block") && biReadmeSource.includes("11 个工具 + 2 条 / 命令")
+		&& biReadmeSource.includes("team_link_block") && biReadmeSource.includes("12 个工具 + 2 条 / 命令")
 		&& biChangelogSource.includes("team_link_block") && biChangelogSource.includes("批 I")
 		&& /\*\*B-2\*\*[^\n]*✅/u.test(biBacklogSource) && (biBacklogSource.match(/\*\*B-3\*\*/gu) ?? []).length === 1 && biBacklogSource.includes("投递目标过期"));
 
@@ -15931,10 +15938,351 @@ check("批 S · Sr18 执行期失败回执点名**失败角色自己**的已建�
 		&& sr18Pend.length === 0 && (sr18Team.rotationBackups ?? []).length === 0 && sr18TeamsPatches === 0
 		&& (sr18Env.ns.data.pendingCreates ?? []).length === 2);
 
+// ===========================================================================
+// 批 T（黑板归档 / 回收）—— Tr1…Tr13（需求档 §四；设计档 §8 防偏离）
+// ===========================================================================
+// 归属：docs/2026-10-18-blackboard-archive-requirements.md §四 · docs/2026-10-18-blackboard-archive-design.md §8
+// ★ 每条断言都带红相（哪一处实现回退 ⇒ 本条红）；Tr7 是**回归锁**（修复前绿，如实标注负相）。
+// ★ 夹具各自一份 workspace（全部落在 TEST_ROOT 下，随套件末尾的 rmTestRoot 清掉）：归档写盘与
+//   活跃文件原子重写都是**真文件操作**，所以这里一律读盘取证，不读内存。
+const T_TEAM = "archive-shift";
+const tStampOf = (seq) => "2026-10-01T00:00:" + String(seq % 60).padStart(2, "0") + ".000Z";
+const tDecisionRow = (seq, body) => seq + " | " + tStampOf(seq) + " | session-self | " + body;
+const tTaskRow = (seq, kind, task, body) => seq + " | " + tStampOf(seq) + " | session-self | " + kind + " | " + task + " | " + body;
+const tText = (rows) => rows.join("\n") + "\n";
+/** 归档文件的**正文**（头与正文之间的分隔行之后，逐字）；没有分隔行 ⇒ 空数组（不猜）。 */
+const tBodyOf = (text) => {
+	const lines = String(text).split("\n");
+	const marker = lines.indexOf("--- 以下为搬走的行（逐字，未改动）---");
+	if (marker === -1) return [];
+	const body = lines.slice(marker + 1);
+	if (body.length > 0 && body[body.length - 1] === "") body.pop();
+	return body;
+};
+const tList = (dir) => { try { return readdirSync(dir).sort(); } catch { return []; } };
+const tNewEnv = (wsName, askScript = [], options = {}) => {
+	const workspace = path.join(TEST_ROOT, wsName);
+	const dir = path.join(workspace, "team", T_TEAM);
+	mkdirSync(dir, { recursive: true });
+	const env = teamEnv({ teams: [teamRow({ name: T_TEAM, workspace })], askScript, ...options });
+	return { workspace, dir, env };
+};
+const tArchive = (env, args, agent = env.senderAgent) => env.tool("team_link_team_archive").execute(args, execFor(agent));
+const tRead = (env) => env.tool("team_link_team_read").execute({ team: T_TEAM }, execFor(env.senderAgent));
+const tAppend = (env, args, agent = env.senderAgent) => env.tool("team_link_team_append").execute(args, execFor(agent));
+
+// --- Tr1：阈值只提示（不自动搬）＋ 读面零写盘 ---------------------------------
+const t1 = tNewEnv("t1-ws");
+const t1Rows = [];
+for (let index = 1; index <= 501; index += 1) t1Rows.push(tDecisionRow(index, "第 " + index + " 条裁决"));
+writeFileSync(path.join(t1.dir, "decisions.md"), tText(t1Rows), "utf8");
+const t1Before = readFileSync(path.join(t1.dir, "decisions.md"), "utf8");
+const t1Out = await tRead(t1.env);
+check("批 T · Tr1 行数超阈值（500）⇒ 读面出现**提示行**，且**零写盘、零搬运**（红相＝到阈值就自动归档 ⇒ 本条红；修复前红：读面没有这条提示、也没有归档动词）: decisions.md 501 行 ⇒ 读面点名「501 行 > 阈值 500」并指路 team_link_team_archive，同时**明说「只提示、绝不自动搬」**；读完之后 decisions.md 逐字节未变、团队目录里**没有 archive/**（一个归档文件都没产生）"
+	+ (t1Out.includes("阈值 500") ? "" : "（实测：" + show(t1Out.slice(0, 240)) + "）"),
+	t1Out.includes("501 行 > 阈值 500") && t1Out.includes("team_link_team_archive") && t1Out.includes("只提示、绝不自动搬")
+		&& readFileSync(path.join(t1.dir, "decisions.md"), "utf8") === t1Before
+		&& !existsSync(path.join(t1.dir, "archive"))
+		&& sameJson(tList(t1.dir), ["decisions.md"]));
+
+// --- Tr2：显式归档 —— 被搬行逐字进归档、活跃文件留尾部 + 指针；取消即零写入 --------
+const t2 = tNewEnv("t2-ws", ["取消", "归档", "归档"]);
+const t2Rows = [];
+for (let index = 1; index <= 6; index += 1) t2Rows.push(tDecisionRow(index, "第 " + index + " 条裁决（归档逐字对账）"));
+writeFileSync(path.join(t2.dir, "decisions.md"), tText(t2Rows), "utf8");
+const t2Cancel = await tArchive(t2.env, { team: T_TEAM, file: "decisions", keepTail: 2 });
+const t2Out = await tArchive(t2.env, { team: T_TEAM, file: "decisions", keepTail: 2 });
+const t2Name = "decisions-g1-L1-L4.md";
+const t2Doc = readFileSync(path.join(t2.dir, "archive", t2Name), "utf8");
+const t2Live = readFileSync(path.join(t2.dir, "decisions.md"), "utf8").replace(/\n$/u, "").split("\n");
+check("批 T · Tr2 显式归档：被搬走的行在归档文件里**逐字存在**（逐行比对），活跃文件留尾部 ＋ **一行归档指针**；确认框取消 ⇒ 零写入（红相＝搬走即丢 / 不留指针 / 取消也照搬 ⇒ 本条红；修复前红：没有归档动词）: keepTail=2 的 6 行 decisions ⇒ 归档正文**逐行等于**原第 1–4 行、活跃文件 = 1 行指针（点名 archive/decisions-g1-L1-L4.md）+ 原第 5–6 行逐字；「取消」那一次拒绝并保持文件逐字节不变、archive/ 未创建"
+	+ (sameJson(tBodyOf(t2Doc), t2Rows.slice(0, 4)) ? "" : "（实测：" + show({ body: tBodyOf(t2Doc), live: t2Live }) + "）"),
+	t2Cancel.includes("取消") && t2Cancel.includes("零写入")
+		&& sameJson(tBodyOf(t2Doc), t2Rows.slice(0, 4))
+		&& t2Live.length === 3 && t2Live[0].startsWith("> 归档指针：") && t2Live[0].includes("archive/" + t2Name)
+		&& sameJson(t2Live.slice(1), t2Rows.slice(4))
+		&& t2Out.includes("已归档 decisions.md") && t2Out.includes("搬走 4 行") && t2Out.includes("保留 2 行")
+		&& t2.env.uq.requests.length === 2 && t2.env.uq.requests[1].questions[0].id === "team-archive");
+
+// --- Tr3：归档文件只写一次 —— 二次归档开新文件、旧文件字节不变；同名冲突零写入 --------
+const t3Out = await tArchive(t2.env, { team: T_TEAM, file: "decisions", keepTail: 1 });
+const t3Name = "decisions-g1-L2-L2.md";
+const t3 = tNewEnv("t3-ws", ["归档"]);
+writeFileSync(path.join(t3.dir, "decisions.md"), tText(t2Rows.slice(0, 4)), "utf8");
+mkdirSync(path.join(t3.dir, "archive"), { recursive: true });
+writeFileSync(path.join(t3.dir, "archive", "decisions-g1-L1-L2.md"), tText([tDecisionRow(98, "外来归档"), tDecisionRow(99, "外来归档 2")]), "utf8");
+const t3Before = readFileSync(path.join(t3.dir, "decisions.md"), "utf8");
+const t3ConflictDoc = readFileSync(path.join(t3.dir, "archive", "decisions-g1-L1-L2.md"), "utf8");
+const t3Conflict = await tArchive(t3.env, { team: T_TEAM, file: "decisions", keepTail: 2 });
+check("批 T · Tr3 归档文件**只写一次**：二次归档**新开文件**、旧归档字节逐字节不变；同名归档的正文不同 ⇒ wx 路径报错并**零写入**（红相＝覆盖写 / 追加到同一个归档 / 冲突时照改 ⇒ 本条红；修复前红：没有归档动词）: ① 同一块黑板第二次归档（keepTail=1）产出 decisions-g1-L2-L2.md，两个归档文件的正文各是它们那一次搬走的行，**第一个归档的字节没变** ② 预置一份同名不同正文的归档 ⇒ 拒绝且点名「同名归档 + 正文不同 + 零写入」，活跃文件与那份外来归档**都逐字节未变**"
+	+ (t3Conflict.includes("同名归档") ? "" : "（实测：" + show(t3Conflict.slice(0, 240)) + "）"),
+	sameJson(tList(path.join(t2.dir, "archive")), [t2Name, t3Name].sort())
+		&& readFileSync(path.join(t2.dir, "archive", t2Name), "utf8") === t2Doc
+		&& sameJson(tBodyOf(readFileSync(path.join(t2.dir, "archive", t3Name), "utf8")), [t2Rows[4]])
+		&& t3Out.includes("已归档") && t3Out.includes(t3Name)
+		&& t3Conflict.includes("同名归档") && t3Conflict.includes("正文不同") && t3Conflict.includes("零写入")
+		&& readFileSync(path.join(t3.dir, "decisions.md"), "utf8") === t3Before
+		&& readFileSync(path.join(t3.dir, "archive", "decisions-g1-L1-L2.md"), "utf8") === t3ConflictDoc);
+
+// --- Tr4：序号与任务号**不回卷**（分配取「活跃 ∪ 归档」的并集最大） ------------------
+const t4 = tNewEnv("t4-ws", ["归档", "归档"]);
+const t4Decisions = [];
+for (let index = 1; index <= 6; index += 1) t4Decisions.push(tDecisionRow(index, "第 " + index + " 条裁决"));
+writeFileSync(path.join(t4.dir, "decisions.md"), tText(t4Decisions), "utf8");
+const t4Tasks = [
+	tTaskRow(1, "plan", "t-1", "甲任务"),
+	tTaskRow(2, "plan", "t-9", "老任务（它的行会被搬走）"),
+	tTaskRow(3, "claim", "t-1", "接活"),
+	tTaskRow(4, "done", "t-1", "做完"),
+	tTaskRow(5, "dispute", "t-1", "存疑"),
+	tTaskRow(6, "retract", "t-1", "撤回 #4"),
+];
+writeFileSync(path.join(t4.dir, "tasks.md"), tText(t4Tasks), "utf8");
+const t4DecArchive = await tArchive(t4.env, { team: T_TEAM, file: "decisions", keepTail: 0 });
+const t4TaskArchive = await tArchive(t4.env, { team: T_TEAM, file: "tasks", keepTail: 2 });
+const t4DecOut = await tAppend(t4.env, { team: T_TEAM, file: "decisions", line: "归档之后的第一条裁决" });
+const t4PlanOut = await tAppend(t4.env, { team: T_TEAM, file: "tasks", kind: "plan", line: "归档之后派的新活" });
+const t4TaskLive = readFileSync(path.join(t4.dir, "tasks.md"), "utf8");
+check("批 T · Tr4 **序号不回卷**：归档后新裁决的 seq、新任务的 t-<n> 都取「活跃 ∪ 归档」的并集最大 + 1（红相＝从 1 重开 / 从活文件的最大号重开 ⇒ 本条红；修复前红：只有活跃文件被扫）: ① decisions 保留 0 行为例（活跃文件只剩指针行，单看它 seq 会从头重计）⇒ 下一条裁决是 **#7** 而不是 #1 ② tasks 只留末 2 行（活文件里最大号是 t-1，真正的最大号 t-9 在归档里）⇒ 下一条 plan 是 **t-10** 而不是 t-2 ③ 活文件确实不再含 t-9（证明这个号只可能来自并集）"
+	+ (t4PlanOut.includes("task=t-10") ? "" : "（实测：" + show({ dec: t4DecOut.slice(0, 80), plan: t4PlanOut.slice(0, 120) }) + "）"),
+	t4DecArchive.includes("保留 0 行") && t4TaskArchive.includes("搬走 4 行")
+		&& t4DecOut.includes("已追加 decisions #7")
+		&& t4PlanOut.includes("task=t-10")
+		&& t4TaskLive.indexOf("t-9") === -1 && t4TaskLive.indexOf("| t-1 |") !== -1);
+
+// --- Tr5：归档头的事实面 ＋ 零新增顶层键 / 零世代字段 / 宿主说明符仍 8 条 -------------
+const t5Header = t2Doc.split("\n");
+check("批 T · Tr5 归档头含：时间 / 执行者 / 搬走行数 / 行范围 / **各角色届数快照**；policy.json 顶层键仍**十一键**且**不含**世代字段；宿主说明符仍**恰 8 条**（红相＝把世代写进 policy / 加一条 import ⇒ 本条红；修复前红：没有归档头）: 头里逐行点名「- 归档时间：<ISO>」「- 执行者：session-self」「- 搬走：4 行（活跃文件 1-based 物理行 1..4）」「- 世代：g1」「- 世代快照：coordinator=g1」；注册命名空间的 base 顶层键仍逐字等于 U19_POLICY_KEYS（十一项）、磁盘上的 team 行里没有 generation 字段；宿主半边汇总出的宿主说明符集合仍逐字等于那 8 个"
+	+ (t5Header.some((line) => line.startsWith("- 世代快照：")) ? "" : "（实测：" + show(t5Header) + "）"),
+	t5Header.some((line) => /^- 归档时间：\d{4}-\d{2}-\d{2}T/u.test(line))
+		&& t5Header.includes("- 执行者：session-self")
+		&& t5Header.includes("- 搬走：4 行（活跃文件 1-based 物理行 1..4）")
+		&& t5Header.includes("- 世代：g1（各角色 history 条数最大值；**只进本头，不落 policy**）")
+		&& t5Header.some((line) => line.startsWith("- 世代快照：coordinator=g1"))
+		&& t5Header.includes("- 团队：" + T_TEAM)
+		&& sameJson(Object.keys(t2.env.settings.namespaces.get("team-link").base).sort(), U19_POLICY_KEYS)
+		&& !("generation" in teamStore(t2.env)[0])
+		&& hostSpecifierSetMatches(hostHalfSpecifiers(), HOST_IMPORTS));
+
+// --- Tr6：对账 ＋ 归档目录不撞交接文档扫描谓词 --------------------------------------
+const t6ArchiveNames = tList(path.join(t2.dir, "archive"));
+check("批 T · Tr6 对账：归档行数 ＋ 活文件保留行数 = 归档前行数；归档文件名**不匹配**交接文档扫描谓词 handoff-<role>-（红相＝数目对不上（丢行/重复搬）/ 归档落进 handoff- 命名空间 ⇒ 本条红；修复前红：没有归档）: ① 归档正文 4 行 + 活跃文件保留 2 行 = 归档前 6 行，且工具回执照抄这条算式 ② 归档落在 team/<name>/archive/ **子目录**里、文件名是 decisions-g1-L1-L4.md：既不等于任何 handoff-<role>- 前缀，也不出现在黑板目录本层（交接文档的 listHandoffDocuments 按前缀扫本层 ⇒ 结构上撞不上）"
+	+ (t6ArchiveNames.length === 0 ? "（实测：archive/ 里没有文件）" : ""),
+	tBodyOf(t2Doc).length + (t2Live.length - 1) === t2Rows.length
+		&& t6ArchiveNames.length === 2
+		&& t6ArchiveNames.every((name) => !name.startsWith("handoff-") && /^(decisions|tasks)-g\d+-L\d+-L\d+\.md$/u.test(name))
+		&& tList(t2.dir).every((name) => !name.startsWith("handoff-"))
+		&& !existsSync(path.join(t2.dir, t2Name))
+		&& t2Out.includes("对账：归档 4 行 + 保留 2 行 = 归档前 6 行"));
+
+// --- Tr7：回归锁 —— 批 T 块之前的既有判据全绿（修复前绿，如实标负相） -----------------
+const t7Family = assertionRecords.filter((record) => !record.label.startsWith("批 T ·"));
+const t7Red = t7Family.filter((record) => !record.ok).map((record) => record.label);
+check("批 T · Tr7 既有 append / read / set-mode / block 判据族**全绿**（红相＝顺手改既有读写语义 ⇒ 本条红；**回归锁：修复前绿**，如实标注负相）: 批 T 块之前的 " + t7Family.length + " 条既有判据现读**全部绿**（红项 " + show(t7Red) + "）—— 归档是**新动词**，team_link_team_append / team_link_team_read / set-mode / block 的既有行为与判据族一条都没动；读数同时给出「本批之前的总数仍 = 1758」这一半"
+	+ (t7Red.length === 0 ? "" : "（实测：红项 " + show(t7Red) + "）"),
+	t7Family.length === 1758 && t7Red.length === 0);
+
+// --- Tr8：边界（空档 / 单行 / 恰好 500）＋ 无确认服务即零写入 ＋ keepTail 参数校验 -----
+const t8 = tNewEnv("t8-ws", []);
+writeFileSync(path.join(t8.dir, "decisions.md"), "", "utf8");
+const t8Empty = await tArchive(t8.env, { team: T_TEAM, file: "decisions", keepTail: 5 });
+writeFileSync(path.join(t8.dir, "decisions.md"), tText([tDecisionRow(1, "唯一一条")]), "utf8");
+const t8Single = await tArchive(t8.env, { team: T_TEAM, file: "decisions", keepTail: 5 });
+const t8Rows500 = [];
+for (let index = 1; index <= 500; index += 1) t8Rows500.push(tDecisionRow(index, "第 " + index + " 条"));
+writeFileSync(path.join(t8.dir, "decisions.md"), tText(t8Rows500), "utf8");
+const t8Read500 = await tRead(t8.env);
+const t8BadTail = await tArchive(t8.env, { team: T_TEAM, file: "decisions", keepTail: -1 });
+const t8NoSvc = tNewEnv("t8b-ws", [], { omitUserQuestions: true });
+writeFileSync(path.join(t8NoSvc.dir, "decisions.md"), tText(t2Rows.slice(0, 4)), "utf8");
+const t8NoSvcBefore = readFileSync(path.join(t8NoSvc.dir, "decisions.md"), "utf8");
+const t8NoSvcOut = await tArchive(t8NoSvc.env, { team: T_TEAM, file: "decisions", keepTail: 2 });
+check("批 T · Tr8 边界：空黑板 / 单行 / 恰好等于阈值**不崩、不乱搬**；无确认服务 ⇒ fail-closed 零写入；keepTail 参数误用 ⇒ 具名拒绝（红相＝空文件崩 / 阈值边界误搬 / 无确认服务照搬 ⇒ 本条红；修复前红：没有归档动词）: ① 空文件与单行 + keepTail=5 ⇒ 具名「无需归档」、盘上零写入 ② 恰好 500 行 ⇒ 读面**没有**阈值提示（提示只在 > 500 出现，501 行那条见 Tr1），文件逐字节未变、archive/ 未创建 ③ keepTail=-1 ⇒ 具名「必须是非负整数」 ④ 无 userQuestions 服务 ⇒ 点名确认服务不可用、活跃文件逐字节不变、archive/ 未创建"
+	+ (t8NoSvcOut.includes("userQuestions") ? "" : "（实测：" + show(t8NoSvcOut.slice(0, 200)) + "）"),
+	t8Empty.includes("无需归档") && t8Single.includes("无需归档")
+		&& !t8Read500.includes("阈值 500")
+		&& readFileSync(path.join(t8.dir, "decisions.md"), "utf8") === tText(t8Rows500)
+		&& t8BadTail.includes("keepTail 必须是非负整数")
+		&& t8NoSvcOut.includes("userQuestions") && t8NoSvcOut.includes("零写入")
+		&& readFileSync(path.join(t8NoSvc.dir, "decisions.md"), "utf8") === t8NoSvcBefore
+		&& !existsSync(path.join(t8NoSvc.dir, "archive"))
+		&& !existsSync(path.join(t8.dir, "archive")));
+
+// --- Tr9 ★：形态史行钉住（切点 = min(位置切点, 最新形态史行位置)） -------------------
+const t9 = tNewEnv("t9-ws", ["归档"]);
+const t9Rows = [
+	tDecisionRow(1, "第 1 条裁决"),
+	tDecisionRow(2, "第 2 条裁决"),
+	tDecisionRow(3, "形态 → sessions"),
+	tDecisionRow(4, "第 4 条裁决"),
+	tDecisionRow(5, "第 5 条裁决"),
+	tDecisionRow(6, "第 6 条裁决"),
+	tDecisionRow(7, "第 7 条裁决"),
+	tDecisionRow(8, "第 8 条裁决"),
+];
+writeFileSync(path.join(t9.dir, "decisions.md"), tText(t9Rows), "utf8");
+const t9Out = await tArchive(t9.env, { team: T_TEAM, file: "decisions", keepTail: 2 });
+const t9Doc = readFileSync(path.join(t9.dir, "archive", "decisions-g1-L1-L2.md"), "utf8");
+const t9Live = readFileSync(path.join(t9.dir, "decisions.md"), "utf8");
+const t9SetMode = await t9.env.tool("team_link_roster").execute({ action: "set-mode", team: T_TEAM, mode: "sessions" }, execFor(t9.env.senderAgent));
+check("批 T · Tr9 ★（设计评审 🔴#1）**形态史行钉住**：切点 = min(位置切点 keepTail, 最新形态史行位置) ⇒ 活跃文件**仍含最新形态史行**，随后 set-mode 的幂等检查仍能读到它（不产生重复形态史行）（红相＝把形态史行切走 ⇒ 幂等检查失灵、重复追加形态史行 ⇒ 本条红；修复前红：没有归档动词）: 8 行里第 3 行是「形态 → sessions」、keepTail=2（位置切点 6）⇒ 切点被钉到 2：归档正文只有前 2 行、**形态史行仍逐字在活跃文件**、回执点名「由最新形态史行 … 留在活跃文件」；紧接着 set-mode sessions ⇒ 「已是该档」+「已有**这一档的形态史行」且 decisions.md **逐字节未变**（零写入）"
+	+ (t9Live.includes(t9Rows[2]) ? "" : "（实测：" + show({ live: t9Live.slice(0, 200), setMode: t9SetMode.slice(0, 240) }) + "）"),
+	sameJson(tBodyOf(t9Doc), t9Rows.slice(0, 2))
+		&& t9Live.includes(t9Rows[2])
+		&& t9Out.includes("由最新形态史行") && t9Out.includes("留在活跃文件")
+		&& t9SetMode.includes("已是该档") && t9SetMode.includes("已有**这一档的形态史行")
+		&& readFileSync(path.join(t9.dir, "decisions.md"), "utf8") === t9Live);
+
+// --- Tr10 ★：归档 id 仍算「已注册」（claim 被接受） ---------------------------------
+const t10 = tNewEnv("t10-ws", ["归档"]);
+writeFileSync(path.join(t10.dir, "tasks.md"), tText(t4Tasks), "utf8");
+const t10Archive = await tArchive(t10.env, { team: T_TEAM, file: "tasks", keepTail: 2 });
+const t10Live = readFileSync(path.join(t10.dir, "tasks.md"), "utf8");
+const t10Claim = await tAppend(t10.env, { team: T_TEAM, file: "tasks", kind: "claim", task: "t-9", line: "接的是归档里那条老任务的活" });
+const t10After = readFileSync(path.join(t10.dir, "tasks.md"), "utf8");
+check("批 T · Tr10 ★（设计评审 🔴#2）**归档 id 仍算已注册**：对**已归档**的 t-<n> 的 claim 仍被接受（「已注册」校验走「活跃 ∪ 归档/」）（红相＝只扫活文件 ⇒ 归档 id 被拒 ⇒ 本条红；修复前红：只有活文件被扫）: t-9 的 plan 行已被搬进 archive/（活文件里搜不到 t-9），用 kind=claim 引用它 ⇒ 写入成功、盘上出现一条 claim / t-9 的行（回执点名 task=t-9）"
+	+ (t10Claim.includes("task=t-9") ? "" : "（实测：" + show({ live: t10Live.slice(0, 120), claim: t10Claim.slice(0, 200) }) + "）"),
+	t10Archive.includes("搬走 4 行")
+		&& t10Live.indexOf("t-9") === -1
+		&& readFileSync(path.join(t10.dir, "archive", "tasks-g1-L1-L4.md"), "utf8").includes("| t-9 |")
+		&& t10Claim.includes("已追加 tasks #") && t10Claim.includes("task=t-9")
+		&& t10After.includes("| claim | t-9 |"));
+
+// --- Tr11 ★：伪造的高号仍被拒 ------------------------------------------------------
+const t11Forged = await tAppend(t10.env, { team: T_TEAM, file: "tasks", kind: "claim", task: "t-900", line: "伪造的高号" });
+check("批 T · Tr11 ★（设计评审 🔴#2）**伪造 id 仍被拒**：大于「活跃 ∪ 归档」最大值的 t-<n> 仍被拒（红相＝放宽成「只要 > 活文件最大就认」/ 放行任意号 ⇒ 本条红；修复前红：只有活文件被扫）: 并集最大是 t-9（归档里的那条），t-900 既不在并集里也不在活文件里 ⇒ 仍以「从未在本文件登记过」拒绝、点名那个号，且 tasks.md **逐字节未变**（零写入）"
+	+ (t11Forged.includes("从未在本文件登记过") ? "" : "（实测：" + show(t11Forged.slice(0, 200)) + "）"),
+	t11Forged.includes("从未在本文件登记过") && t11Forged.includes("t-900")
+		&& readFileSync(path.join(t10.dir, "tasks.md"), "utf8") === t10After);
+
+// --- Tr12 ★：崩溃幂等（归档已写、活跃未重写 ⇒ 用新的 now 重跑仍幂等） ----------------
+const t12 = tNewEnv("t12-ws", ["归档", "归档"]);
+writeFileSync(path.join(t12.dir, "decisions.md"), tText(t2Rows), "utf8");
+const t12Before = readFileSync(path.join(t12.dir, "decisions.md"), "utf8");
+const t12First = await tArchive(t12.env, { team: T_TEAM, file: "decisions", keepTail: 2 });
+const t12LiveA = readFileSync(path.join(t12.dir, "decisions.md"), "utf8");
+const t12DocA = readFileSync(path.join(t12.dir, "archive", t2Name), "utf8");
+// 崩溃现场复现：归档文件已写、活跃文件**尚未**重写 ⇒ 把活跃文件回滚成归档前那一份
+writeFileSync(path.join(t12.dir, "decisions.md"), t12Before, "utf8");
+const t12Second = await tArchive(t12.env, { team: T_TEAM, file: "decisions", keepTail: 2 });
+const t12LiveB = readFileSync(path.join(t12.dir, "decisions.md"), "utf8");
+const t12DocB = readFileSync(path.join(t12.dir, "archive", t2Name), "utf8");
+check("批 T · Tr12 ★（设计评审 🟡#5/N2）**崩溃幂等**：归档文件已写、活跃文件未重写之间中断 ⇒ 用**新的 now** 重跑同样幂等（确定性文件名命中、跳过归档写、不丢行、不重复搬、**旧归档文件字节不变**）（红相＝重跑换名再写一份 / 把行搬两遍 / 丢行 ⇒ 本条红；修复前红：没有归档动词）: ① 第一次归档后把活跃文件回滚成归档前那一份（= 崩溃现场）② 第二次用新的时刻重跑 ⇒ 命中同名归档且正文逐行相等 ⇒ 回执点名「跳过归档写」，archive/ 里仍**只有 1 个**归档文件、它的字节（含归档头里的时间）**逐字节不变** ③ 重跑写出的活跃文件与第一次**逐字节相同**（指针行不含墙钟）④ 第 1 行仍在归档里、最后一行仍在活跃文件里（不丢、不重复）"
+	+ (t12Second.includes("跳过归档写") ? "" : "（实测：" + show(t12Second.slice(0, 240)) + "）"),
+	t12First.includes("已归档") && t12Second.includes("已归档") && t12Second.includes("跳过归档写")
+		&& sameJson(tList(path.join(t12.dir, "archive")), [t2Name])
+		&& t12DocB === t12DocA
+		&& t12LiveB === t12LiveA
+		&& t12DocB.includes(t2Rows[0]) && t12LiveB.includes(t2Rows[5]) && !t12LiveB.includes(t2Rows[0]));
+
+// --- Tr13 ★：归档索引常驻读面（与 500 阈值无关） -----------------------------------
+const t13Files = tList(path.join(t2.dir, "archive"));
+const t13Moved = t13Files.reduce((sum, name) => sum + tBodyOf(readFileSync(path.join(t2.dir, "archive", name), "utf8")).length, 0);
+const t13Stamps = t13Files
+	.map((name) => /^- 归档时间：(.+)$/mu.exec(readFileSync(path.join(t2.dir, "archive", name), "utf8")))
+	.filter((matched) => matched !== null)
+	.map((matched) => matched[1].trim())
+	.sort();
+const t13Out = await tRead(t2.env);
+check("批 T · Tr13 ★（设计评审 🟡#6）**归档索引常驻读面**：archive/ 非空时读面**始终**给「另有 M 行已归档至 archive/（最近 <ts>）」一行（与 500 阈值无关）（红相＝只有超阈值才提示 ⇒ 归档后即失明 ⇒ 本条红；修复前红：读面没有归档索引）: 这块黑板归档后只剩 1 条正文行（远低于 500）⇒ 读面**没有**阈值提示，但**有**归档索引行：M = 两个归档文件的正文行数之和（5）、最近时刻 = 归档头里最大的那个归档时间；同时「共 1 条」证明**指针行不算一条账**"
+	+ (t13Moved === 5 ? "" : "（实测：" + show({ files: t13Files, moved: t13Moved, out: t13Out.slice(0, 320) }) + "）"),
+	t13Files.length === 2 && t13Moved === 5 && t13Stamps.length === 2
+		&& t13Out.includes("另有 5 行已归档至 archive/（最近 " + t13Stamps[t13Stamps.length - 1])
+		&& !t13Out.includes("> 阈值 500")
+		&& t13Out.includes("共 1 条"));
+
 // A 项：把本进程的临时根整个收掉（前面几个 rmSync 保留原语义，这一行收尾不影响它们）——
 // ★ 批 G 的这一块夹具也落在 `TEST_ROOT` 下，所以这一行必须在**本块之后**（放在块前会把它们全删掉）。
 // ★ 修复轮 #3：改用带**有界重试**的 `rmTestRoot()`（见它的 JSDoc）—— 8 并发下实测过 1/8 次
 //   `ENOTEMPTY` 抛在这一行、把 `assertion total` 那一行整个吞掉。
+// ===========================================================================
+// 批 U（2026-10-23 用户反馈）: 看门狗可运维性 —— update / mute / unmute / wake 安全
+// 归属：用户原话「注册完不能调整间隔 / 只能等注册自动过期 / 提醒消息可能把会话直接搞坏，一直报错」
+// 判据：每条先给红相（本批实现前必红），再给绿相读数。
+// ===========================================================================
+
+// --- U1: update 就地调整（不必清掉重登记） --------------------------------
+const uCtlEnv = watchdogEnv({ targets: { "session-silent": { events: oneShotSurface(1) } } });
+await uCtlEnv.watch.execute({ action: "register", targets: ["session-silent"] }, execFor(uCtlEnv.senderAgent));
+const uCtlRow = () => uCtlEnv.settings.namespaces.get("team-link").data.watchdogs[0];
+const uCtlId = uCtlRow().id;
+const uCtlBefore = uCtlRow();
+const uCtlUpd = await uCtlEnv.watch.execute({ action: "update", id: uCtlId, silentMinutes: 30, intervalMinutes: 15, ttlHours: 2 }, execFor(uCtlEnv.senderAgent));
+const uCtlAfter = uCtlRow();
+check("批 U · U1 update 就地调整：间隔 5→15、静默 10→30、TTL 12h→2h（从**现在**续租），定时器按新间隔重挂 —— 不必清掉重登记；红相＝没有 update 动词 / 字段没落盘 / 定时器没重挂"
+	+ (uCtlAfter.intervalMinutes === 15 ? "" : "（实测：" + show({ out: uCtlUpd, row: uCtlAfter }) + "）"),
+	uCtlUpd.includes("已更新看门狗") && uCtlAfter.silentMinutes === 30 && uCtlAfter.intervalMinutes === 15
+		&& uCtlAfter.expiresAt < uCtlBefore.expiresAt && uCtlEnv.watchdog.timers.has(uCtlId));
+
+const uBadBound = await uCtlEnv.watch.execute({ action: "update", id: uCtlId, silentMinutes: 3 }, execFor(uCtlEnv.senderAgent));
+check("批 U · U1 越界值拒绝：silentMinutes < 10 不得静默生效（与 register 共用同一份边界）",
+	uBadBound.includes("更新失败") && uBadBound.includes("不能小于 10"));
+const uNoField = await uCtlEnv.watch.execute({ action: "update", id: uCtlId }, execFor(uCtlEnv.senderAgent));
+const uNoId = await uCtlEnv.watch.execute({ action: "update", intervalMinutes: 6 }, execFor(uCtlEnv.senderAgent));
+check("批 U · U1 空 update 拒绝：无字段（不会静默成功）与无 id（update 不猜）都给明确原因",
+	uNoField.includes("至少给一个要改的字段") && uNoId.includes("需要 id"));
+
+const uOtherEnv = watchdogEnv({ targets: { "session-silent": { events: oneShotSurface(1) } }, watchdogs: [{ id: "wd-other", team: null, watcherSession: "session-other", targets: ["session-silent"], silentMinutes: 10, intervalMinutes: 5, expiresAt: WD_NOW + 3600000, createdAt: WD_NOW, origin: "manual" }] });
+const uOtherOut = await uOtherEnv.watch.execute({ action: "update", id: "wd-other", intervalMinutes: 7 }, execFor(uOtherEnv.senderAgent));
+check("批 U · U1 只能调整自己的注册：别人的注册一律拒绝（与 clear 同一条所有权口径）",
+	uOtherOut.includes("更新失败") && uOtherOut.includes("只能调整自己的注册")
+		&& uOtherEnv.settings.namespaces.get("team-link").data.watchdogs[0].intervalMinutes === 5);
+
+const uAutoRow = { id: "wd-auto-ctl", team: "u-team", watcherSession: "session-self", targets: ["session-silent"], silentMinutes: 10, intervalMinutes: 10, expiresAt: WD_NOW + 12 * 3600000, createdAt: WD_NOW, origin: "auto" };
+const uAutoEnv = watchdogEnv({ targets: { "session-silent": { events: oneShotSurface(1) } }, watchdogs: [uAutoRow] });
+const uAutoOut = await uAutoEnv.watch.execute({ action: "update", id: "wd-auto-ctl", intervalMinutes: 7 }, execFor(uAutoEnv.senderAgent));
+check("批 U · U1 auto 工作台行也能由观察者自己调整巡检间隔（清不掉的注册不再只剩「等过期」一条路）",
+	uAutoOut.includes("已更新看门狗") && uAutoEnv.settings.namespaces.get("team-link").data.watchdogs[0].intervalMinutes === 7);
+
+// --- U2: mute / unmute（auto 行也受控；clear 对 auto 的拒绝保持不变） -------
+const uMuteEnv = watchdogEnv({ targets: { "session-silent": { events: oneShotSurface(1) } } });
+await uMuteEnv.watch.execute({ action: "register", targets: ["session-silent"] }, execFor(uMuteEnv.senderAgent));
+const uMuteId = uMuteEnv.settings.namespaces.get("team-link").data.watchdogs[0].id;
+const uMuteOut = await uMuteEnv.watch.execute({ action: "mute", id: uMuteId, hours: 1 }, execFor(uMuteEnv.senderAgent));
+await uMuteEnv.watchdog.patrol({ now: WD_NOW });
+check("批 U · U2 静音期间零投递：followup 与 inject 都是 0（提醒不再把会话拉起来）"
+	+ (uMuteEnv.senderCalls.followedup.length + uMuteEnv.senderCalls.injected.length === 0 ? "" : "（实测：" + show({ f: uMuteEnv.senderCalls.followedup.length, i: uMuteEnv.senderCalls.injected.length }) + "）"),
+	uMuteOut.includes("已静音看门狗") && uMuteEnv.senderCalls.followedup.length === 0 && uMuteEnv.senderCalls.injected.length === 0);
+const uMuteList = await uMuteEnv.watch.execute({ action: "list" }, execFor(uMuteEnv.senderAgent));
+check("批 U · U2 读面不窄于行为：list 如实显示「已静音至 …」", uMuteList.includes("已静音至"));
+await uMuteEnv.watch.execute({ action: "unmute", id: uMuteId }, execFor(uMuteEnv.senderAgent));
+await uMuteEnv.watchdog.patrol({ now: WD_NOW });
+check("批 U · U2 unmute 立刻恢复投递（注册与阈值一字未动）",
+	uMuteEnv.senderCalls.followedup.length === 1 && uMuteEnv.settings.namespaces.get("team-link").data.watchdogs[0].mutedUntil === undefined);
+
+const uAutoMuteEnv = watchdogEnv({ targets: { "session-silent": { events: oneShotSurface(1) } }, watchdogs: [uAutoRow] });
+const uAutoMuteOut = await uAutoMuteEnv.watch.execute({ action: "mute", id: "wd-auto-ctl", hours: 2 }, execFor(uAutoMuteEnv.senderAgent));
+const uAutoClearOut = await uAutoMuteEnv.watch.execute({ action: "clear", id: "wd-auto-ctl" }, execFor(uAutoMuteEnv.senderAgent));
+check("批 U · U2 auto 注册：观察者本人可用 mute 暂停投递，但 clear 仍拒绝（工作台资产口径不变）",
+	uAutoMuteOut.includes("已静音看门狗") && uAutoMuteEnv.settings.namespaces.get("team-link").data.watchdogs[0].mutedUntil > 0
+		&& uAutoClearOut.includes("清除失败") && uAutoClearOut.includes("该注册未清除"));
+
+// --- U3: wake:false ⇒ inject（只投递不唤醒） ------------------------------
+const uNoWakeEnv = watchdogEnv({ targets: { "session-silent": { events: oneShotSurface(1) } } });
+const uNoWakeReg = await uNoWakeEnv.watch.execute({ action: "register", targets: ["session-silent"], wake: false }, execFor(uNoWakeEnv.senderAgent));
+await uNoWakeEnv.watchdog.patrol({ now: WD_NOW });
+check("批 U · U3 wake:false ⇒ 恰一次 inject、零 followup（宿主语义：inject = send(next-step, wakeup=false)）"
+	+ (uNoWakeEnv.senderCalls.injected.length === 1 && uNoWakeEnv.senderCalls.followedup.length === 0 ? "" : "（实测：" + show({ f: uNoWakeEnv.senderCalls.followedup.length, i: uNoWakeEnv.senderCalls.injected.length }) + "）"),
+	uNoWakeReg.includes("已注册看门狗") && uNoWakeEnv.senderCalls.injected.length === 1 && uNoWakeEnv.senderCalls.followedup.length === 0);
+
+// --- U4/U5: 上一拍 tick 没有 assistant 回复 ⇒ 降级 inject（对照：有回复则正常唤醒）
+const uDownTick = { type: "user/message", seq: 2, time: WD_NOW - 5 * 60000, surfaceOp: "append", data: { id: "slp-wd-unanswered", role: "user", source: { kind: "agent-message", form: "relay", senderSessionId: "session-self" }, content: [{ type: "text", text: "[watchdog] 上一拍" }] } };
+const uDownEnv = watchdogEnv({ targets: { "session-silent": { events: oneShotSurface(1) } } });
+await uDownEnv.watch.execute({ action: "register", targets: ["session-silent"] }, execFor(uDownEnv.senderAgent));
+uDownEnv.eventsBySession["session-self"] = [uDownTick];
+await uDownEnv.watchdog.patrol({ now: WD_NOW });
+check("批 U · U4 上一拍 tick 之后没有 assistant 回复 ⇒ 本拍降级 inject、不唤醒新回合，并留一行 warn（红相＝照旧 followup，把已经失败的会话每拍再拉起一次）"
+	+ (uDownEnv.senderCalls.injected.length === 1 ? "" : "（实测：" + show({ f: uDownEnv.senderCalls.followedup.length, i: uDownEnv.senderCalls.injected.length, warn: uDownEnv.log.lines.warn.slice(-3) }) + "）"),
+	uDownEnv.senderCalls.injected.length === 1 && uDownEnv.senderCalls.followedup.length === 0
+		&& uDownEnv.log.lines.warn.some((line) => line.includes("will not wake")));
+
+const uOkEnv = watchdogEnv({ targets: { "session-silent": { events: oneShotSurface(1) } } });
+await uOkEnv.watch.execute({ action: "register", targets: ["session-silent"] }, execFor(uOkEnv.senderAgent));
+uOkEnv.eventsBySession["session-self"] = [uDownTick, { type: "assistant/message", seq: 3, time: WD_NOW - 4 * 60000, data: { turn: 1, step: 1, message: { id: "a2", role: "assistant", source: { kind: "model", provider: "p", model: "m" }, content: [{ type: "text", text: "收到" }] } } }];
+await uOkEnv.watchdog.patrol({ now: WD_NOW });
+check("批 U · U5 对照：上一拍 tick **有** assistant 回复 ⇒ 照旧 followup 唤醒（降级只在证据成立时发生）",
+	uOkEnv.senderCalls.followedup.length === 1 && uOkEnv.senderCalls.injected.length === 0);
+
 rmTestRoot();
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
