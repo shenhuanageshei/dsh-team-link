@@ -5060,7 +5060,15 @@ EXIT=0
 
 **已知边界（如实登记）**：① 已写入历史的毒串本批不修 —— 两个会话需要在侧栏 rewind 到中毒事件之前，或由宿主/上游在请求序列化层做孤立代理项消毒；② 「上一拍没回复」是启发式（只认 `slp-wd-` tick，不覆盖摘要/两条告警通道）；surface 读不到 ⇒ **不降级**；③ `mute` 上限 24h（与 TTL 同一个防失控口径），不是永久关闸。
 
-**关联判据**：`批 U · U1`–`U5`（12 条）在 `host-half.test.mjs` 的「批 U」块；`U22` 的 action 枚举期望同批改准。';
+**关联判据**：`批 U · U1`–`U5`（12 条）在 `host-half.test.mjs` 的「批 U」块；`U22` 的 action 枚举期望同批改准。
+
+**2026-10-24 补：`批 J · U6` 夹具抖动修复（测试面；不改产品代码）**
+
+同一份字节复跑时 U6 偶发红（U6 ＋ `Rr8`/`Tr7` 级联），而 `[CJ-U6-DIAG]` 读数与绿跑逐字相同。用 instrumented copy 定位：check 的合取项 `g`（`cjU6TeamEnv` 的 idle / pressure / digest 三档**活计数**）为假，而 diag 同一时刻为真 —— 差别在 diag 里的两处 `await cjWaitBeatSettled(...)` 位于 check **之前**：等待期间事件循环让后台定时器跑起来，活计数在 diag 与 check 之间被改掉（心跳文件在/不在决定等待是否发生 ⇒ 时红时绿）。
+
+修法：把 `[CJ-U6-SETTLE]` 移到 check **之后**（与 `rmTestRoot()` 的先后关系不变）。
+
+修复后读数：`node host-half.test.mjs` ⇒ `ALL PASS / assertion total: 1783 (failed: 0)`，`EXIT=0`；`[CJ-U6-SETTLE]` 出现在 U6 的 PASS 之后（实读日志行号 39070）。
 
 
 

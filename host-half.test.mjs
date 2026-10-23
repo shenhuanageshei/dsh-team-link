@@ -14808,8 +14808,11 @@ async function cjWaitBeatSettled(env) {
 	}
 	return false;
 }
-// 读数可见性（本文件既有惯例 `[CJ-U2-DIAG]` 那一类）；`settled` 两格是收尾等待面的读数（见上面的注释）。
-console.log(`[CJ-U6-DIAG] ${JSON.stringify({ payloadHits: cjU6PayloadHits, rawHits: cjU6RawHits, rawLines: cjU6RawLineCount, idleEnd: cjU6IdleEndTexts.length, pressureEnd: cjU6PressureEndTexts.length, idleFaceMarks: (cjU6IdleFace.match(CJ_U6_MARK_RE_G) ?? []).length, teamPoison: { teams: cjU6TeamEnvTeams.length, idle: cjAlertsOf(cjU6TeamEnv).length, pressure: cjPressureOf(cjU6TeamEnv).length, digest: digestOf(cjU6TeamEnv).length }, settled: [await cjWaitBeatSettled(cjU6Env), await cjWaitBeatSettled(cjU6TeamEnv)] })}`);
+// 读数可见性（本文件既有惯例 `[CJ-U2-DIAG]` 那一类）。★ 2026-10-24 修抖动：`settled` 两格是收尾等待面的读数，
+// 它含 `await`（等心跳落定）—— 若放在本条 check **之前**，等待期间事件循环会跑后台定时器，
+// `cjAlertsOf/cjPressureOf/digestOf(cjU6TeamEnv)` 这类**活计数**可能在 diag 与 check 之间变掉 ⇒
+// 偶发红（实测：diag 全绿而 check 的 `g` 为假）。故把它移到 check **之后**（见下面的 `[CJ-U6-SETTLE]`）。
+console.log(`[CJ-U6-DIAG] ${JSON.stringify({ payloadHits: cjU6PayloadHits, rawHits: cjU6RawHits, rawLines: cjU6RawLineCount, idleEnd: cjU6IdleEndTexts.length, pressureEnd: cjU6PressureEndTexts.length, idleFaceMarks: (cjU6IdleFace.match(CJ_U6_MARK_RE_G) ?? []).length, teamPoison: { teams: cjU6TeamEnvTeams.length, idle: cjAlertsOf(cjU6TeamEnv).length, pressure: cjPressureOf(cjU6TeamEnv).length, digest: digestOf(cjU6TeamEnv).length } })}`);
 check("批 J · U6 反走私负向判据（★ 收尾单补齐：此前如实登记为已知覆盖缺口）（红相①＝把 `renderIdleAlert` 或 `renderPressureAlert` 里任一处 `noticeField` / 末行 `wellFormed` 去掉 ⇒ 毒串原样落进正文 ⇒ 本条红；红相②＝把两条投递的渲染调用换成直接拼串 ⇒ 同上红；红相③＝让载荷**根本进不了**正文（例如把注册参数换成常量、或把毒串替换掉）⇒「看得见毒标记 / 多出来的行数」那两半红 —— 那两半正是**反假绿**：本条的「不含」不许由「载荷没进去」冒充）: ① **负相自证**：毒载荷自己带着 `\\t` / `\\u0007`（控制字节计数 = 4 —— 正文自己的行分隔符 `\\n` 按谓词口径**排除**，载荷的那两枚 `\\n` 由行数那一半判）与 2 枚 `\\n`，而**不过消毒**的对照渲染把它们**原样**带进正文（控制字节更多、行数 6 > 3）⇒ 断言的谓词**真的能假**；② **端到端**（注册参数 `targets` 就是毒串、走真投递路径）：两条新告警各自投出 **≥1** 条，**每一条**正文零控制字节、行数仍是 3（载荷的 `\\n` 没有多带出一行），且 `[idle-unassigned]` 的正文里**看得见**毒串的可见标记（载荷真进去了、不是被整段丢掉），而 `[pressure-warn]` 的正文里**看不见**它（它的正文只插值读数 ⇒ 注册参数在那条通道上**没有**插值面）；②′ **另一半（`team` 是毒串）**：`policy.get().teams` 里**没有**这个队（名册只收 `^[a-z0-9-]+$`，团队名是黑板目录的路径段）⇒ 角色门恒假 ⇒ 两条告警**零投递**，而同一次巡逻的**摘要照投**（负相自证：巡逻真的跑到了）；③ **渲染面**：`renderIdleAlert` 带毒（team ＋ target）⇒ 零控制字节、行数 3、可见标记**恰 2 次**（两个字段各一次）；④ **结构免疫锁**：`renderPressureAlert` 把毒串喂进每个字段（含框定 token 那一份）⇒ 正文零控制字节、零框定命中、可见标记不在场，且那两格如实落成「未知」",
 	cjU6PayloadHits === 4 && cjU6RawHits >= cjU6PayloadHits && cjU6RawLineCount > 3
 		&& cjU6IdleEnd.length >= 1
@@ -14823,6 +14826,10 @@ check("批 J · U6 反走私负向判据（★ 收尾单补齐：此前如实登
 		&& (cjU6IdleFace.match(CJ_U6_MARK_RE_G) ?? []).length === 2
 		&& !CJ_U6_CTRL_RE.test(cjU6PressureFace) && !cjU6PressureFace.includes(CJ_U6_MARK) && cjU6PressureFace.includes("未知")
 		&& !CJ_U6_CTRL_RE.test(cjU6PressureFrameFace) && frameClean(cjU6PressureFrameFace));
+// ★ 2026-10-24 抖动修复：收尾等待移到 check **之后** —— 它的 `await` 会让后台定时器在 diag 与 check 之间
+// 跑起来，活计数（`cjAlertsOf/cjPressureOf/digestOf`）可能变掉；放到 check 之后，等待不再有任何
+// 判据依赖，而 `rmTestRoot()` 之前仍会等心跳落定（原意不变）。
+console.log(`[CJ-U6-SETTLE] ${JSON.stringify({ settled: [await cjWaitBeatSettled(cjU6Env), await cjWaitBeatSettled(cjU6TeamEnv)] })}`);
 
 // ---------------------------------------------------------------------------
 // 批 P · 换届继任者的设置继承（设计档 docs/2026-10-14-rotation-inheritance-design.md）
