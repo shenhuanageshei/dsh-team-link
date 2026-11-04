@@ -15,6 +15,9 @@ import { fileURLToPath } from "node:url";
 import { apply, __testing } from "./lib/index.js";
 // ★ 批 Q：真函数读数面（模块命名空间 —— 批 Q 之前这些名字不存在，具名 import 会在链接期失败）。
 import * as qRotation from "./lib/rotation.js";
+// ★ 批 V（2026-11-04）：确认框归一器走**模块命名空间**读 —— 旧实现里这个导出不存在，具名 import 会在
+// 链接期失败、把「修复前红相」变成「整套件跑不起来」（本仓明令禁止的假红）。
+import * as qShared from "./lib/shared.js";
 
 let failures = 0;
 /** Assertions executed in this run, printed at the end so the README figure is
@@ -49,6 +52,20 @@ function show(value) {
  */
 function at(list, index, fallback = undefined) {
 	return Array.isArray(list) && index < list.length ? list[index] : fallback;
+}
+
+/** 对话框里**人真正读到**的全文：headline（`question`）＋滚动区正文（`detail`）。
+ *
+ * 批 V 起插件把长正文从 `question` 搬进 `detail` —— 壳的布局是：`question` 渲在
+ * `flex-shrink:0`、**不在滚动容器内**、**没有高度钳制**的 `<header><h2>` 里，`detail` 与选项行在
+ * `.body{overflow-y:auto}` 之内，动作底栏在滚动区外；`question` 一长就把按钮挤出卡片
+ * （2026-09-21 `/team_session`、2026-11-04 换届确认框真机两次）。所以「框里有没有某句话」的断言
+ * 必须读这两面的并集，不能只读 `question`。 */
+function dialogTextOf(questions) {
+	const question = at(questions, 0, {});
+	const head = typeof question.question === "string" ? question.question : "";
+	const body = typeof question.detail === "string" ? question.detail : "";
+	return `${head}\n${body}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1932,8 +1949,8 @@ rmSync(truncDir, { recursive: true, force: true });
 const poisonText = `${"y".repeat(5)}\uD83D 断开的负载`;
 const poisonEnv = setup({ sessions, askScript: ["发送", "接收"] });
 await poisonEnv.tool("team_link_send").execute({ targetSessionId: "session-target", message: poisonText }, execFor(poisonEnv.senderAgent));
-check("sender confirm dialog has no lone surrogate", poisonEnv.uq.requests[0] !== undefined && !hasLone(poisonEnv.uq.requests[0].questions[0].question));
-check("receiver confirm dialog has no lone surrogate", poisonEnv.uq.requests[1] !== undefined && !hasLone(poisonEnv.uq.requests[1].questions[0].question));
+check("sender confirm dialog has no lone surrogate", poisonEnv.uq.requests[0] !== undefined && !hasLone(dialogTextOf(poisonEnv.uq.requests[0].questions)));
+check("receiver confirm dialog has no lone surrogate", poisonEnv.uq.requests[1] !== undefined && !hasLone(dialogTextOf(poisonEnv.uq.requests[1].questions)));
 const poisonDelivered = poisonEnv.targetCalls.followedup[0];
 check("delivered relay banner has no lone surrogate", poisonDelivered !== undefined && !hasLone(poisonDelivered.content[0].text));
 check("delivered relay banner keeps the payload text", poisonDelivered !== undefined && poisonDelivered.content[0].text.includes("断开的负载"));
@@ -2409,7 +2426,7 @@ check("retire stays with the incumbent coordinator even under writer=any (the cl
 const retireOut = await retireRoster.execute({ action: "retire", team: "night-shift", role: "coordinator", note: "下班交班" }, execFor(retireEnv.senderAgent));
 check("U4: retire empties current and records the retirement in the version history", retireOut.includes("已退役") && teamStore(retireEnv)[0].roles[0].current === null && teamStore(retireEnv)[0].roles[0].history.length === 1 && typeof teamStore(retireEnv)[0].roles[0].history[0].until === "number" && teamStore(retireEnv)[0].roles[0].history[0].note === "下班交班");
 check("retire does not touch trust data on its own — the cleanup is the user's call", retireEnv.uq.requests.length === 1 && retireEnv.uq.requests[0].questions[0].id === "retire-cleanup" && retireEnv.uq.requests[0].agent === retireEnv.senderAgent);
-const retireQuestion = retireEnv.uq.requests[0].questions[0].question;
+const retireQuestion = dialogTextOf(retireEnv.uq.requests[0].questions);
 check("the retirement dialog lists every reference to the retired session, both directions", retireQuestion.includes("session-self ↔ session-target") && !retireQuestion.includes("session-child ↔ session-other") && retireQuestion.includes("trustedSenders") && retireQuestion.includes("rememberTargets") && retireQuestion.includes("pairs"));
 check("U4: confirming the dialog cleans exactly the references pointing at the retired session", retireOut.includes("已清理") && retireEnv.ns.data.pairs.length === 1 && retireEnv.ns.data.pairs[0].a === "session-child" && retireEnv.ns.data.trustedSenders.length === 0 && retireEnv.ns.data.rememberTargets.join(",") === "session-target");
 check("retire leaves the role vacant and the mirror agrees", teamStore(retireEnv)[0].roles[0].current === null && (await readFile(mirrorFile, "utf8")).length > 0);
@@ -4861,7 +4878,7 @@ check("DEFECT-3 ③a 服务缺席: 已写的 pending-create 意图**保留**并�
 // 判据与 ② 逐字共用（`sessionTitledOnce` / `sessionTitleOf`：按会话 id 配对，不看位置）
 // ——这也是「注入点只有一处」的行为侧证据：auto 路径没有自己的第二份命名实现。
 check("DEFECT-4 ③a 继任者: `successor:\"auto\"` 建出的会话同样被命名成 `<team> · <role>`（同一个注入点，auto 路径没有自己的第二份实现）", sessionTitledOnce(autoEnv) && autoEnv.creates.length === 1 && at(sessionTitleOf(autoEnv), 0, {}).id === autoId && at(sessionTitleOf(autoEnv), 0, {}).title === "night-shift · coordinator");
-const autoTitleBody = autoEnv.uq.requests[0]?.questions[0]?.question ?? "";
+const autoTitleBody = dialogTextOf(autoEnv.uq.requests[0]?.questions);
 check("DEFECT-4 ③a 确认框说明设了什么标题: 自动换届的确认框写出继任者将得到的那个标题（同一份值既进框、又交给创建路径的 rename），并写明「想改随时在壳里重命名」", autoTitleBody.includes("night-shift · coordinator") && autoTitleBody.includes("想改随时在壳里重命名"));
 check("DEFECT-4 ③a 回执说明设了什么标题: 交班摘要如实写出真正设成的标题（取自 rename 的返回值）", autoOut.includes("已命名为「night-shift · coordinator」"));
 const autoNoTitleEnv = rotateEnv({ askScript: ["创建并交班"], omitSessionTitle: true, teams: handoffTeam(path.join(HANDOFF_WS, "notitle")) });
@@ -5589,8 +5606,8 @@ check("U27 候选由插件算（批次 2 改写：候选集 = 活成员 ∪ 常�
 		&& ask.questions[0].id === "recovery-confirm"
 		&& ask.questions[0].multiSelect === undefined
 		&& ask.questions[0].options.map((option) => option.label).join(",") === `session-target,session-worker-a,session-worker-b,${__testing.SELF_SUCCESSOR_LABEL}`
-		&& ask.questions[0].question.includes("本队活成员 ∪ 插件自建继任者（常驻）")
-		&& ask.questions[0].question.includes(__testing.SELF_SUCCESSOR_LABEL)
+		&& dialogTextOf(ask.questions).includes("本队活成员 ∪ 插件自建继任者（常驻）")
+		&& dialogTextOf(ask.questions).includes(__testing.SELF_SUCCESSOR_LABEL)
 		&& !Object.keys(reapTool.parameters.properties).some((key) => /successor|target|session/iu.test(key));
 })());
 check("U27 人类在环: 确认框写清爆炸半径（谁在任、谁是发起者、接下来铸令牌+快照+广播冻结、信任迁移不在本次）与边界声明", (() => {
@@ -7366,7 +7383,7 @@ check("裁定 2 ②: 批量确认框的模型行三种形状都如实——两�
 		&& typeof dialogHalfModelSlot === "string" && dialogHalfModelSlot.includes("model=deepseek-v4（provider 取宿主缺省）")
 		&& typeof dialogFullModelSlot === "string" && modelValueOf(dialogFullModelSlot) === "model=deepseek-v4（provider=deepseek）" && modelValueOf(dialogFullModelSlot) === dialogFullModelSlot.replace(/^-[^：]*：/u, "").split(" · preset=")[0]
 		&& !dialogFullRoute.includes("两半都解析并带上宿主缺省模型选择") && !dialogHalfRoute.includes("两半都解析并带上宿主缺省模型选择"));
-const autoDialogBody = autoEnv.uq.requests[0]?.questions?.[0]?.question ?? "";
+const autoDialogBody = dialogTextOf(autoEnv.uq.requests[0]?.questions);
 check("裁定 2 ③a: 自动换届确认框的模型行不再说「本路径不指定 provider/model」（实现现在会解析并带上宿主缺省的模型选择），并点名不解析的后果（真机缺陷 #3 的 `{{model}}`）", autoDialogBody.includes("解析并带上宿主缺省模型选择") && !autoDialogBody.includes("本路径不指定 provider/model") && autoDialogBody.includes("真机缺陷 #3") && autoDialogBody.includes("{{model}}"));
 check("裁定 2 ③a 反锁: 那句已不成立的话在 lib/index.js 里**一处都不剩**（源码级：它只可能从这两处对话框文案回来）", !HANDOFF_SOURCE.includes("本路径不指定 provider/model"));
 // 裁定 3：`agentOptions` 无条件传（与模板 `dsh-webhook:106` 的
@@ -7746,7 +7763,7 @@ const selfReport = __testing.handoffBodyReport(selfBody);
 check("U9 (c) 交接正文: 插件从 roster 事实生成的正文**五硬节全在场且非空**（与 HANDOFF_HARD_SECTIONS 逐字同名），读不到的项如实标未知、没有编造", selfReport.missingHard.length === 0 && selfReport.emptyHard.length === 0 && __testing.HANDOFF_HARD_SECTIONS.every((name) => selfBody.split("\n").includes(`## ${name}`)) && selfBody.includes("前任已死，进行中工作不可读") && selfBody.includes("**未知**") && selfBody.includes("不可读，本节不做推测") && selfBody.includes(TI_DEAD_B));
 check("U9 (c) 交接正文: commitments 节只报**存在性与数量**（不复制任何密钥素材），并写明信任不在本次迁移、靠 claim 逐项勾选", selfBody.includes("pairs：2 条") && selfBody.includes("trustedSenders：1 条") && selfBody.includes("rememberTargets：0 条") && selfBody.includes("不在本次迁移") && selfBody.includes("team_link_rotate action=claim"));
 check("U9 (c) 对话框代价声明: 选「自建继任者」的代价写在框里（空上下文的新会话、历史不迁移、信任靠 claim 逐项勾选），候选集口径改为「活成员 ∪ 自建继任者（常驻）」", (() => {
-	const question = String(tiDialog?.questions?.[0]?.question ?? "");
+	const question = dialogTextOf(tiDialog?.questions);
 	const option = String(tiDialog?.questions?.[0]?.options?.at(-1)?.description ?? "");
 	const reading = `{questionHasCost:${question.includes("空上下文的新会话")}, hasNoMigrate:${question.includes("历史/对话**不迁移**")}, hasUnion:${question.includes("活成员 ∪ 插件自建继任者（常驻）")}, optionHasCost:${option.includes("空上下文的新会话")}, optionIsSynthetic:${option.includes(__testing.SELF_SUCCESSOR_LABEL)}}`;
 	const ok = question.includes("空上下文的新会话") && question.includes("历史/对话**不迁移**") && question.includes("活成员 ∪ 插件自建继任者（常驻）") && option.includes("空上下文的新会话") && option.includes(__testing.SELF_SUCCESSOR_LABEL);
@@ -7765,7 +7782,7 @@ const noCreateOut = await noCreateEnv.tool("team_link_recover").execute({ action
 check("U10 (c，批次 4 收窄): 宿主没有 agents.create 时**弹框照开**、候选里只列活成员（不出现「自建继任者」），选中活成员后 prepare 逐字跑完、零创建——活成员改任这条路不需要该服务（N1：只降级该面子面）", (() => {
 	const ask = noCreateEnv.uq.requests[0];
 	const labels = ask === undefined ? [] : ask.questions[0].options.map((option) => option.label);
-	const question = String(ask?.questions?.[0]?.question ?? "");
+	const question = dialogTextOf(ask?.questions);
 	const ok = noCreateEnv.uq.requests.length === 1
 		&& labels.join(",") === "session-target,session-worker-a,session-worker-b"
 		&& !labels.includes(__testing.SELF_SUCCESSOR_LABEL)
@@ -8596,7 +8613,7 @@ check("B/U2 确认框正文: 明示「省略即默认取本次调用会话」＋
 	(() => {
 		const ask = smOk.uq.requests[0];
 		if (ask === undefined) return false;
-		const body = String(ask.questions[0].question);
+		const body = dialogTextOf(ask.questions);
 		return body.includes("默认取本次调用会话自己") && body.includes("切换后不会迁移：") && body.includes("① 信任") && body.includes("② 成员名册") && body.includes("③ 任务归属")
 			&& body.includes("当前 teammate（若可读）：lead（Lead，running）") && body.includes("请确认它们的结论已落到黑板或文件 —— 本提示不阻断切换。")
 			&& ask.questions[0].options.map((option) => option.label).join(",") === "切换,取消";
@@ -8876,13 +8893,13 @@ check("D5 确认框正文（名册不可读档）: 「当前 teammate（若可�
 	(() => {
 		const ask = d5Env.uq.requests[0];
 		if (ask === undefined) return false;
-		const body = String(ask.questions[0].question);
+		const body = dialogTextOf(ask.questions);
 		return body.includes("当前 teammate（若可读）：（成员名册不可读）") && body.includes("切换后不会迁移：")
 			&& body.includes("① 信任") && body.includes("② 成员名册") && body.includes("③ 任务归属")
 			&& body.includes("请确认它们的结论已落到黑板或文件 —— 本提示不阻断切换。");
 	})());
 check("D5 两档对照: 名册**可读**时同一句照旧逐个列成员（U2 那次确认框），不可读时写「（成员名册不可读）」—— 同一处代码的两个分支，不是两套口径；两次切换都照常落笔",
-	String(smOk.uq.requests[0]?.questions[0]?.question ?? "").includes("当前 teammate（若可读）：lead（Lead，running）")
+	dialogTextOf(smOk.uq.requests[0]?.questions).includes("当前 teammate（若可读）：lead（Lead，running）")
 		&& d5Out.includes("已切换形态") && d5Env.ns.data.teams.find((entry) => entry.name === "host-team").mode === "agent-team");
 
 // --- D3: roster.md 镜像补 mode / Lead 两行，set-mode 落笔后重写镜像 -----------
@@ -8989,7 +9006,7 @@ check("R2 ★ 负相（复用不改切回方向的语义；两种实现上都绿
 	(() => {
 		const ask = r2BackEnv.uq.requests[0];
 		if (ask === undefined) return false;
-		return String(ask.questions[0].question).includes("当前 teammate（若可读）：lead（Lead，running）");
+		return dialogTextOf(ask.questions).includes("当前 teammate（若可读）：lead（Lead，running）");
 	})() && r2BackProbe.calls.tryMembership === 1 && r2BackOut.includes("已切换形态：团队 " + SM_TEAM + " —— agent-team → sessions"));
 
 // --- R3: TOCTOU 复检后镜像与形态史**同源**（曾在确认框期间改 workspace 时分家）------
@@ -12170,7 +12187,7 @@ check("批 E · U3 ③ 同一发的**结构化卡片**（`presentationMeta`，�
 	})());
 check("批 E · U3 ④ 发送方**确认框正文**（同一份正文的第三个可见面）零命中，且两处占位符各带编号",
 	(() => {
-		const question = String(at(u3BeEnv.uq.requests, 0, { questions: [] }).questions?.[0]?.question ?? "");
+		const question = dialogTextOf(at(u3BeEnv.uq.requests, 0, { questions: [] }).questions);
 		return question !== "" && frameClean(question) && question.includes(framePh(1, 2)) && question.includes(framePh(2, 2));
 	})());
 
@@ -14937,7 +14954,7 @@ const pi3Env = rotateEnv({
 });
 pi3Env.senderAgent.session.header.agentPreset = PI_INCUMBENT_PRESET;
 const pi3Out = String(await pi3Env.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: PI_HANDOFF }, execFor(pi3Env.senderAgent)));
-const pi3Dialog = String(pi3Env.uq.requests[0]?.questions?.[0]?.question ?? "");
+const pi3Dialog = dialogTextOf(pi3Env.uq.requests[0]?.questions);
 const pi3Doc = await __testing.latestHandoffDocument(pi3Env.team(), "coordinator");
 const pi3DocText = pi3Doc.path === null ? "" : await readFile(pi3Doc.path, "utf8");
 /** 三项的**取值形态**（这一次三项都继承得到，所以三行里没有「未继承」）。 */
@@ -14992,7 +15009,7 @@ const pi8Env = rotateEnv({ askScript: ["创建并交班"], teams: handoffTeam(PI
 // 前任 = coordinator 的现任 = `session-self`，**活代理**，而它自己从没存过 preset
 // （夹具默认的 header 里没有 agentPreset）—— 这一档走的就是读取器里「活着但没存过」那一支。
 const pi8Out = String(await pi8Env.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: "auto", handoff: PI_HANDOFF }, execFor(pi8Env.senderAgent)));
-const pi8Dialog = String(pi8Env.uq.requests[0]?.questions?.[0]?.question ?? "");
+const pi8Dialog = dialogTextOf(pi8Env.uq.requests[0]?.questions);
 const pi8Doc = await __testing.latestHandoffDocument(pi8Env.team(), "coordinator");
 const pi8DocText = pi8Doc.path === null ? "" : await readFile(pi8Doc.path, "utf8");
 /** 具名如实行的那一段（设计档 §9 的原句形状；主机侧只判「这一段在不在」）。 */
@@ -15043,7 +15060,7 @@ pi9Env.setHiddenAgent(PI9_DEAD, true);
 // 这是「夹具声明它服务的形状」，不是给插件开后门：读取器走的就是 `sessionQuery.readSession`。
 pi9Env.query.readSession = async (id) => { pi9Reads.push(id); return { session: { id, cwd: PI9_WS, agentPreset: PI_INCUMBENT_PRESET }, events: [] }; };
 const pi9Out = String(await pi9Env.tool("team_link_recover").execute({ action: "reappoint", team: "night-shift", role: "worker-b" }, execFor(pi9Env.agentFor("session-self"))));
-const pi9Dialog = String(pi9Env.uq.requests[0]?.questions?.[0]?.question ?? "");
+const pi9Dialog = dialogTextOf(pi9Env.uq.requests[0]?.questions);
 const pi9Doc = await __testing.latestHandoffDocument(pi9Env.team(), "worker-b");
 const pi9DocText = pi9Doc.path === null ? "" : await readFile(pi9Doc.path, "utf8");
 check(`批 P · Pi9 已死前任仍继承（红相＝让「代理不在场」直接**静默成 \`null\`**（即 \`readInheritedPreset\` 在 \`liveAgent === undefined\` 时不走会话级冷读、也不给原因）⇒ \`meta.agentPreset\` 落宿主缺省 ${STUB_DEFAULT_PRESET} 且三处无如实行 ⇒ 本条红）: reappoint 的「自建继任者」这条链上（前任**按定义**已死）预设**仍继承** —— 新会话 \`meta.agentPreset\` 等于盘上那份 header 的值（${PI_INCUMBENT_PRESET} ≠ 缺省 ${STUB_DEFAULT_PRESET}），冷读面被点了名（同一个前任 id），且三处如实行写的是**取值形态**（不是「未继承」）`,
@@ -15388,6 +15405,7 @@ check(`批 R · Rr8 行为零变更（红相＝本轮改到任何既有判据的
 		&& rrNonRrRed.length === 0
 		&& rrRrCount === 14
 		&& assertions === 1726);
+
 
 
 // ===========================================================================
@@ -16289,6 +16307,86 @@ uOkEnv.eventsBySession["session-self"] = [uDownTick, { type: "assistant/message"
 await uOkEnv.watchdog.patrol({ now: WD_NOW });
 check("批 U · U5 对照：上一拍 tick **有** assistant 回复 ⇒ 照旧 followup 唤醒（降级只在证据成立时发生）",
 	uOkEnv.senderCalls.followedup.length === 1 && uOkEnv.senderCalls.injected.length === 0);
+
+
+// 批 V（2026-11-04 真机热修）· 确认框的布局合同：question 一行话、正文进滚动区
+// ---------------------------------------------------------------------------
+// 起因（真机）：协调者把 worker 的「自述上下文耗尽」当成换届理由，让 worker 发起
+// `team_link_rotate action=prepare successor:"auto"`；确认框弹出来时**看不到「创建并交班 / 取消」**
+// —— 15 行披露被写进了 `question`，而壳把它渲进**不能滚、没有高度钳制**的 header，卡片
+// `max-height:min(60vh,520px);overflow:hidden` 把动作底栏裁掉了（与 2026-09-21 `/team_session`
+// 的 8 次够不着同一形态）。
+//
+// 修法：插件里**唯一**的 `userQuestions.ask` 调用点（`lib/shared.js` 的 `askDialog`）先把每个
+// 问题归一成「一行 headline + detail」，任何调用点把长正文塞进 `question` 都会被搬到 detail。
+// 本块判据 V1–V8 刻意放在 Rr8 **之后**：Rr8 的判定面（既有断言全绿 ＋ assertions === 1726）
+// 一个字符未动，本块只落在它之后。
+// ===========================================================================
+const dvNorm = typeof qShared.normalizeDialogQuestion === "function" ? qShared.normalizeDialogQuestion : undefined;
+const dvText = (entry) => {
+	const q = typeof entry?.question === "string" ? entry.question : "";
+	const d = typeof entry?.detail === "string" ? entry.detail : "";
+	return `${q}\n${d}`;
+};
+/** 归一器的三种形状：多行正文 / 超长单行 / 短问句（逐字节不变）。 */
+const dvMulti = dvNorm === undefined ? {} : dvNorm({ id: "probe", question: "标题一句话\n\n- 细节 A\n- 细节 B", detail: "既有 detail" });
+const dvLong = dvNorm === undefined ? {} : dvNorm({ id: "probe", question: "L".repeat(400), detail: undefined });
+const dvShort = dvNorm === undefined ? {} : dvNorm({ id: "probe", question: "短问句？", detail: "短正文" });
+check("批 V · V4 归一器（红相＝没有归一器（旧实现）/ 只截断不搬运 / 把短问句也改写 ⇒ 本条红）: ① **多行**问句 ⇒ question 只剩第一行（单行）、第 2 行起**按原序**进 detail（原有 detail 原样跟在后面，一个字不丢）；② **超长单行**（400 码点）⇒ question 截到 " + (dvNorm === undefined ? "160" : String(qShared.DIALOG_QUESTION_MAX_POINTS)) + " 码点（留省略号）、被截掉的尾巴进 detail（首尾相接后除省略号外逐字找回）；③ **短问句** ⇒ question / detail **逐字节不变**（归一器不改本来就合规的框）"
+	+ (dvNorm === undefined ? "（实测：lib/shared.js 里没有 normalizeDialogQuestion）" : `（实测：multi=${show({ q: dvMulti.question, d: dvMulti.detail })} · long=${show({ cp: [...String(dvLong.question ?? "")].length, tail: String(dvLong.detail ?? "").slice(0, 8) })}）`),
+	dvNorm !== undefined
+		&& dvMulti.question === "标题一句话" && !dvMulti.question.includes("\n")
+		&& dvMulti.detail.startsWith("- 细节 A\n- 细节 B") && dvMulti.detail.endsWith("既有 detail")
+		&& [...String(dvLong.question)].length === qShared.DIALOG_QUESTION_MAX_POINTS && String(dvLong.question).endsWith("…")
+		&& String(dvLong.question).slice(0, -1) + String(dvLong.detail) === "L".repeat(400)
+		&& dvShort.question === "短问句？" && dvShort.detail === "短正文");
+// V5：结构锁 —— 插件里 `userQuestions.ask(` 只剩 **1** 处（shared.js 的 askDialog）。
+const dvLibDir = fileURLToPath(new URL("./lib/", import.meta.url));
+const dvAskSites = [];
+for (const name of readdirSync(dvLibDir).filter((entry) => entry.endsWith(".js")).sort()) {
+	const hits = (readFileSync(path.join(dvLibDir, name), "utf8").match(/userQuestions\.ask\(/gu) ?? []).length;
+	if (hits > 0) dvAskSites.push(`${name}:${hits}`);
+}
+check("批 V · V5 结构锁（红相＝任何新对话框绕过归一器直接调 `userQuestions.ask` ⇒ 本条红；修复前 12 处 ⇒ 红）: 插件里 `userQuestions.ask(` **恰 1 处**，且那一处是 `lib/shared.js` 的 askDialog（其余对话框全部经它）",
+	dvAskSites.length === 1 && dvAskSites[0] === "shared.js:1"
+		&& readFileSync(path.join(dvLibDir, "shared.js"), "utf8").includes("export async function askDialog"));
+// V1：真机那一具 —— 换届 prepare successor:"auto" 的确认框。
+const dvAuto = at(at(autoEnv.uq.requests, 0, {}).questions, 0, {});
+const dvAutoQuestion = typeof dvAuto.question === "string" ? dvAuto.question : "";
+const dvAutoText = dvText(dvAuto);
+check("批 V · V1 真机复现（换届 prepare successor:\"auto\" 的确认框，红相＝15 行披露还在 question 里 ⇒ question 多行/超长 ⇒ 本条红）: `question` 只是**一行标题**（单行、≤160 码点、含「即将自动换届」），整篇披露（继承清单 / 保守成本 / 选取消=零副作用 / {{model}} 那句）都在 `detail`（滚动区）—— 动作底栏因此不再被 header 挤出卡片"
+	+ (dvAutoQuestion.includes("\n") || [...dvAutoQuestion].length > 160 ? `（实测 question=${show(dvAutoQuestion.slice(0, 120))} cp=${[...dvAutoQuestion].length}）` : ""),
+	dvAutoQuestion !== "" && !dvAutoQuestion.includes("\n") && [...dvAutoQuestion].length <= 160
+		&& dvAutoQuestion.includes("即将自动换届")
+		&& dvAutoText.includes("继承清单") && dvAutoText.includes("保守成本口径") && dvAutoText.includes("什么都不做") && dvAutoText.includes("{{model}}"));
+// V2：claim 的确认框（逐项勾选 pairs）。
+const dvClaim = at(at(rotA.uq.requests, 0, {}).questions, 0, {});
+const dvClaimQuestion = typeof dvClaim.question === "string" ? dvClaim.question : "";
+const dvClaimText = dvText(dvClaim);
+check("批 V · V2 claim 确认框（红相＝多行/超长的 question ⇒ 本条红）: `question` 单行 ≤160 码点、点名「交接到」，未勾选即清理的整句在 `detail`",
+	dvClaimQuestion !== "" && !dvClaimQuestion.includes("\n") && [...dvClaimQuestion].length <= 160
+		&& dvClaimQuestion.includes("交接到") && dvClaimText.includes("未勾选的通道将随退役清理"));
+// V6/V7：模型可见面 —— 「换届不是重启手段 / 只有用户明确要求时才发起 / 自述百分比不可采信」。
+// 读的是**注册出来的那具工具**的 description（模型真正读到的那一面），不是源码字符串。
+const dvRotateDescription = typeof autoEnv?.tool === "function" ? String(autoEnv.tool("team_link_rotate")?.description ?? "") : "";
+check("批 V · V6 发起前自检（红相＝description 里没有这三条 ⇒ 模型拿不到「先问用户 / 自述百分比不可采信 / 换届不是重启手段」⇒ 本条红）: `team_link_rotate` 的 description 明写①必须先得到用户的明确同意（不在场不发起） ②自述百分比一律不可采信（宿主按压力自动压缩、不存在预算耗尽） ③换届不是重启手段",
+	dvRotateDescription.includes("必须先得到用户的明确同意") && dvRotateDescription.includes("用户不在场时发起") && dvRotateDescription.includes("成员自述的百分比一律不可采信")
+		&& dvRotateDescription.includes("换届不是重启手段") && dvRotateDescription.includes("结构上不存在「预算耗尽」"));
+const dvCharter = __testing.renderCharterLines("dv-team", "session-self");
+check("批 V · V7 宪章与义务行（红相＝两处任一缺句 ⇒ 本条红）: ① 协调者宪章写明「团队结构变更（新建会话 / 换届 / 删团队）一律先问用户」且「成员自述上下文耗尽不算判据」；② worker 义务行写明「上下文压力不是停手理由」；③ 宪章行数仍在 CHARTER_MAX_LINES 内（不是靠删规则换来的）",
+	dvCharter.includes("团队结构变更（新建会话 / 换届 / 删团队）一律先问用户") && dvCharter.includes("成员自述「上下文耗尽」不算判据")
+		&& __testing.renderWorkerDutyLine("dv-team", "worker-1").includes("上下文占用不是停手理由")
+		&& dvCharter.split("\n").length <= __testing.CHARTER_MAX_LINES);
+// V8：状态卡第 ⑧ 段的轮换标记 —— 候选只在用户点头之后才变成动作。
+check("批 V · V8 轮换标记（红相＝只给现成命令、不写判断权与「先问用户」⇒ 本条红）: 第 ⑧ 段的标记行仍以「→ 轮换（只标记、不自动」开头，且明写判断权在用户、换届前先问用户、上下文压力不是换届理由",
+	b7Section.some((line) => line.startsWith("→ 轮换（只标记、不自动") && line.includes("判断权在用户") && line.includes("先问用户") && line.includes("上下文压力不是换届理由")));
+// --- 批 V · V3：整队换届的确认框同样只拿一行 headline（真机 2026-11-04 的同一形态）---------
+const sr3Dialog = at(at(sr3CancelEnv.uq.requests, 0, {}).questions, 0, {});
+const sr3Question = typeof sr3Dialog.question === "string" ? sr3Dialog.question : "";
+const sr3DialogText = `${sr3Question}\n${typeof sr3Dialog.detail === "string" ? sr3Dialog.detail : ""}`;
+check("批 V · V3 整队换届确认框（红相＝question 多行/超长（正文塞进 header）⇒ 本条红）: `question` 单行 ≤160 码点，逐角色明细 / 令牌 / 写盘 / Phase B 一个不省这些正文在 `detail` 里 —— 「确认整队换届 / 取消」不再被挤出卡片",
+	sr3Question !== "" && !sr3Question.includes("\n") && [...sr3Question].length <= 160
+		&& sr3Question.includes("即将整队换届") && sr3DialogText.includes("逐角色") && sr3DialogText.includes("Phase B 一个不省"));
 
 rmTestRoot();
 

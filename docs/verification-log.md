@@ -5070,11 +5070,62 @@ EXIT=0
 
 修复后读数：`node host-half.test.mjs` ⇒ `ALL PASS / assertion total: 1783 (failed: 0)`，`EXIT=0`；`[CJ-U6-SETTLE]` 出现在 U6 的 PASS 之后（实读日志行号 39070）。
 
+## 2026-11-04 · 批 V（热修）：换届确认框看不见按钮 —— question 布局合同 ＋ 发起前自检
 
+**触发（真机，用户报）**：团队 `server-line-1021` 的协调者 `team-link-server-line-1021-coordinator-bfc0c9e7`
+把 worker-1 的自述「上下文接近用尽 / ~2%」当成换届理由，自行把 `team_link_rotate action=prepare successor:"auto"`
+投给 worker 执行；确认框弹在 worker 会话里，**没有「创建并交班 / 取消」**。
 
+**取证（原始会话日志，事件 seq 逐条）**
 
+| 读数 | 位置 | 原文（截断） |
+|---|---|---|
+| worker 自述 | worker 会话 `team-link-server-line-1021-worker-1-c8a337d3`，`seq=8892`（turn 78） | 「状态：上下文接近用尽，停手报告」；同轮 reasoning「Context ~2%」 |
+| 插件真读数（同一时段） | worker 会话资源行，`seq=8884` / `seq=8987` | `压力 704.4K（67.2%）` / `压力 715.4K（68.2%）`（窗口 1.05M） |
+| 协调者发起换届 | 协调者会话 `seq=5690`（14:34:03） | 「【请做最后一件：发起换届】执行 `team_link_rotate action=prepare … successor=auto`」 |
+| 重投（角色名更正） | 协调者会话 `seq=5721` | `role=worker-1`（第一次写成 `worker` 被闸门拒绝：零建会话 / 零令牌 / 零 freeze） |
+| 协调者自己的读数 | 协调者会话 `seq=5749` | 「用户现在看到了它，但点不到按钮（弹在你会话里）」 |
+| 协调者没有真读数 | 协调者会话 `seq=37`（11-03） | `team_link_status` **宿主 30s 超时**；11-04 全程再无状态卡读数 |
 
+**根因（宿主布局，逐条从 `@deepseek-ai/dsh-client-ui-user-questions/lib/client.js` 读出）**：
+`question` → `header > h2.title`（`.header{flex-shrink:0}`、在滚动容器之外、无高度钳制）；`detail` 与选项在
+`.body{overflow-y:auto}` 内；动作底栏 `footer` 是 `flex-shrink:0` 且在滚动区外；卡片 `.card{max-height:min(60vh,520px);overflow:hidden}`
+⇒ `question` 一长就把选项与底栏**裁掉**。与 2026-09-21 `/team_session` 的 U33「8 次够不着」同一形态，
+但当时只修了那一处：插件 **12 个** `userQuestions.ask` 调用点仍把长正文交给 `question`（本次换届框 **15 行**）。
 
+**修法**：`lib/shared.js` 新增 `askDialog()`（插件里**唯一**调 `userQuestions.ask` 的地方）＋
+`normalizeDialogQuestion()`（第一行 headline 空白压平 ≤160 码点；其余按原序进 `detail`，一字不丢）；12 处调用点全部改走它。
+另加模型可见规则：`team_link_rotate` description（`ROTATION_SELF_CHECK_TEXT`）· 宪章第 4/6 条 · worker 义务行 ·
+状态卡第 ⑧ 段轮换标记（「判断权在用户 / 先问用户 / 上下文压力不是换届理由」）。
 
+**两次实测（本仓，`node host-half.test.mjs`）**
 
+```text
+# 修复前：git stash push -- lib（回 fe0573e 的 lib/），只跑新测试
+FAIL  批 V · V1 真机复现（换届 prepare successor:"auto" 的确认框 …）
+FAIL  批 V · V3 整队换届确认框 …
+FAIL  批 V · V4 归一器 …
+FAIL  批 V · V5 结构锁（userQuestions.ask( 恰 1 处）…
+FAIL  批 V · V6 发起前自检 …
+FAIL  批 V · V7 宪章与义务行 …
+FAIL  批 V · V8 轮换标记 …
+7 FAILURE(S)
+assertion total: 1791 (failed: 7)
+
+# 修复后
+ALL PASS
+assertion total: 1791 (failed: 0)
+EXIT=0
+```
+
+**如实分解**：8 条新判据里 **7 条实测红**；`批 V · V2`（claim 确认框）**修复前即绿** —— 该框本来就单行且 ≤160，
+它守的是「未来别把它改坏」，不冒充红相。修复前那次红跑同时确认：`Tr7`（= 1758 条既有判据全绿）与 `Rr8`
+（既有断言全绿 ＋ `assertions === 1726`）**都绿**，红项只有 V1/V3/V4/V5/V6/V7/V8 —— 也就是本批自己的判据。
+
+**字节 / 计数同改**：`lib/index.js` 261,834 → **261,905 B**（< 262,144，余量 239；`docs/2026-10-15-store-compliance.md` §六同批改准）；
+README 计数 `1791 + 310`（三处同改：badge / 稳定性行 / §十）；新增设计档 `docs/2026-11-04-rotation-dialog-hotfix-design.md`。
+
+**未验项（如实）**：① 真机未复验 —— 插件跑在宿主进程，本机 `link:` 接线 ⇒ **需 DSH 重启**（时机由用户定，本单不做）；
+② `team_link_status` 的 30s 超时属另一类（宿主 / 读面耗时），本批不修；③ 本批不改 `lib/client.js`，但同批跑过 `client-half.test.mjs` 作回归：`ALL PASS / assertion total: 310 (failed: 0)`、`EXIT=0`；
+④ 两次原始日志在本地 `.investigations/rotation-hallucination-2026-11-04/`（`*.log` 被 `.gitignore` 排除，不入库）。
 

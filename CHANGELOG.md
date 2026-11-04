@@ -4,6 +4,32 @@
 
 格式：每个版本按 **修了什么 → 为什么 → 怎么验证** 组织。凡涉及行为修复的条目都附**变异验证**证据（修复前必红 / 修复后全绿），这是本仓库的验收文化。
 
+## 未发布 — 批 V：换届确认框看不见按钮（question 布局合同）＋ 发起前自检（2026-11-04 真机）
+
+**一句话**：确认框的 `question` 从此只能是**一行话** —— 正文一律进可滚动的 `detail`，动作底栏不再被挤出卡片（`/team_session` 之外 **12 个对话框**统一收口到 `askDialog`）；同时给模型立三条规矩：换届必须**先得到用户明确同意**、成员自述的上下文百分比**不可采信**、**换届不是重启手段**。
+
+### 三段话（用户视角）
+
+**① 现象与根因（前因）**：2026-11-04 14:33，`server-line-1021` 的协调者收到 worker-1 自述「上下文接近用尽 / ~2%」（同一步插件真读数 **66.6%**，06:46 为 **68.4%**），**自行决定换届**并把 `team_link_rotate action=prepare successor:"auto"` 投给 worker 执行（协调者日志 `seq=5690`，角色名写错后重投 `seq=5721`）；确认框随后在 **worker 会话**弹出，用户能看到框、**看不到「创建并交班 / 取消」**（协调者自己记的读数：`seq=5749`）。根因在宿主布局：`question` 渲进**不滚、无高度钳制**的 `<header><h2>`，`detail` 与选项在 `.body{overflow-y:auto}` 内，动作底栏在滚动区外，而卡片 `max-height:min(60vh,520px);overflow:hidden` ⇒ `question` 一长就把按钮裁掉。这与 2026-09-21 `/team_session` 的「8 次够不着」是**同一形态**；当时只修了那一处，其余 **12 个对话框**仍把长正文交给 `question`（本次换届框正文 **15 行**）。协调者一侧还有第二个因素：它 2026-11-03 唯一一次 `team_link_status` **宿主 30s 超时**（`seq=37`），11-04 全程没有真读数；而状态卡第 ⑧ 段的轮换标记只给现成命令，没写「先问用户」。
+
+**② 现在怎么做的**：新增 `lib/shared.js` 的 `askDialog()` —— 插件里**唯一**调用 `userQuestions.ask` 的地方（结构判据 `V5` 锁住「恰 1 处」）；它先用 `normalizeDialogQuestion()` 把每条问题归一成「第一行 headline（空白压平、≤160 码点）＋ 其余按原序进 `detail`」，**一个字不丢**。12 个调用点全部改走它（rotation auto / batch / claim · send · receive · retire-cleanup · revive · reappoint · set-mode · archive · delete · team_session）。同批给模型立三条规矩，落在三处**模型真会读到**的面：`team_link_rotate` 的 description（`ROTATION_SELF_CHECK_TEXT`；入口档贴近商城上限，故常量住在 `lib/shared.js`）· 协调者宪章第 4/6 条与 worker 义务行 · 状态卡第 ⑧ 段的轮换标记（「判断权在用户 / 先问用户 / 上下文压力不是换届理由」）。
+
+**③ 怎么验证**：判据 **`批 V · V1`–`V8`**（8 条，放在批 U 之后、`rmTestRoot()` 之前 —— 不扰批 T 的 `Tr7` 回归锁计数）。**两次实测**：修复前（`git stash` 回 `fe0573e` 的 `lib/`）⇒ `assertion total: 1791 (failed: 7)`，红项恰为 **V1 / V3 / V4 / V5 / V6 / V7 / V8**（**V2 修复前绿**，如实标为覆盖缺口类：claim 框本来就单行 ≤160）；修复后 ⇒ `ALL PASS / assertion total: 1791 (failed: 0)`、`EXIT=0`。两次原始日志在本地 `.investigations/rotation-hallucination-2026-11-04/red-host2.log` / `green-host2.log`（`*.log` 入 `.gitignore`，不入库；复跑命令与读数已抄进 `docs/verification-log.md` 的 2026-11-04 条）。
+
+### 改了什么（逐面）
+
+- `lib/shared.js`：`DIALOG_QUESTION_MAX_POINTS = 160` · `dialogCodePoints` · `dialogFlatten` · `normalizeDialogQuestion` · `normalizeDialogQuestions` · `askDialog` · `ROTATION_SELF_CHECK_TEXT`（含宿主三段布局的逐条注释）。
+- 12 处 `userQuestions.ask({...})` → `askDialog(userQuestions, {...})`（index / rotation / messaging / recovery / roster-write / team-registration / team-tools / team-session-creation），各档补 `askDialog` 导入。
+- `lib/sections.js`：宪章第 4 条补「成员自述『上下文耗尽』不算判据」、第 6 条补「团队结构变更（新建会话 / 换届 / 删团队）一律先问用户」；worker 义务行补「上下文占用不是停手理由」；第 ⑧ 段标记行补「判断权在用户 / 先问用户 / 上下文压力不是换届理由」（行数预算不变：宪章仍 7 行 ≤ 8）。
+- `lib/index.js`：description 追加 `ROTATION_SELF_CHECK_TEXT`；`askRotationAuto` 改走 `askDialog`；**入口档字节 261,834 → 261,905**（仍 < 262,144，余量 239 B），合规档 §六同批改准。
+- 测试：`host-half.test.mjs` 新增「批 V」8 条；**15 处**既有断言从「只读 `question`」改为读 `dialogTextOf()`（question ＋ detail 的并集 = 人真正读到的全文）；README 计数 `1791 + 310`；设计档 `docs/2026-11-04-rotation-dialog-hotfix-design.md`。
+
+### 残余声明（如实）
+
+- **V2 修复前绿**：claim 框本来就合规，它不是红相；它守的是「未来别把它改坏」。
+- 真机上**尚未复验**：插件跑在宿主进程里，本机 `link:` 接线 ⇒ **需要 DSH 重启才生效**；重启时机由用户决定，本单不做。
+- `team_link_status` 在协调者会话里 **30s 超时**（2026-11-03 `seq=37`）是本次「手上没有真读数」的放大器，属另一类问题（宿主 / 读面耗时），本批**不修**，如实记在这里。
+
 ## 未发布 — 批 U：看门狗运维面（update / mute / unmute）＋「提醒不许唤醒坏会话」（2026-10-23）
 
 **一句话**：`team_link_watch` 不再只有「注册 → 等 TTL」两扇门 —— 注册后可**就地调整**间隔 / 静默阈 / TTL / 是否唤醒，可**临时静音**（auto 那一条也能由观察者本人按）；而投递在两种情况下改走 `inject`（只进收件箱、**不唤醒新回合**）：注册里 `wake:false`，或观察者上一拍 tick 之后**没有 assistant 回复**（会话可能已在错误循环里）。
