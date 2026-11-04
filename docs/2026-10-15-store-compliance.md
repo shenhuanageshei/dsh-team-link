@@ -96,7 +96,7 @@
 | `lib/watchdog.js` | 54,690 | `lib/team-registration.js` | 50,609 |
 | `lib/policy-store.js` | 39,329 | `lib/forensics.js` | 32,980 |
 | `lib/ledger.js` | 32,556 | `lib/sections.js` | 33,574 |
-| `lib/shared.js` | 32,191 | `lib/team-ledger-tools.js` | 22,742 |
+| `lib/shared.js` | 32,395 | `lib/team-ledger-tools.js` | 22,742 |
 | `lib/sections-lifecycle.js` | 19,126 | `lib/block.js` | 14,609 |
 | `lib/client.js`（浏览器半边） | 156,665 | — | — |
 

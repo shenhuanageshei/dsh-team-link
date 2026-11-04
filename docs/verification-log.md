@@ -5161,3 +5161,16 @@ README 计数 `1791 + 310`（三处同改：badge / 稳定性行 / §十）；�
 **计数同改（本轮）**：README badge / 稳定性行 / §十 三处 → `1793 + 310`（`批 V 新增 10 条`，`1793 = 1783 + 10`）；
 CHANGELOG 红/绿读数与判据条数 → V1–V10；设计档 §5/§8 补 FR-5 与 V9/V10 两行。
 
+## 2026-11-04 补 2 · advisor 第二轮复核与新增一条 🔵 的处置
+
+**第二轮结论**：**VERDICT: PASS**（job `advisor-dsh-b21d4106872843ba`，dsh 路由 `deepseek-official:deepseek-flash`）。第一轮 4 条（2 🟡 + 2 🔵）**逐条复核为真**（合规档 §五/§六 全表收口 · 设计档 §10 偏离登记 · CHANGELOG 16 处断言/17 调用点 · `lib/shared.js` 两处边界注释）；核心面未见回退：`userQuestions.ask(` 仍恰 1 处、12 个 `askDialog` 调用点齐、10 条 `批 V` 判据在 `rmTestRoot()` 之前。
+
+**新增 1 条 🔵（注释口径）**：`lib/shared.js` 的「批 V 实测 262,378 B ⇒ 越限 234 B」是**迁移前中间态**，与合规档现行 `261,905` 并列容易被读成「现在超限」。
+
+| # | Action | Detail |
+|---|---|---|
+| R2-1（新增 🔵） | Fixed | `lib/shared.js` 该段改为「**as-of：批 V 迁移前的中间态曾 262,378 B ⇒ 越限 234 B**；迁到本档后入口现行值 **261,905 B**、< 262,144，见合规档 §六 —— 262,378 不是现状」；合规档逐档表 `lib/shared.js` **32,191 → 32,395**（注释改动后的实测字节，`Rr1` 同一读数）。 |
+| 上一轮 #1–#4 | Verified Fixed | 第二轮复核逐条为真，无遗留（详见上一节响应表）。 |
+
+**验证（注释级改动）**：`node --check lib/shared.js` 通过；**最终态重跑** `node host-half.test.mjs` ⇒ `ALL PASS / assertion total: 1793 (failed: 0)`、`EXIT=0`（日志 `final-host2.log`）；`client-half` 同批 `310 (failed: 0)`。**行为面零变更**（只改注释与合规档字节读数）。
+
