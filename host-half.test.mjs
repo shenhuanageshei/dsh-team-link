@@ -16443,6 +16443,173 @@ const w4Out = String(await w3StatusTool.execute({}, execFor(w2OkEnv.senderAgent)
 check(`批 W · W4 状态卡耗时读数（红相＝没有这一行 ⇒ 下一批无法用真机耗时判断要不要缩读窗 ⇒ 本条红）: 标题行（团队状态卡（读数 …））末尾带「读卡耗时 <数字> ms；工具预算 120s」，且整卡仍以落点行开头（首行红线不破）`,
 	/读卡耗时 \d+ ms；工具预算 120s/u.test(w4Out) && w4Out.split("\n")[0].startsWith("存储：") === true);
 
+
+// ===========================================================================
+// 批 X（2026-11-04 用户裁定）· 整队换届 claim 的「复读合并」
+// 判据 X1–X6。放在批 W 之后、rmTestRoot() 之前（不动上游计数锁）。
+//
+// 归属：docs/2026-11-04-rotation-claim-fresh-merge-design.md（§五 FR-X1…FR-X6 ·
+// §八 判据 X1–X6 · §九 边界 · §十一 测试矩阵）。用户 2026-11-04 的提问是「整队换届
+// （1 协调者 + 4 worker）时各会话先后换届，确认框会不会配到老会话」——调查发现：顺序换届会
+// 收敛，但 claim 原先**只在确认框之前读一次状态**，写盘却是整份 pairs/teams 的替换 ⇒ 后完成
+// 的那一笔把先完成的落定覆盖回旧快照（current 回退、已迁移配对退回旧会话）。
+//
+// 夹具纪律：一律用既有工厂 `rotateEnv`（真工具 + 真 store + 真对话框桩），**不碰墙钟**。
+// 「框开着时发生别的事」用 `makeUserQuestions` 的**函数式 askScript 条目**（:385-390 的既有
+// 语义：函数在对话框仍未决时执行，R1 retire race 用的同一条路）——A 的框里跑完 B 的整个
+// claim，这就是交错本身，不需要任何时钟技巧。
+// 红相纪律：本块只用**旧实现就存在的**出口（工具 + store），不在链接期导入本批新增的名字 ——
+// 否则「修复前红相」会变成「整套件跑不起来」（本仓明令禁止的假红）。
+// ===========================================================================
+const X_ROLE_COORD = "coordinator";
+const X_ROLE_WORKER = "worker-a";
+const X_NEW_A = "session-new-a";
+/** X1/X3/X4 的两人团队：协调者（session-self）＋ worker-a（session-worker-a）＋ worker-b。 */
+const xRoles = () => [
+	{ role: X_ROLE_COORD, current: ROT_SELF, pending: null, history: [{ session: ROT_SELF, from: 1_700_000_000_000, until: null }] },
+	{ role: X_ROLE_WORKER, current: "session-worker-a", pending: null, history: [{ session: "session-worker-a", from: 1_700_000_000_000, until: null }] },
+	{ role: "worker-b", current: "session-worker-b", pending: null, history: [{ session: "session-worker-b", from: 1_700_000_000_000, until: null }] },
+];
+const xTeam = () => ({ name: "night-shift", createdAt: 1_700_000_000_000, workspace: TEAM_WS, policy: { writer: "coordinator" }, roles: xRoles() });
+/** 四个活代理：两个 worker ＋ 两个继任者（B 的继任者必须是活代理，claim 的调用方就是它）。 */
+const xAgents = () => [{ id: "session-worker-a", status: "idle" }, { id: "session-worker-b", status: "idle" }, { id: SUCCESSOR, status: "idle" }, { id: X_NEW_A, status: "idle" }];
+/** B（worker-a）的**完整** claim —— 在 A 的确认框仍未决时跑（交错的那个动作）。 */
+async function xRotateWorker(env) {
+	const prep = String(await env.rotate.execute({ action: "prepare", team: "night-shift", role: X_ROLE_WORKER, successor: X_NEW_A }, env.exec("session-worker-a")));
+	const claim = String(await env.rotate.execute({ action: "claim", team: "night-shift", role: X_ROLE_WORKER, token: tokenOf(prep) }, env.exec(X_NEW_A)));
+	return { prep, claim };
+}
+/** 团队域内配对的端点读数（判据只看这些，不抄实现）。 */
+const xPairsOf = (env) => (env.ns.data.pairs ?? []).map((pair) => [pair.a, pair.b].sort().join("+")).sort();
+const xPairRows = (env) => (env.ns.data.pairs ?? []);
+
+// --- X5（先跑：它读的是**本块之前**那 1797 条的全绿与总数） ----------------------
+// 为什么放在本块最前：`assertions` 在 `check()` 的实参求值那一刻仍是「本块之前」的累计数，
+// 于是「既有 1797 条全绿、一条不差」这句话可以被机器核对（而不是靠记性）。
+check("批 X · X5 既有判据全绿（as-of 批 W cc166e7；红相＝任何既有判据红、或既有条数漂移 ⇒ 本条红）: 本块之前的既有断言总数恰为 1797，且此刻 0 条失败（既有判据的文本/期望值本批一字未改）"
+	+ (failures === 0 && assertions === 1797 ? "" : "（实测：assertions=" + assertions + " failed=" + failures + "）"),
+	failures === 0 && assertions === 1797);
+
+// --- X1：两个 claim 交错（A 的框开着时执行 B 的完整 claim，再回答 A） --------------
+let x1B = null;
+const x1Env = rotateEnv({
+	askScript: [
+		// A（协调者）的确认框：先让 B 整跑一遍，再回答「勾选 B 的旧会话」。
+		async () => {
+			x1B = await xRotateWorker(x1Env);
+			return ["session-worker-a"];
+		},
+		// B（worker-a）自己的确认框答案：勾选它对端（协调者的现任 = session-self）。
+		["session-self"],
+	],
+	pairs: [rotPair("session-worker-a")],
+	extraAgents: xAgents(),
+	teams: [xTeam()],
+});
+const x1Prep = String(await x1Env.rotate.execute({ action: "prepare", team: "night-shift", role: X_ROLE_COORD, successor: SUCCESSOR }, x1Env.exec(ROT_SELF)));
+const x1Claim = String(await x1Env.rotate.execute({ action: "claim", team: "night-shift", role: X_ROLE_COORD, token: tokenOf(x1Prep) }, x1Env.exec(SUCCESSOR)));
+const x1Coord = x1Env.role(X_ROLE_COORD);
+const x1Worker = x1Env.role(X_ROLE_WORKER);
+check("批 X · X1 两个 claim 交错（红相＝后完成的 claim 拿弹框前那份快照整份回写（旧实现）⇒ 先完成的 worker-a 落定被覆盖、current 退回老会话、配对端点退回旧会话 ⇒ 本条红）: A（协调者）的确认框开着时 B（worker-a）的完整 claim 跑完（B 自己也是新会话、团队域内配对端点指向它），随后 A 回答确认框 ⇒ 两个角色都是新会话（coordinator=" + SUCCESSOR + "、worker-a=" + X_NEW_A + "）、团队域内唯一的配对是两个新会话之间的那条、两边的版本史都在（旧任直到闭、新任开着）；且两次 claim 都自报「换届完成」"
+	+ (x1Coord.current === SUCCESSOR && x1Worker.current === X_NEW_A && JSON.stringify(xPairsOf(x1Env)) === JSON.stringify([SUCCESSOR + "+" + X_NEW_A].sort()) ? "" : "（实测：coord=" + x1Coord.current + " worker=" + x1Worker.current + " pairs=" + show(xPairsOf(x1Env)) + "）"),
+	x1B !== null && x1B.claim.includes("换届完成") && x1Claim.includes("换届完成")
+		&& x1Coord.current === SUCCESSOR && x1Worker.current === X_NEW_A
+		&& JSON.stringify(xPairsOf(x1Env)) === JSON.stringify([SUCCESSOR + "+" + X_NEW_A].sort())
+		&& x1Coord.history.some((row) => row.session === SUCCESSOR && row.until === null)
+		&& x1Coord.history.some((row) => row.session === ROT_SELF && typeof row.until === "number")
+		&& x1Worker.history.some((row) => row.session === X_NEW_A && row.until === null)
+		&& x1Worker.history.some((row) => row.session === "session-worker-a" && typeof row.until === "number"));
+
+// --- X2：框开着时 pending 失效（过期清扫 / 取消）⇒ 拒绝、零写入、点名原因与下一步 ----
+let x2PendingSeen = null;
+const x2Env = rotateEnv({
+	askScript: [() => {
+		// 确认框仍开着时，另一次过期清扫（或人工取消）把本次 pending 清掉了。
+		x2PendingSeen = x2Env.role(X_ROLE_COORD).pending?.token ?? null;
+		x2Env.role(X_ROLE_COORD).pending = null;
+		return ["session-worker-a"];
+	}],
+	pairs: [rotPair("session-worker-a")],
+	extraAgents: xAgents(),
+	teams: [xTeam()],
+});
+const x2Prep = String(await x2Env.rotate.execute({ action: "prepare", team: "night-shift", role: X_ROLE_COORD, successor: SUCCESSOR }, x2Env.exec(ROT_SELF)));
+const x2Before = x2Env.ns.updates.length;
+const x2PairsBefore = JSON.stringify(xPairRows(x2Env));
+const x2Out = String(await x2Env.rotate.execute({ action: "claim", team: "night-shift", role: X_ROLE_COORD, token: tokenOf(x2Prep) }, x2Env.exec(SUCCESSOR)));
+check("批 X · X2 框开着时 pending 失效（红相＝拿旧快照继续落定（旧实现）⇒ 名册被改成一个没人在等的换届、盘上多出两笔写 ⇒ 本条红）: 确认框期间该角色的 pending 被清掉 ⇒ claim 拒绝（以「claim 失败」开头 + 点名「确认框期间」发生了什么）、零笔 policy.update、名册与配对逐字节未变（current 仍是旧任）、错误文案给出下一步（重新 prepare）；另自证夹具真的清掉了一枚真令牌（否则本条会假绿）"
+	+ (x2Out.startsWith("claim 失败") ? "" : "（实测：" + show(x2Out.slice(0, 200)) + "）"),
+	x2PendingSeen !== null && x2PendingSeen.length === 36
+		&& x2Out.startsWith("claim 失败") && x2Out.includes("确认框期间") && x2Out.includes("零写入") && x2Out.includes("重新 prepare")
+		&& x2Env.ns.updates.length === x2Before
+		&& x2Env.role(X_ROLE_COORD).current === ROT_SELF && x2Env.role(X_ROLE_COORD).pending === null
+		&& JSON.stringify(xPairRows(x2Env)) === x2PairsBefore);
+
+// --- X3：框开着时对端换届，A 勾选对端的**旧**会话 ⇒ 映射到对端的新现任 --------------
+let x3B = null;
+const x3Env = rotateEnv({
+	askScript: [
+		async () => {
+			x3B = await xRotateWorker(x3Env);
+			return ["session-worker-a"];
+		},
+		["session-self"],
+	],
+	// 第二条 pair 的对端在团队域外（随退役清理）—— 用来钉「清理」那一行（FR-X5）。
+	pairs: [rotPair("session-worker-a"), { a: ROT_SELF, b: ROT_OUTSIDE, createdAt: 2 }],
+	extraAgents: xAgents(),
+	teams: [xTeam()],
+});
+const x3Prep = String(await x3Env.rotate.execute({ action: "prepare", team: "night-shift", role: X_ROLE_COORD, successor: SUCCESSOR }, x3Env.exec(ROT_SELF)));
+const x3Claim = String(await x3Env.rotate.execute({ action: "claim", team: "night-shift", role: X_ROLE_COORD, token: tokenOf(x3Prep) }, x3Env.exec(SUCCESSOR)));
+check("批 X · X3 对端换届映射（红相＝按 pairKey 严格匹配（旧实现）⇒ 用户勾的通道静默丢失、写出「新 ↔ 旧」或干脆不迁移 ⇒ 本条红）: A 的框开着时 B 先换届；A 勾选的是 B 的旧会话 session-worker-a ⇒ 最终配对是 A新 ↔ B新（" + SUCCESSOR + " ↔ " + X_NEW_A + "），且回执里同时有「已映射」行（点名旧会话 → 新现任）与「随退役清理」行（域外那条 pair，按复读后的计划重算）"
+	+ (x3Env.role(X_ROLE_WORKER).current === X_NEW_A && JSON.stringify(xPairsOf(x3Env)) === JSON.stringify([SUCCESSOR + "+" + X_NEW_A].sort()) ? "" : "（实测：worker=" + x3Env.role(X_ROLE_WORKER).current + " pairs=" + show(xPairsOf(x3Env)) + "）"),
+	x3B !== null && x3B.claim.includes("换届完成")
+		&& x3Env.role(X_ROLE_COORD).current === SUCCESSOR && x3Env.role(X_ROLE_WORKER).current === X_NEW_A
+		&& JSON.stringify(xPairsOf(x3Env)) === JSON.stringify([SUCCESSOR + "+" + X_NEW_A].sort())
+		&& x3Claim.includes("已映射") && x3Claim.includes("session-worker-a") && x3Claim.includes(X_NEW_A)
+		&& x3Claim.includes("已随退役清理") && x3Claim.includes(ROT_OUTSIDE));
+
+// --- X4：无人应答（超时 / 取消）⇒ 按**最新**候选人全选迁移（provisional） ----------
+let x4B = null;
+const x4Env = rotateEnv({
+	askScript: [
+		async () => {
+			x4B = await xRotateWorker(x4Env);
+			// 确认框「没人回答」：调用方在等待期间被中止（真实投递的 AbortError 形状）。
+			throw Object.assign(new Error("aborted by the caller"), { name: "AbortError" });
+		},
+		["session-self"],
+	],
+	pairs: [rotPair("session-worker-a")],
+	extraAgents: xAgents(),
+	teams: [xTeam()],
+});
+const x4Prep = String(await x4Env.rotate.execute({ action: "prepare", team: "night-shift", role: X_ROLE_COORD, successor: SUCCESSOR }, x4Env.exec(ROT_SELF)));
+const x4Claim = String(await x4Env.rotate.execute({ action: "claim", team: "night-shift", role: X_ROLE_COORD, token: tokenOf(x4Prep) }, x4Env.exec(SUCCESSOR)));
+const x4Pairs = xPairRows(x4Env);
+check("批 X · X4 无人应答按最新候选（红相＝按弹框前那份候选全选（旧实现）⇒ 迁到对端的旧会话上（或迁一条已经失效的通道）⇒ 本条红）: A 的框开着时 B 先换届、A 的框无人应答（调用方中止）⇒ 迁移的是复读后的候选：配对是 " + SUCCESSOR + " ↔ " + X_NEW_A + " 且 provisional === true（24h 回退窗口已开）、worker-a 的落定不被回滚，回执按最新候选数自报 provisional 迁移"
+	+ (x4Pairs.length === 1 && x4Pairs[0].provisional === true ? "" : "（实测：pairs=" + show(x4Pairs) + " worker=" + x4Env.role(X_ROLE_WORKER).current + "）"),
+	x4B !== null && x4B.claim.includes("换届完成")
+		&& x4Env.role(X_ROLE_COORD).current === SUCCESSOR && x4Env.role(X_ROLE_WORKER).current === X_NEW_A
+		&& x4Pairs.length === 1
+		&& ((x4Pairs[0].a === SUCCESSOR && x4Pairs[0].b === X_NEW_A) || (x4Pairs[0].a === X_NEW_A && x4Pairs[0].b === SUCCESSOR))
+		&& x4Pairs[0].provisional === true && x4Pairs[0].expiresAt > 0
+		&& x4Env.role(X_ROLE_COORD).provisional !== null
+		&& x4Claim.includes("全部 1 条域内候选以 provisional 迁移")
+		&& x4Claim.includes("调用方中止"));
+
+// --- X6：成功路径仍是**两笔** policy.update（写次数不增） ---------------------------
+const x6Env = rotateEnv({ askScript: [["session-worker-a"]], pairs: [rotPair("session-worker-a")], extraAgents: xAgents(), teams: [xTeam()] });
+const x6Prep = String(await x6Env.rotate.execute({ action: "prepare", team: "night-shift", role: X_ROLE_COORD, successor: SUCCESSOR }, x6Env.exec(ROT_SELF)));
+const x6Before = x6Env.ns.updates.length;
+const x6Claim = String(await x6Env.rotate.execute({ action: "claim", team: "night-shift", role: X_ROLE_COORD, token: tokenOf(x6Prep) }, x6Env.exec(SUCCESSOR)));
+const x6Writes = x6Env.ns.updates.length - x6Before;
+check("批 X · X6 写入次数不增（红相＝复读合并顺手多写一笔（例如把复读结果单独落一次）⇒ 3 笔 ⇒ 本条红）: 成功路径仍恰 2 笔 policy.update（落定一笔 ＋ 清 pending 一笔）—— 复读不产生额外写盘"
+	+ (x6Writes === 2 ? "" : "（实测：writes=" + x6Writes + " " + show(x6Env.ns.updates.slice(x6Before).map((patch) => Object.keys(patch).join(","))) + "）"),
+	x6Claim.includes("换届完成") && x6Writes === 2);
+
+
 rmTestRoot();
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
