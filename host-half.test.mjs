@@ -16380,6 +16380,17 @@ check("批 V · V7 宪章与义务行（红相＝两处任一缺句 ⇒ 本条�
 // V8：状态卡第 ⑧ 段的轮换标记 —— 候选只在用户点头之后才变成动作。
 check("批 V · V8 轮换标记（红相＝只给现成命令、不写判断权与「先问用户」⇒ 本条红）: 第 ⑧ 段的标记行仍以「→ 轮换（只标记、不自动」开头，且明写判断权在用户、换届前先问用户、上下文压力不是换届理由",
 	b7Section.some((line) => line.startsWith("→ 轮换（只标记、不自动") && line.includes("判断权在用户") && line.includes("先问用户") && line.includes("上下文压力不是换届理由")));
+// V9/V10：读数本身要给出结论 —— 「上下文占用不是停工理由」，且按团队形态区分（用户 2026-11-04 裁定）。
+const dvResourceLine = String(wb2SelfLine ?? "");
+check("批 V · V9 资源行自带结论（红相＝只有数字、没有「这不是停工理由」的结论 ⇒ 本条红）: 每回合的资源行仍是**单行**、以 [team-link 会话资源] 开头、四项读数在场，**且**明写「独立会话（宿主自动压缩；占用高不是停工理由）」——模型不必再从百分比自行推断「该不该干活」",
+	dvResourceLine.startsWith("[team-link 会话资源]") && !dvResourceLine.includes("\n")
+		&& dvResourceLine.includes("窗口 1.00M") && dvResourceLine.includes("压力 250.0K（25.0%）")
+		&& dvResourceLine.includes("独立会话（宿主自动压缩；占用高不是停工理由）"));
+const dvBudgetHeader = String(at(__testing.budgetSectionLines(b7Env.ctx, ["b7-1"]), 0, ""));
+check("批 V · V10 第 ⑧ 段标题说清两种形态（红相＝只报读数、不写「sessions 档成员是独立 session / agent-team 档是子代理」⇒ 本条红）: 段头仍以「--- 资源/预算（⑧」开头且只有一行，明写 sessions 档成员各自是独立 session（宿主自动压缩）、agent-team 档成员是**本会话子代理**，并给出「占用都不是停工/换届判据」的结论",
+	dvBudgetHeader.startsWith("--- 资源/预算（⑧") && !dvBudgetHeader.includes("\n")
+		&& dvBudgetHeader.includes("sessions 档成员各自是独立 session") && dvBudgetHeader.includes("agent-team 档成员是本会话子代理")
+		&& dvBudgetHeader.includes("占用都不是停工/换届判据"));
 // --- 批 V · V3：整队换届的确认框同样只拿一行 headline（真机 2026-11-04 的同一形态）---------
 const sr3Dialog = at(at(sr3CancelEnv.uq.requests, 0, {}).questions, 0, {});
 const sr3Question = typeof sr3Dialog.question === "string" ? sr3Dialog.question : "";

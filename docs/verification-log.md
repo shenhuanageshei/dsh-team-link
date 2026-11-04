@@ -5129,3 +5129,35 @@ README 计数 `1791 + 310`（三处同改：badge / 稳定性行 / §十）；�
 ② `team_link_status` 的 30s 超时属另一类（宿主 / 读面耗时），本批不修；③ 本批不改 `lib/client.js`，但同批跑过 `client-half.test.mjs` 作回归：`ALL PASS / assertion total: 310 (failed: 0)`、`EXIT=0`；
 ④ 两次原始日志在本地 `.investigations/rotation-hallucination-2026-11-04/`（`*.log` 被 `.gitignore` 排除，不入库）。
 
+## 2026-11-04 补 · 读数自带结论（V9/V10）＋ advisor 事后评审与逐条响应
+
+**用户追加裁定（原话）**：「模型幻觉本身拦不住—— 起码你的读数告诉它，即使 70% 上下文了，只要不是 agents team 模式，
+各个 worker 都是 session，有自带的上下文压缩机制，上下文不是不干活的接口」。
+
+**改了什么**：① `renderResourceLine`（每回合资源行）追加 `独立会话（宿主自动压缩；占用高不是停工理由）`，仍**恰一行**、四项读数原样；
+② `budgetSectionLines` 第 ⑧ 段段头按形态写清：sessions 档成员各自是独立 session（宿主自动压缩）、agent-team 档成员是**本会话子代理**，
+并给出「占用都不是停工/换届判据」的结论（段头仍 1 行，段体行数预算不变）。
+
+**红相（V9/V10）**：在**中间态**（`b21221d` 的 `lib/`：确认框已修、读数未修）上跑最终测试文件 ⇒
+`assertion total: 1793 (failed: 5)`，红项 = **V9 / V10** 与 **`批 L · Aw5` 一次计时抖动**（`[AW5-DIAG] seamCalls=9`，期望 6；
+该判据在本批其余 4 次跑里均绿，属已知非确定性，与本批改动无因果 —— 本批未碰 policy 写面）。日志：`.investigations/rotation-hallucination-2026-11-04/red-host3.log`。
+
+**绿相（最终态）**：`node host-half.test.mjs` ⇒ `ALL PASS / assertion total: 1793 (failed: 0)`、`EXIT=0`（十项 `批 V · V1–V10` 全绿、Aw5 绿）；
+`node client-half.test.mjs` ⇒ `ALL PASS / assertion total: 310 (failed: 0)`、`EXIT=0`。日志：`green-host3.log` / `final-client.log`。
+
+**advisor 事后评审**（用户要求，2026-11-04，`advisor(type=code)`，dsh 路由 `zai-coding-cn:glm-5.3`，job `advisor-dsh-25e70ae5e6124d49`）：
+**结论 VERDICT: PASS，无 🔴**；2 🟡（合规档计数收口 / 流程登记）＋ 2 🔵（注释级边界）。逐条响应：
+
+| # | Action | Detail |
+|---|---|---|
+| 1 | Fixed | 合规档 §五/§六 全量收口到批 V 后读数：§五「工具面 11 个 / 1758 + 310」→「12 个 / 1793 + 310」；§六 首段与逐档表重测（`index.js` **261,905** · `shared.js` **32,191** · `sections.js` **33,574** · `rotation.js` **144,761** · `messaging.js` 62,535 · `recovery.js` 59,062 · `roster-write.js` 55,733 · `team-registration.js` 50,609 · `team-tools.js` 60,945 · `team-session-creation.js` 61,121），as-of 链补「批 U 后 1783 → 批 V 后 1793」；§六 首段权威值 = `Rr1` 实测值。见 `docs/2026-10-15-store-compliance.md:70,81,85,89-99,105`。 |
+| 2 | Fixed（登记） | 设计档新增 §10「过程偏离登记与评审结论」：登记「实施先于用户发起的设计评审」、用户异议原话、advisor 评审 PASS、**后续 `lib/**`/`test/**` 恢复常规门禁**、本档不构成热修豁免先例；CHANGELOG「残余声明」同批登记。见 `docs/2026-11-04-rotation-dialog-hotfix-design.md` §10。 |
+| 3 | Fixed | CHANGELOG 计数改为实测：**16 处断言 / 17 个 `dialogTextOf()` 调用点**（`grep -o 'dialogTextOf(' host-half.test.mjs` = 17，其中 `:5609`+`:5610` 两个调用点同属一条 check）。见 `CHANGELOG.md` 批 V「改了什么」第 5 条。 |
+| 4 | Fixed | `lib/shared.js` 两处补边界注释：① 归一后 `detail` 为空串时该键会被**移除**（设计只承诺「不新增空键」）；② `questions` 缺失/非数组原样透传（宿主自行拒绝），**不要**补空数组把「写错了」变沉默。见 `normalizeDialogQuestion` 与 `askDialog` 注释。 |
+
+**过程偏离登记**：本批为真机热修，**实施先于用户发起的设计评审**；用户当面对此提出异议（「谁让你直接修的，你起个 advisor 评审一下」）。
+处置：已补 advisor 事后评审（结论 PASS）；后续改动恢复「设计档 → 用户发起评审 → 实施」门禁。此项同时写进设计档 §10 与 CHANGELOG「残余声明」。
+
+**计数同改（本轮）**：README badge / 稳定性行 / §十 三处 → `1793 + 310`（`批 V 新增 10 条`，`1793 = 1783 + 10`）；
+CHANGELOG 红/绿读数与判据条数 → V1–V10；设计档 §5/§8 补 FR-5 与 V9/V10 两行。
+

@@ -6,7 +6,7 @@
 
 ## 未发布 — 批 V：换届确认框看不见按钮（question 布局合同）＋ 发起前自检（2026-11-04 真机）
 
-**一句话**：确认框的 `question` 从此只能是**一行话** —— 正文一律进可滚动的 `detail`，动作底栏不再被挤出卡片（`/team_session` 之外 **12 个对话框**统一收口到 `askDialog`）；同时给模型立三条规矩：换届必须**先得到用户明确同意**、成员自述的上下文百分比**不可采信**、**换届不是重启手段**。
+**一句话**：确认框的 `question` 从此只能是**一行话** —— 正文一律进可滚动的 `detail`，动作底栏不再被挤出卡片（`/team_session` 之外 **12 个对话框**统一收口到 `askDialog`）；同时给模型立三条规矩：换届必须**先得到用户明确同意**、成员自述的上下文百分比**不可采信**、**换届不是重启手段**；并按用户 2026-11-04 追加裁定让**读数自带结论**——资源行与第 ⑧ 段段头都明写「上下文占用不是停工/换届判据」（sessions 档成员各自是独立 session、各有宿主压缩；agent-team 档成员是本会话子代理）。
 
 ### 三段话（用户视角）
 
@@ -14,21 +14,23 @@
 
 **② 现在怎么做的**：新增 `lib/shared.js` 的 `askDialog()` —— 插件里**唯一**调用 `userQuestions.ask` 的地方（结构判据 `V5` 锁住「恰 1 处」）；它先用 `normalizeDialogQuestion()` 把每条问题归一成「第一行 headline（空白压平、≤160 码点）＋ 其余按原序进 `detail`」，**一个字不丢**。12 个调用点全部改走它（rotation auto / batch / claim · send · receive · retire-cleanup · revive · reappoint · set-mode · archive · delete · team_session）。同批给模型立三条规矩，落在三处**模型真会读到**的面：`team_link_rotate` 的 description（`ROTATION_SELF_CHECK_TEXT`；入口档贴近商城上限，故常量住在 `lib/shared.js`）· 协调者宪章第 4/6 条与 worker 义务行 · 状态卡第 ⑧ 段的轮换标记（「判断权在用户 / 先问用户 / 上下文压力不是换届理由」）。
 
-**③ 怎么验证**：判据 **`批 V · V1`–`V8`**（8 条，放在批 U 之后、`rmTestRoot()` 之前 —— 不扰批 T 的 `Tr7` 回归锁计数）。**两次实测**：修复前（`git stash` 回 `fe0573e` 的 `lib/`）⇒ `assertion total: 1791 (failed: 7)`，红项恰为 **V1 / V3 / V4 / V5 / V6 / V7 / V8**（**V2 修复前绿**，如实标为覆盖缺口类：claim 框本来就单行 ≤160）；修复后 ⇒ `ALL PASS / assertion total: 1791 (failed: 0)`、`EXIT=0`。两次原始日志在本地 `.investigations/rotation-hallucination-2026-11-04/red-host2.log` / `green-host2.log`（`*.log` 入 `.gitignore`，不入库；复跑命令与读数已抄进 `docs/verification-log.md` 的 2026-11-04 条）。
+**③ 怎么验证**：判据 **`批 V · V1`–`V10`**（10 条，放在批 U 之后、`rmTestRoot()` 之前 —— 不扰批 T 的 `Tr7` 回归锁计数与批 R 的 `assertions === 1726`）。**红相分两段取证（如实）**：① 确认框修复前（`lib/` 回 `fe0573e`，套件为当时的 1791 条）⇒ `assertion total: 1791 (failed: 7)`，红项恰为 **V1 / V3 / V4 / V5 / V6 / V7 / V8**（**V2 修复前绿**：claim 框本来就单行 ≤160，如实标覆盖缺口类）；② 读数结论两条（V9/V10）在**中间态**（`b21221d` 的 `lib/`：确认框已修、读数未修）上另测 ⇒ `assertion total: 1793 (failed: 5)`，红项含 **V9 / V10** 与一次**既有 `Aw5` 计时抖动**（同跑 `seamCalls=9` 而期望 6；该判据在本批其余 4 次跑里均绿，见验证账本）。修复后（最终态）⇒ `ALL PASS / assertion total: 1793 (failed: 0)`、`EXIT=0`；`client-half` `310 (failed: 0)`。原始日志在本地 `.investigations/rotation-hallucination-2026-11-04/`（`*.log` 入 `.gitignore`，不入库；复跑命令与读数已抄进 `docs/verification-log.md` 的 2026-11-04 条）。
 
 ### 改了什么（逐面）
 
 - `lib/shared.js`：`DIALOG_QUESTION_MAX_POINTS = 160` · `dialogCodePoints` · `dialogFlatten` · `normalizeDialogQuestion` · `normalizeDialogQuestions` · `askDialog` · `ROTATION_SELF_CHECK_TEXT`（含宿主三段布局的逐条注释）。
 - 12 处 `userQuestions.ask({...})` → `askDialog(userQuestions, {...})`（index / rotation / messaging / recovery / roster-write / team-registration / team-tools / team-session-creation），各档补 `askDialog` 导入。
-- `lib/sections.js`：宪章第 4 条补「成员自述『上下文耗尽』不算判据」、第 6 条补「团队结构变更（新建会话 / 换届 / 删团队）一律先问用户」；worker 义务行补「上下文占用不是停手理由」；第 ⑧ 段标记行补「判断权在用户 / 先问用户 / 上下文压力不是换届理由」（行数预算不变：宪章仍 7 行 ≤ 8）。
+- `lib/sections.js`：宪章第 4 条补「成员自述『上下文耗尽』不算判据」、第 6 条补「团队结构变更（新建会话 / 换届 / 删团队）一律先问用户」；worker 义务行补「上下文占用不是停手理由」；第 ⑧ 段标记行补「判断权在用户 / 先问用户 / 上下文压力不是换届理由」（行数预算不变：宪章仍 7 行 ≤ 8）。★ 用户追加裁定（FR-5）：每回合资源行追加「独立会话（宿主自动压缩；占用高不是停工理由）」；第 ⑧ 段段头按形态写清 sessions 档（成员各自是独立 session、各有宿主压缩）与 agent-team 档（成员是本会话子代理）——**仍各恰一行**。
 - `lib/index.js`：description 追加 `ROTATION_SELF_CHECK_TEXT`；`askRotationAuto` 改走 `askDialog`；**入口档字节 261,834 → 261,905**（仍 < 262,144，余量 239 B），合规档 §六同批改准。
-- 测试：`host-half.test.mjs` 新增「批 V」8 条；**15 处**既有断言从「只读 `question`」改为读 `dialogTextOf()`（question ＋ detail 的并集 = 人真正读到的全文）；README 计数 `1791 + 310`；设计档 `docs/2026-11-04-rotation-dialog-hotfix-design.md`。
+- 测试：`host-half.test.mjs` 新增「批 V」**10** 条（V1–V10）；**16 处**既有断言从「只读 `question`」改为读 `dialogTextOf()`（**17 个调用点** —— 顾问评审 #3 实测：`grep -o 'dialogTextOf('` = 17，其中一批两个调用点落在同一条 check 里；question ＋ detail 的并集 = 人真正读到的全文）；README 计数 `1793 + 310`；设计档 `docs/2026-11-04-rotation-dialog-hotfix-design.md`。
 
 ### 残余声明（如实）
 
 - **V2 修复前绿**：claim 框本来就合规，它不是红相；它守的是「未来别把它改坏」。
 - 真机上**尚未复验**：插件跑在宿主进程里，本机 `link:` 接线 ⇒ **需要 DSH 重启才生效**；重启时机由用户决定，本单不做。
 - `team_link_status` 在协调者会话里 **30s 超时**（2026-11-03 `seq=37`）是本次「手上没有真读数」的放大器，属另一类问题（宿主 / 读面耗时），本批**不修**，如实记在这里。
+- **过程偏离（如实）**：本批是真机热修，**实施先于用户发起的设计评审**——用户当面对此提出异议。已补 **advisor(type=code) 事后评审**（2026-11-04，`zai-coding-cn:glm-5.3`，job `advisor-dsh-25e70ae5e6124d49`）：结论 **VERDICT: PASS**、无 🔴；2 🟡（合规档计数收口 / 流程登记）＋ 2 🔵（注释级边界）已逐条处置。**后续 `lib/**`、`test/**` 恢复「先评审后实施」的常规门禁**，本档只登记这一笔偏离，不构成热修豁免先例。
+- **一次既有 flake（如实）**：中间态红跑（1793 条）里 `批 L · Aw5` 偶发红（`[AW5-DIAG] seamCalls=9`，期望 6）——与本批改动无因果（本批未碰 policy 写面）；同判据在本批其余 4 次跑里均绿，按计时抖动登记，不在本批修。
 
 ## 未发布 — 批 U：看门狗运维面（update / mute / unmute）＋「提醒不许唤醒坏会话」（2026-10-23）
 
