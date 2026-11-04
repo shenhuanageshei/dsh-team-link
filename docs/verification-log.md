@@ -5217,14 +5217,15 @@ EXIT=0
 
 **设计评审**：`advisor type=design`（glm-5.3，job `advisor-dsh-8fb87f9c03424a0d`）⇒ **VERDICT: PASS**，发设计令牌；7 条改进项（4 🟡 + 3 🔵）全部按建议收口：① 会诊前置的豁免登记；② D3 改**单把进程内全局锁**（跨团队也会互相覆盖）；③ 回执补「清理」读数并进 X3 断言；④ 映射歧义 ⇒ 跳过；⑤ 补 as-of 与交付后 1803；⑥ 关联档指针改准（M4 = `team-upgrade-design-2026-09-17.md` §3.6）；⑦ §十一 把红绿两次实测定为交付物。
 
-**实施与两次兜底**：
+**实施与两次兜底（第一轮被 30 分钟后台兜底截止，用户裁定「② 带半成品继续」）**：
 
 - 第一轮 `eng_coder`（job `eng-dsh-60004cfd66cb43e6`）在 30 分钟后台兜底截止时被 abort —— **不是阶段失败**；现场留下一份完整实现 + 两次实测（绿 `ALL PASS / 1803 (failed: 0)`、红 `1803 (failed: 4)` 恰为 X1–X4），文档未做。按规则停下报告，用户选 **② 带半成品继续**。
 - 第二轮 `eng_coder`（job `eng-dsh-d22d8da6002c45b5`）已派出；随后用户下达「不允许跑全量测试」的新约束，**我主动 `job_kill` 该任务**（它的第一段就是重跑全套件）。它尚未写任何文件（文档 mtime 未变）。
-- 因此本轮**没有**再跑全量套件：交付依据的绿/红读数来自第一轮（18:38 / 18:45）；此后 `lib/rotation.js` 只在 `git stash pop` 时被还原为同一份内容（红相用的就是 stash 起来的那一份），`host-half.test.mjs` 自 18:31 起未改。
-- 静态核验（不跑套件）：`node --check lib/rotation.js` 与 `node --check host-half.test.mjs` 通过；`git diff --stat` = `lib/rotation.js (+265/−45)` + `host-half.test.mjs (+167)`；`lib/index.js` 逐字节未动（262,118）。
+- 因此**上一轮**没有再跑全量套件：当时交付依据的绿/红读数来自第一轮（18:38 / 18:45）；此后 `lib/rotation.js` 只在 `git stash pop` 时被还原为同一份内容（红相用的就是 stash 起来的那一份），`host-half.test.mjs` 自 18:31 起未改。
+- **续做轮（本单）**：任务改为一律重跑 ⇒ 在 `f3b21c0`（批 X 已提交）的干净工作树上重跑。第一次 ⇒ `1803 (failed: 4)`：红项是**既有** `批 L · Aw5`（`[AW5-DIAG] seamCalls=9`，期望 6 —— 与本账本「批 V」一节登记的同一**计时抖动**同形，与本批改动无因果）及其三条级联（`Rr8` / `Tr7` / `X5` 都把「既有判据是否全绿」算进去）；**串行干净复跑** ⇒ `ALL PASS / 1803 (failed: 0)`、`EXIT=0`。同轮 `node client-half.test.mjs` ⇒ `ALL PASS / 310 (failed: 0)`、`EXIT=0`（日志 `green-x.log` / `green-x-client.log`）。**文档收尾落地后第三次复跑**同样 `ALL PASS / 1803 (failed: 0)`、`EXIT=0`（四处文档改动没有碰坏套件里的文档同步判据）。
+- **上一轮**的静态核验（不跑套件；续做轮已按新指令重跑，见下一条）：`node --check lib/rotation.js` 与 `node --check host-half.test.mjs` 通过；`git diff --stat` = `lib/rotation.js (+265/−45)` + `host-half.test.mjs (+167)`；`lib/index.js` 逐字节未动（262,118）。
 
-**读数（来自第一轮实测）**：
+**读数（红相 = 第一轮 18:45；绿相 = 首跑 18:38 与续做轮干净复跑 19:07，两次同值）**：
 
 ```text
 # 修复前（旧 lib + 新判据）
@@ -5234,14 +5235,14 @@ FAIL  批 X · X3 对端换届映射
 FAIL  批 X · X4 无人应答按最新候选
 assertion total: 1803 (failed: 4)
 
-# 修复后
+# 修复后（首跑 18:38；续做轮干净复跑同值）
 ALL PASS
 assertion total: 1803 (failed: 0)
 ```
 
-日志已从仓库根挪进 `.investigations/rotation-hallucination-2026-11-04/`：`red-x.log`、`green-x-phase1.log`（中间态 `.red-phase-baseline.txt` 已删除，不作为证据）。`client-half` 自批 W 起未改动（310/0）。
+日志已从仓库根挪进 `.investigations/rotation-hallucination-2026-11-04/`：`red-x.log`（红相）、`green-x-phase1.log`（首跑绿相）、`green-x.log` / `green-x-client.log`（续做轮复跑；`*.log` 不入库）；中间态 `.red-phase-baseline.txt` 已删除、不作为证据，仓库根已无 `.red-phase-*.txt` / `.green-phase-1.txt`。
 
-**如实声明**：① 本轮交付**没有**做「改完再跑一遍全量套件」的复验——用户明确禁止跑全量测试；依据是「实现自绿相之后逐字节未变」＋静态核验。若恢复允许，建议补一次 `node host-half.test.mjs`。② 真机未复验（需 DSH 重启，时机由用户定）。③ 设计档 §九 新增登记「弹框时零候选、复读后出现候选」这一格（实施时发现的未覆盖格，按无人值守分支处理并在回执写明）。
+**如实声明**：① 上一轮（用户禁跑全量）**只交静态核验**；**续做轮已按新指令重跑**，红/绿两次读数齐（见上），其中一次 `Aw5` 计时抖动如实登记、串行复跑即全绿。② 真机未复验（需 DSH 重启，时机由用户定）。③ 设计档 §九 新增登记「弹框时零候选、复读后出现候选」这一格（实施时发现的未覆盖格，按无人值守分支处理并在回执写明）。④ 本单未提交（`f3b21c0` 是父会话提交的），改动留在工作树。
 **交付代码评审（advisor type=code）与偏离审计**：
 
 - 拟在提交后自动执行 advisor 代码评审，但平台**拒绝派发**：上一轮被 kill 的 `eng-dsh-d22d8da6002c45b5` 长时间停在 `stopping`（子代理未响应 abort），网关把本会话判为「已有在飞的 eng 后台任务」。已两次 `job_kill`，状态不变；这是平台侧的僵尸记录，需重启或等其自行结算。**代码评审待其结算后补跑**（责任不在本轮实现）。

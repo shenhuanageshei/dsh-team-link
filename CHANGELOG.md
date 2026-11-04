@@ -14,7 +14,7 @@
 
 **② 现在怎么做的**：① 确认框结束后**复读**最新状态，并校验本次令牌与旧任未变（不满足 ⇒ fail-closed，零写入 + 可执行错误）；② 用最新名册重算候选，把用户勾选的**对端会话**映射到最新候选（对端已换届 ⇒ 按该角色版本史映射到它的新现任；一个旧会话出现在多个角色版本史 ⇒ 歧义，跳过并写明）；③ 只应用本角色这一份改动；④ 「复读 → 计算 → 写盘」由**单把进程内全局锁**包住（写的是全局数组，不同团队的 claim 也必须串行）；⑤ 收尾清 pending 那一笔同样复读、只清本角色本 rid；⑥ 回执新增「复读合并 / 已映射 / 跳过」读数行。
 
-**③ 怎么验证**：判据 **`批 X · X1–X6`**（6 条，放在「批 W」之后、`rmTestRoot()` 之前）。**两次实测**：修复前（`git stash` 回旧 `lib/`）⇒ `1803 (failed: 4)`，红的恰为 X1/X2/X3/X4；修复后 ⇒ `ALL PASS / 1803 (failed: 0)`。日志在 `.investigations/rotation-hallucination-2026-11-04/`（`red-x.log` / `green-x-phase1.log`，`*.log` 入 `.gitignore`），账见 `docs/verification-log.md` 的「批 X」节。
+**③ 怎么验证**：判据 **`批 X · X1–X6`**（6 条，放在「批 W」之后、`rmTestRoot()` 之前）。**两次实测**：修复前（`git stash` 回旧 `lib/`）⇒ `1803 (failed: 4)`，红的恰为 X1/X2/X3/X4；修复后 ⇒ `ALL PASS / 1803 (failed: 0)`。**续做轮**在 `f3b21c0` 的干净工作树上串行复跑同值（`ALL PASS / 1803 (failed: 0)`；同轮 `client-half` ⇒ `310 (failed: 0)`；一次 `Aw5` 计时抖动已如实登记在账本）。日志在 `.investigations/rotation-hallucination-2026-11-04/`（`red-x.log` / `green-x-phase1.log` / `green-x.log` / `green-x-client.log`，`*.log` 入 `.gitignore`），账见 `docs/verification-log.md` 的「批 X」节。
 
 ### 改了什么（逐面）
 
