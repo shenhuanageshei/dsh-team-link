@@ -5174,3 +5174,38 @@ CHANGELOG 红/绿读数与判据条数 → V1–V10；设计档 §5/§8 补 FR-5
 
 **验证（注释级改动）**：`node --check lib/shared.js` 通过；**最终态重跑** `node host-half.test.mjs` ⇒ `ALL PASS / assertion total: 1793 (failed: 0)`、`EXIT=0`（日志 `final-host2.log`）；`client-half` 同批 `310 (failed: 0)`。**行为面零变更**（只改注释与合规档字节读数）。
 
+## 2026-11-04 · 批 W：换届后旧自动提醒的移交 ＋ 状态卡 30s→120s
+
+**触发（用户，2026-11-04）**：「设定了协调者目标后，会注册一个自动提醒以及团队自动存活提醒，但是这个提醒换届了老的会话也还会继续存在（24h才过期），不能主动去掉」；以及「team_link_status 的 30s 超时是什么问题」。用户在弹窗里选定：**A. 换届时移交给新协调者 + 非现任不投递**；**状态卡提预算到 120s + 加一行耗时读数**。
+
+**根因（代码级）**：① `lib/rotation.js` 对 watchdogs **零引用** ⇒ 换届不碰 auto 行；auto 行的名册门只在 `renewAutoRowIfStillValid` 里判「要不要**续期**」，**不判「要不要投递」** ⇒ 旧 watcher 只要会话活着就继续收摘要/告警到 TTL（默认 12h，`WATCHDOG_DEFAULT_TTL_HOURS`）；`clear` 按设计拒绝清 auto 行、`mute` 上限 24h ⇒ 用户看到「去不掉」。② `team_link_status` 注册写死 `timeoutMs: 30000`（`lib/registration.js`），而它一次读会话窗（≤12）＋逐会话 surface＋每团队 `tasks.md`＋形态探测＋第⑧段投影；忙工作区被宿主中止（真机 2026-11-03 `seq=37`：`tool call timed out after 30000ms`）。
+
+**改了什么**：
+
+- `lib/rotation.js`：`transferAutoWatchdogs()`（纯函数）—— claim 落定时把 `origin=auto ∧ team ∧ watcherSession=退役者` 的行**原地移交**（watcher→新任、targets 按落定后名册重算、`expiresAt` 顺延、`renewedAt` 记录，保 `id`/`createdAt`），并**并进与 roster 落定同一笔** `policy.update`；新任外无人可盯 ⇒ 删该行。常量经 `extras.watchdogDefaults` 由入口注入。
+- `lib/index.js`：`rotationExtras()` 增 `watchdogDefaults`（入口档 **262,118 B**，< 262,144，余量 26 B）。
+- `lib/watchdog.js`：`patrolOne` 加**退役者**投递闸（`isRetiredRoleHolder`）—— watcher 曾持有该队角色、现在不是任何角色现任 ⇒ 零投递；**刻意窄于「非现任一律不投」**：既有契约 U18 重钉点④ 明确「队在场、现任是别人时工作台摘要照投（只是脚注不带重钉行）」，把闸门写成非现任一律不投会改掉那条语义，而用户报的是**换届后的旧协调者**（历史持有者）⇒ 本闸恰好覆盖，且换届正常路径已由移交处理。
+- `lib/registration.js`：状态卡 `timeoutMs: 120000`；标题行追加 `（读卡耗时 N ms；工具预算 120s）`（`Date.now() - now`；仍纯读、零写盘）。
+- 测试：`host-half.test.mjs` 新增「批 W」4 条；README 计数 `1797 + 310`；合规档 §五/§六 全表重测（`index.js` 262,118 · `rotation.js` 147,955 · `registration.js` 73,193 · `watchdog.js` 56,790）；设计档 `docs/2026-11-04-rotation-watchdog-status-budget-design.md`。
+
+**两次实测（`node host-half.test.mjs`）**
+
+```text
+# 修复前（git stash push -- lib，回 9e5e9a3 的 lib/）
+FAIL  批 W · W1 换届移交 auto 工作台行
+FAIL  批 W · W2 非现任 watcher 零投递
+FAIL  批 W · W3 状态卡预算
+FAIL  批 W · W4 状态卡耗时读数
+4 FAILURE(S)
+assertion total: 1797 (failed: 4)
+
+# 修复后
+ALL PASS
+assertion total: 1797 (failed: 0)
+EXIT=0
+```
+
+`client-half.test.mjs` 同批 `ALL PASS / assertion total: 310 (failed: 0)`。日志（本地，`*.log` 不入库）：`green-w3.log` / `red-w2.log`。
+
+**如实声明**：① 实现的是「换届移交 + **退役者**零投递」，比弹窗选项 A 的字面「非现任不投递」**窄一档**——原因见上（U18 既有契约）；若用户要「非现任一律不投」，需同时改 U18 的契约与判据，属另一批。② 状态卡只提预算、未缩读窗；耗时读数是下一批的判据输入。③ 真机未复验（插件改动需 DSH 重启，时机由用户定）。
+

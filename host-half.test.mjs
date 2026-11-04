@@ -16399,6 +16399,50 @@ check("批 V · V3 整队换届确认框（红相＝question 多行/超长（正
 	sr3Question !== "" && !sr3Question.includes("\n") && [...sr3Question].length <= 160
 		&& sr3Question.includes("即将整队换届") && sr3DialogText.includes("逐角色") && sr3DialogText.includes("Phase B 一个不省"));
 
+// ===========================================================================
+// 批 W（2026-11-04 用户裁定 A/A）· 换届后旧自动提醒移交 ＋ 状态卡预算
+// 判据 W1–W4。放在批 V 之后、rmTestRoot() 之前（不动上游计数锁）。
+// ===========================================================================
+// --- W1：换届落定时旧协调者的 auto 工作台行移交给新任（同一笔写盘） --------
+const w1Env = rotateEnv({ askScript: [["session-worker-a"]], pairs: [rotPair("session-worker-a")] });
+w1Env.ns.data.watchdogs = [{ id: "wd-auto-old", team: "night-shift", watcherSession: "session-self", targets: ["session-worker-a", "session-worker-b"], silentMinutes: 10, intervalMinutes: 10, createdAt: WD_NOW, expiresAt: WD_NOW + 12 * 3600000, origin: "auto" }];
+const w1Prep = String(await w1Env.rotate.execute({ action: "prepare", team: "night-shift", role: "coordinator", successor: SUCCESSOR }, execFor(w1Env.senderAgent)));
+const w1Claim = String(await w1Env.rotate.execute({ action: "claim", team: "night-shift", role: "coordinator", token: tokenOf(w1Prep) }, w1Env.exec(SUCCESSOR)));
+const w1Rows = (w1Env.ns.data.watchdogs ?? []);
+// 找的是**同时**带 watchdogs 与 roster 落定两半的那一笔（`ensureTeamAutoWatchdogs` 也会单独写 watchdogs，不能拿第一笔充数）。
+const w1Patch = w1Env.ns.updates.find((patch) => Array.isArray(patch.watchdogs) && Array.isArray(patch.teams) && Array.isArray(patch.pairs));
+check(`批 W · W1 换届移交 auto 工作台行（红相＝换届不碰 watchdogs（旧实现）⇒ 行仍挂在旧 watcher 上 ⇒ 本条红）: claim 落定后旧协调者 session-self 的 auto 行**不见了**、新任 ${SUCCESSOR} 名下**恰一行**且保留 id/createdAt、targets 按落定后名册重算（= worker-a/worker-b，剔除新任自己）、租约顺延（renewedAt 在场）；并且这一行与 roster 落定在**同一笔** policy.update 里（该 patch 同时带 teams 与 pairs）`,
+	w1Claim.includes("换届完成（claim）") && w1Rows.length === 1
+		&& w1Rows[0].watcherSession === SUCCESSOR && w1Rows[0].id === "wd-auto-old" && w1Rows[0].createdAt === WD_NOW
+		&& w1Rows[0].origin === "auto" && w1Rows[0].expiresAt > WD_NOW
+		&& JSON.stringify([...w1Rows[0].targets].sort()) === JSON.stringify(["session-worker-a", "session-worker-b"])
+		&& w1Patch !== undefined && typeof w1Rows[0].renewedAt === "number");
+
+// --- W2：非现任 watcher 的 auto 行零投递（对照：现任照投） ------------------
+const w2Targets = {
+	"session-silent": { events: oneShotSurface(1) },
+	"session-free": { events: oneShotSurface(WD_NOW - 120_000) },
+	"session-busy": { events: oneShotSurface(WD_NOW - 60_000), status: "running" },
+};
+const w2RetiredTeam = teamRow({ name: "wb-team", roles: [{ role: "coordinator", current: "session-other", pending: null, history: [{ session: "session-self", from: 1, until: 2 }, { session: "session-other", from: 2, until: null }] }] });
+const w2StaleEnv = watchdogEnv({ targets: w2Targets, selfStatus: "running", teams: [w2RetiredTeam], watchdogs: [wbRow({ id: "wd-auto-stale", targets: ["session-silent", "session-free", "session-busy"] })] });
+await w2StaleEnv.watchdog.patrol({ now: WD_NOW });
+const w2OkEnv = watchdogEnv({ targets: w2Targets, selfStatus: "running", teams: [teamRow({ name: "wb-team", current: "session-self" })], watchdogs: [wbRow({ id: "wd-auto-current", targets: ["session-silent", "session-free", "session-busy"] })] });
+await w2OkEnv.watchdog.patrol({ now: WD_NOW });
+check(`批 W · W2 非现任 watcher 零投递（红相＝名册门只挡续期、不挡投递（旧实现）⇒ 退役 watcher 照收摘要/告警 ⇒ 本条红）: 团队在册但协调者已换人 ⇒ 旧 watcher 的 auto 行**一条都不投**（followup 与 inject 都是 0）；对照：watcher 就是现任 ⇒ 照投（>0）`,
+	w2StaleEnv.senderCalls.followedup.length === 0 && w2StaleEnv.senderCalls.injected.length === 0
+		&& w2OkEnv.senderCalls.followedup.length > 0);
+
+// --- W3：状态卡预算 30s → 120s ----------------------------------------------
+const w3StatusTool = w2OkEnv.tool("team_link_status");
+check(`批 W · W3 状态卡预算（红相＝仍是 30000 ⇒ 忙工作区被宿主掐断、协调者拿不到真读数 ⇒ 本条红）: 注册出来的 team_link_status 的 timeoutMs 恰为 120000（纯读、零副作用；只提预算，不改八段内容）`,
+	w3StatusTool !== undefined && w3StatusTool.timeoutMs === 120000);
+
+// --- W4：状态卡标题行带耗时读数（仍纯读） -----------------------------------
+const w4Out = String(await w3StatusTool.execute({}, execFor(w2OkEnv.senderAgent)));
+check(`批 W · W4 状态卡耗时读数（红相＝没有这一行 ⇒ 下一批无法用真机耗时判断要不要缩读窗 ⇒ 本条红）: 标题行（团队状态卡（读数 …））末尾带「读卡耗时 <数字> ms；工具预算 120s」，且整卡仍以落点行开头（首行红线不破）`,
+	/读卡耗时 \d+ ms；工具预算 120s/u.test(w4Out) && w4Out.split("\n")[0].startsWith("存储：") === true);
+
 rmTestRoot();
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);

@@ -4,6 +4,32 @@
 
 格式：每个版本按 **修了什么 → 为什么 → 怎么验证** 组织。凡涉及行为修复的条目都附**变异验证**证据（修复前必红 / 修复后全绿），这是本仓库的验收文化。
 
+## 未发布 — 批 W：换届后旧自动提醒的移交 ＋ 状态卡 30s→120s（2026-11-04 用户裁定 A/A）
+
+**一句话**：换届落定时，旧协调者的**自动工作台看门狗**在同一笔写盘里**移交给新任**（watcher/targets/租约），且非现任 watcher 的 auto 行**一条都不投递**；`team_link_status` 的预算从 30s 提到 **120s**，标题行给出「读卡耗时」读数。
+
+### 三段话（用户视角）
+
+**① 现象与根因（前因）**：用户报「换届后旧协调者会话还在收自动提醒，24h 才过期、去不掉」。查实：建队/attach 会给团队自动注册一条 `origin=auto` 的工作台看门狗（TTL 12h、随名册续期）；`lib/rotation.js` 对 watchdogs **零引用** ⇒ 换届不碰它；而 auto 行的名册门只在 `renewAutoRowIfStillValid` 里判「要不要**续期**」，**不判「要不要投递」** ⇒ 旧 watcher 只要会话还活着就继续收摘要/告警；`clear` 按设计拒绝清 auto 行、`mute` 最长 24h ⇒ 没有主动出口。另一条：`team_link_status` 注册时写死 `timeoutMs: 30000`，而它一次要读会话窗（≤12）＋逐会话 surface＋每团队 `tasks.md`＋形态探测＋第⑧段投影，忙工作区下被宿主中止（真机 2026-11-03 `seq=37`：`tool call timed out after 30000ms`）——协调者因此拿不到真读数。
+
+**② 现在怎么做的**：① `lib/rotation.js` 新增 `transferAutoWatchdogs()`，claim 落定时把 `origin=auto ∧ team ∧ watcherSession=退役者` 的行**原地移交**（watcher→新任、targets 按落定后名册重算、`expiresAt` 顺延、`renewedAt` 记录，保 `id`/`createdAt`），并**并进与 roster 落定同一笔** `policy.update`（要么同时生效、要么都不生效）；新任外无人可盯 ⇒ 删该行。常量（origin/ttl）经 `rotationExtras().watchdogDefaults` 由入口注入（域档不导入入口；TTL 与 `planAutoWatchdog` 同源）。② `lib/watchdog.js` 的 `patrolOne`：到期门之后、投递之前加一道名册门 —— **团队仍在名册**且 watcher 非现任 ⇒ `return`（零投递、零目标 surface 读）；团队已删的孤儿行维持旧行为（等 TTL，不把「读不到名册」当「失效」）；manual 行不进。③ `lib/registration.js`：状态卡 `timeoutMs: 120000`，并在标题行追加 `（读卡耗时 N ms；工具预算 120s）`（仍纯读、零写盘）。
+
+**③ 怎么验证**：判据 **`批 W · W1–W4`**（4 条，放在批 V 之后、`rmTestRoot()` 之前）。**两次实测**：修复前（`git stash` 回 `9e5e9a3` 的 `lib/`）⇒ `assertion total: 1797 (failed: 4)`，红项恰为 **W1 / W2 / W3 / W4**；修复后 ⇒ `ALL PASS / assertion total: 1797 (failed: 0)`、`EXIT=0`；`client-half` 同批 `310 (failed: 0)`。日志在本地 `.investigations/rotation-hallucination-2026-11-04/red-w.log` / `green-w.log`（`*.log` 入 `.gitignore`），账见 `docs/verification-log.md`。
+
+### 改了什么（逐面）
+
+- `lib/rotation.js`：`transferAutoWatchdogs()`（导出、纯函数）＋ claim 的 settle patch 合并 `watchdogs`（同一笔写）；`createRotation` 从 `extras.watchdogDefaults` 取常量（缺席 ⇒ 不移交，退回旧行为；生产恒注入）。
+- `lib/index.js`：`rotationExtras()` 增 `watchdogDefaults: { originAuto, ttlMs }`（入口 262,118 B，仍 < 262,144，余量 26 B）。
+- `lib/watchdog.js`：`patrolOne` 的 auto 行投递闸（团队在册 ∧ watcher 非现任 ⇒ 零投递）。
+- `lib/registration.js`：状态卡 `timeoutMs: 120000` ＋ 标题行耗时读数。
+- 测试：`host-half.test.mjs` 新增「批 W」4 条；README 计数 `1797 + 310`；合规档 §五/§六 全表重测（`index.js` 262,118 · `rotation.js` 147,955 · `registration.js` 73,193 · `watchdog.js` 56,790）；设计档 `docs/2026-11-04-rotation-watchdog-status-budget-design.md`。
+
+### 残余声明（如实）
+
+- **只加投递闸，不改 clear 语义**：auto 行仍不能被一句 `clear` 拿走（团队资产），换届的移交就是自动出口；团队已删的孤儿行仍靠 TTL。
+- **状态卡只提预算、未缩读窗**：耗时读数是给下一批的判据输入；若真机仍超 120s，再按设计档 D3 的备选缩读窗。
+- 真机上**尚未复验**：插件跑在宿主进程里，需 DSH 重启才生效（时机由用户定）。
+
 ## 未发布 — 批 V：换届确认框看不见按钮（question 布局合同）＋ 发起前自检（2026-11-04 真机）
 
 **一句话**：确认框的 `question` 从此只能是**一行话** —— 正文一律进可滚动的 `detail`，动作底栏不再被挤出卡片（`/team_session` 之外 **12 个对话框**统一收口到 `askDialog`）；同时给模型立三条规矩：换届必须**先得到用户明确同意**、成员自述的上下文百分比**不可采信**、**换届不是重启手段**；并按用户 2026-11-04 追加裁定让**读数自带结论**——资源行与第 ⑧ 段段头都明写「上下文占用不是停工/换届判据」（sessions 档成员各自是独立 session、各有宿主压缩；agent-team 档成员是本会话子代理）。
