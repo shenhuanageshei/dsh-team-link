@@ -1,6 +1,6 @@
 # 设计档：整队换届时 claim 的复读合并（批 X，2026-11-04）
 
-> 状态：**待用户确认** · 前置需求档：`docs/2026-11-04-rotation-claim-fresh-merge-requirements.md`
+> 状态：**已实施**（`f3b21c0` 实现与判据；`node host-half.test.mjs` ⇒ `ALL PASS / 1803 (failed: 0)`，as-of 2026-11-04）· 前置需求档：`docs/2026-11-04-rotation-claim-fresh-merge-requirements.md`
 > 关联：批 W（auto 看门狗移交 · `docs/2026-11-04-rotation-watchdog-status-budget-design.md`）· M4 换届状态机（`docs/team-upgrade-design-2026-09-17.md` §3.6）· 批 S 整队换届 Phase A 规格（`docs/2026-10-18-team-rotation-design.md`）
 > 过程登记（评审 🟡#1）：本批**未先做会诊** —— 方案由用户提问直接驱动、规模小（单域、约 60 行），用户 2026-11-04 明确选择「先出设计档，走完整工程模式」。本行即该裁定的登记（METHODOLOGY「会诊前置」的豁免说明）。
 
@@ -114,6 +114,7 @@ async function claim(request) {
 - 确认框期间**该角色被另一路径清了 pending**（过期清扫 / 人工）⇒ 拒绝；文案给「重新 prepare」。
 - 确认框期间**对端角色换了届** ⇒ 按 history 映射；映射目标不在候选里（例如对端这次没勾）⇒ 计入「跳过」并说明。
 - **继任者自己**出现在候选里（历史遗留脏数据）⇒ 既有 `planRotationMigration` 已按「对端就是继任者」丢弃。
+- **弹框时零候选、复读后出现候选**（实施时发现的未覆盖格）：弹框那一刻 `plan.candidates.length === 0` ⇒ 没有任何确认被征求；复读后最新状态里出现候选 ⇒ 归入无人值守分支（D6：按**最新**候选全选、provisional + 24h 回退），并在回执里如实写明「弹框时一条都没有」（代码注释见 `lib/rotation.js` 的 `claim` 复读段）。
 - **锁的范围**：**单把全局锁**（评审 🟡#2：写的是全局数组，跨团队也必须串行）；单进程内有效，多进程同时写同一
   settings 命名空间不在本批承诺内（本部署单实例）。
 - **崩溃窗口**：两笔写之间崩溃 ⇒ 与现状同一条 replay 路径（既有判据覆盖，X5 锁住）。

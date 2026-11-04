@@ -1,6 +1,6 @@
 # 需求档：整队换届时 claim 的「互不覆盖」保证（2026-11-04）
 
-> 状态：**待用户确认** · 关联设计档：`docs/2026-11-04-rotation-claim-fresh-merge-design.md`
+> 状态：**已实施（批 X，`f3b21c0`）** · 关联设计档：`docs/2026-11-04-rotation-claim-fresh-merge-design.md`
 > 前置：批 W（`cc166e7`）已交付；本批为**独立新批（批 X）**，不改批 W 的任何判据。
 
 ## 一、背景（从哪来）
