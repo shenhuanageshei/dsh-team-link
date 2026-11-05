@@ -16645,6 +16645,21 @@ check("批 Y · X9 去重回执（红相＝撞车时静默 continue（批 X 现�
 	+ (y9.chosen.length === 1 && y9.chosen[0].other === "s-new" && y9.skipped.some((item) => item.reason.includes("去重")) ? "" : "（实测：chosen=" + show(y9.chosen) + " skipped=" + show(y9.skipped) + "）"),
 	y9.chosen.length === 1 && y9.chosen[0].other === "s-new" && y9.skipped.some((item) => item.reason.includes("去重")));
 
+
+// ===========================================================================
+// 批 Z（t-12，2026-11-05）· 撤销依据的在飞/留存读面区分（纯函数判据 Z1）
+// 归属：docs/2026-11-05-rotation-backup-readface-design.md §八。只做读面区分、不自动删除。
+// ===========================================================================
+const zTeam = {
+	name: "z-team",
+	roles: [{ role: "coordinator", current: "s-new", history: [], pending: { rotationId: "rid-live" } }],
+	rotationBackups: [{ rid: "rid-live", at: 1, backup: { pairs: [] } }, { rid: "rid-done", at: 2, backup: { pairs: [] } }],
+};
+const zClass = qRotation.classifyRotationBackups(zTeam);
+check("批 Z · Z1 撤销依据的在飞/留存区分（红相＝把两档混在一起（批 Q 现状）⇒ 本条红）: 有 pending 指向的条目进「在飞」、其余进「留存」；两档都保留、顺序不变（不丢快照）",
+	+ (zClass.inFlight.length === 1 && zClass.inFlight[0].rid === "rid-live" && zClass.retained.length === 1 && zClass.retained[0].rid === "rid-done" ? "" : "（实测：" + show(zClass) + "）"),
+	zClass.inFlight.length === 1 && zClass.inFlight[0].rid === "rid-live" && zClass.retained.length === 1 && zClass.retained[0].rid === "rid-done");
+
 rmTestRoot();
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);

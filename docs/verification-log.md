@@ -5300,3 +5300,17 @@ assertion total: 1803 (failed: 0)
 
 **结论与未决（如实）**：①「非代码缺陷」的判断**不变**，且现有日志内旁证；② 但**当前树仍无绿相全量读数** —— 批 Y 的 X7–X9 至今未在套件里执行过，`1806` 仍是源码计数推算；③ 台账 t-19 的两个连词都还缺：绿相读数（**需用户放开「禁跑全量」**）与推送（实测 `git log --oneline origin/main..main | Measure-Object -Line` = **3**，t-19 标题与 why 里的「10 / 11」是旧读数，已同批改正）；④ 本复核轮**没有**跑全量套件、**没有**推送。
 
+## 2026-11-05 · 批 Z：撤销依据的「在飞 / 留存」读面区分（t-12）
+
+**由来**：台账 t-12「撤销依据孤儿条目：清理策略或读面区分在飞/留存」。会诊 #160 因 brief 未送达未给出意见（纪要 §3 已登记，设计门改由父侧裁定 + advisor 设计评审）。用户 2026-11-05 授权自主推进。
+
+**裁定**：**读面区分，不自动删除**（撤销依据是信任迁移的还原依据，t-12 明写「不得丢快照」；自动清理留待用户另裁）。
+
+**改了什么**：① `lib/rotation.js` 新增 `export function classifyRotationBackups(team)`（按各角色 `pendingRotationRid` 集合分 `{inFlight, retained}`，保序、不删）；② `lib/registration.js` 状态卡第 ② 段后追加一行「撤销依据：<队> 共 N 条（在飞 X / 留存 Y）—— 留存条目属已完成或已取消的换届，读面保留、不自动删除」；③ `host-half.test.mjs` 新增纯函数判据 `批 Z · Z1`，总数 **1807 = 1806 + 1**（源码推算）。
+
+**验证（用户禁跑全量）**：
+
+- **定向脚本**：`.investigations/rotation-hallucination-2026-11-04/z-backup-check.mjs` ⇒ `ALL PASS`：`Z1 在飞/留存区分 inFlight=["rid-live"] retained=["rid-done"]` + 旧读面红相自证。
+- **静态**：`node --check lib/rotation.js` / `lib/registration.js` / `host-half.test.mjs` 通过；入口 `lib/index.js` 未动（262,118）。
+- **未做（如实）**：套件尚未执行 `批 Z · Z1`；红/绿待用户放开禁跑全量后补跑。
+
