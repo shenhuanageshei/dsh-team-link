@@ -1,6 +1,6 @@
 # 设计档：整队换届时 claim 的复读合并（批 X，2026-11-04）
 
-> 状态：**已实施**（`f3b21c0` 实现与判据；`node host-half.test.mjs` ⇒ `ALL PASS / 1803 (failed: 0)`，as-of 2026-11-04）· 前置需求档：`docs/2026-11-04-rotation-claim-fresh-merge-requirements.md`
+> 状态：**已实施**（`f3b21c0` 实现与判据；`node host-half.test.mjs` ⇒ `ALL PASS / 1803 (failed: 0)`，as-of 2026-11-04；2026-11-05 已随 DSH 重启在真机生效）· 前置需求档：`docs/2026-11-04-rotation-claim-fresh-merge-requirements.md`
 > 关联：批 W（auto 看门狗移交 · `docs/2026-11-04-rotation-watchdog-status-budget-design.md`）· M4 换届状态机（`docs/team-upgrade-design-2026-09-17.md` §3.6）· 批 S 整队换届 Phase A 规格（`docs/2026-10-18-team-rotation-design.md`）
 > 过程登记（评审 🟡#1）：本批**未先做会诊** —— 方案由用户提问直接驱动、规模小（单域、约 60 行），用户 2026-11-04 明确选择「先出设计档，走完整工程模式」。本行即该裁定的登记（METHODOLOGY「会诊前置」的豁免说明）。
 
