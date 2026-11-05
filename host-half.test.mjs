@@ -16610,6 +16610,41 @@ check("批 X · X6 写入次数不增（红相＝复读合并顺手多写一笔�
 	x6Claim.includes("换届完成") && x6Writes === 2);
 
 
+
+// ===========================================================================
+// 批 Y（2026-11-05）· mapRotationSelection 的三条边界判据（纯函数，X7/X8/X9）
+// 归属：docs/2026-11-05-rotation-mapping-receipt-design.md §八。批 X 交付评审的两条
+// Deferred（覆盖缺口 + 映射撞车回执不可见）在这里收口；批 X 的 X1–X6 一字不动。
+// ===========================================================================
+const yRoleRow = (role, current, historySessions) => ({
+	role,
+	current,
+	pending: null,
+	history: (historySessions ?? []).map((session, index) => ({ session, from: 1_700_000_000_000 + index, until: null })),
+});
+
+// --- X7：同一旧会话出现在两个角色的版本史 ⇒ 归属有歧义，跳过（不猜） ------------------
+const y7Team = { name: "y-team", roles: [yRoleRow("r1", "s-new-1", ["s-old"]), yRoleRow("r2", "s-new-2", ["s-old", "s-other"])] };
+const y7 = qRotation.mapRotationSelection({ selectedOthers: ["s-old"], candidates: [], team: y7Team });
+check("批 Y · X7 歧义跳过（红相＝去歧义分支没有判据（批 X 交付评审 Deferred）⇒ 本条红）: 同一旧会话出现在两个角色的版本史里 ⇒ 不建通道、回执写明「归属有歧义」",
+	+ (y7.chosen.length === 0 && y7.skipped.length === 1 && y7.skipped[0].reason.includes("归属有歧义") ? "" : "（实测：chosen=" + show(y7.chosen) + " skipped=" + show(y7.skipped) + "）"),
+	y7.chosen.length === 0 && y7.skipped.length === 1 && y7.skipped[0].reason.includes("归属有歧义"));
+
+// --- X8：映射目标不在复读后的候选里 ⇒ 跳过并写明原因 --------------------------------
+const y8Team = { name: "y-team", roles: [yRoleRow("r1", "s-new", ["s-old"])] };
+const y8 = qRotation.mapRotationSelection({ selectedOthers: ["s-old"], candidates: [], team: y8Team });
+check("批 Y · X8 映射目标缺失（红相＝该分支无判据 ⇒ 本条红）: 对端已换届但复读后的候选里没有与它相关的通道 ⇒ 不建通道、回执写明「没有与它相关的待迁移通道」",
+	+ (y8.chosen.length === 0 && y8.skipped.length === 1 && y8.skipped[0].reason.includes("没有与它相关的待迁移通道") ? "" : "（实测：chosen=" + show(y8.chosen) + " skipped=" + show(y8.skipped) + "）"),
+	y8.chosen.length === 0 && y8.skipped.length === 1 && y8.skipped[0].reason.includes("没有与它相关的待迁移通道"));
+
+// --- X9：勾旧会话 + 勾它的新现任 ⇒ 去重，且回执看得见（批 X 是静默 continue） -------
+const y9Team = { name: "y-team", roles: [yRoleRow("r1", "s-new", ["s-old"])] };
+const y9Candidates = [{ other: "s-new", pair: { a: "s-self", b: "s-new" } }];
+const y9 = qRotation.mapRotationSelection({ selectedOthers: ["s-new", "s-old"], candidates: y9Candidates, team: y9Team });
+check("批 Y · X9 去重回执（红相＝撞车时静默 continue（批 X 现状）⇒ skipped 里看不到这条 ⇒ 本条红）: 同时勾旧会话与新现任 ⇒ 只建一条通道（chosen 长度 1），且回执含「去重」",
+	+ (y9.chosen.length === 1 && y9.chosen[0].other === "s-new" && y9.skipped.some((item) => item.reason.includes("去重")) ? "" : "（实测：chosen=" + show(y9.chosen) + " skipped=" + show(y9.skipped) + "）"),
+	y9.chosen.length === 1 && y9.chosen[0].other === "s-new" && y9.skipped.some((item) => item.reason.includes("去重")));
+
 rmTestRoot();
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);

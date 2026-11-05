@@ -5275,3 +5275,17 @@ assertion total: 1803 (failed: 0)
 3. **批 W**：`team_link_watch action=list` 看到 `来源 auto` 行 ⇒ 协调者换届后该行观察者为新协调者（id/createdAt 不变、到期顺延），旧会话不再收 `[workbench]` 摘要。
 4. **批 X**（可选）：两个角色先后换届、其中一个确认框开着时另一个先完成 ⇒ 两边 `current` 都落到新会话、无指向旧会话的配对。
 
+## 2026-11-05 · 批 Y：换届映射的歧义/缺失/去重回执
+
+**由来**：批 X 交付代码评审（job `advisor-dsh-121f559ac8ef4951`）的两条 Deferred —— 覆盖缺口 X7/X8、映射撞车回执不可见。用户 2026-11-05 授权自主推进，台账 t-18。
+
+**改了什么**：① `mapRotationSelection`（`lib/rotation.js:841`）去重分支从**静默 `continue`** 改为推一条 `skipped`（带 `to` 与原因）—— 行为不变，回执多一条事实；② 该纯函数加 `export`（与 `planRotationMigration` / `applyRotationTrust` 同模式）；③ `host-half.test.mjs` 新增三条**纯函数判据** `批 Y · X7/X8/X9`（放在批 X 块之后、`rmTestRoot()` 之前），总数 **1806 = 1803 + 3**。
+
+**验证（用户 2026-11-05 指令：不允许跑全量 test）**：
+
+- **定向脚本实测**（低内存、只 import 纯函数）：`.investigations/rotation-hallucination-2026-11-04/y-map-check.mjs` ⇒ `ALL PASS` / `EXIT=0`，四条读数：`Y-X7 歧义跳过` / `Y-X8 映射目标缺失` / `Y-X9 去重回执` / `Y-X9 红相自证（旧实现静默去重 ⇒ skipped 为空 ⇒ 判据会红）`。
+- **静态**：`node --check lib/rotation.js` 与 `node --check host-half.test.mjs` 通过；`lib/index.js` 逐字节未动（262,118）。
+- **未做（如实）**：套件尚未执行 X7–X9；「修复前红 → 修复后绿」的套件读数待用户放开禁跑全量后补跑。脚本里的红相自证是本批目前能给出的最强证据（旧实现分支复刻后 skipped 为空）。
+
+**同日的授权一次性复跑**：用户此前选择「放开一次全量复验」，该运行于 19:07 启动（日志 `green-1105.log`）；随后用户下达「不允许跑全量 test」的新指令 —— 本轮不再启动任何全量运行。
+
