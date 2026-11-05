@@ -19,7 +19,7 @@
 ### 改了什么（逐面）
 
 - `lib/rotation.js`：`mapRotationSelection` 去重分支推 `skipped`（`to` + 原因）；函数加 `export`。字节 162,497 → **162,962**。
-- `host-half.test.mjs`：新增三条纯函数判据 `批 Y · X7/X8/X9`（放在批 X 块之后、`rmTestRoot()` 之前）；总数 **1806 = 1803 + 3**。
+- `host-half.test.mjs`：新增三条纯函数判据 `批 Y · X7/X8/X9`（放在批 X 块之后、`rmTestRoot()` 之前）；总数 **1806 = 1803 + 3**（按源码 `check()` 计数推算；套件尚未执行，见下方残余声明）。
 - 文档：README 计数 `1806 + 310`；合规档 §五/§六 同批重测；设计/需求档 `docs/2026-11-05-rotation-mapping-receipt-*.md`；账本新增「批 Y」节。
 
 ### 残余声明（如实）

@@ -67,7 +67,7 @@
 | 场景 | 状态 | 证据 |
 | --- | --- | --- |
 | **一次性 Profile 的装 / 启 / 卸** | **待补**（用户 2026-10-15 已就绪重启时机） | 计划：新建一个空 profile → 从**本地路径**（`link:`）装入 → 启动 DSH 并确认工具面在场（`team_link_status` 出卡）→ 卸载 → 启动确认工具面消失且**无残留目录**；三段输出原文记进 [`docs/verification-log.md`](verification-log.md) |
-| **现状（本机长期部署）** | **已验证但非「一次性 profile」形态** | 本插件自 2026-09 起在本机 desktop profile 持续运行：工具面 **12** 个、套件**现行 1806 + 310** 条断言（2026-11-05 批 Y 后实测；批 S 交付时为 1753 + 310，批 Q 交付时为 1738 + 310，批 R 收口时点为 **1727 + 310**，批 U 后为 1783 + 310，批 V 后为 1793 + 310，批 W 后为 1797 + 310，批 X 后为 1803 + 310，见 [`README.md`](../README.md) §十与 [`docs/verification-log.md`](verification-log.md)）；★ **`Rr4` 现读绿**（`fdfc832` 之后环 = `[]`）—— 旧文「唯一红项是 `Rr4`」**作废**（as-of：批 R 收口时点曾红）；批 K 的崩溃现场读数已在真机取出 |
+| **现状（本机长期部署）** | **已验证但非「一次性 profile」形态** | 本插件自 2026-09 起在本机 desktop profile 持续运行：工具面 **12** 个、套件**现行 1806 + 310** 条断言（**1806 为源码计数推算**：1803 为 2026-11-04 实测，批 Y 新增 3 条（`X7`–`X9`）尚未在套件里执行、待用户放开禁跑全量后补跑；批 S 交付时为 1753 + 310，批 Q 交付时为 1738 + 310，批 R 收口时点为 **1727 + 310**，批 U 后为 1783 + 310，批 V 后为 1793 + 310，批 W 后为 1797 + 310，批 X 后为 1803 + 310，见 [`README.md`](../README.md) §十与 [`docs/verification-log.md`](verification-log.md)）；★ **`Rr4` 现读绿**（`fdfc832` 之后环 = `[]`）—— 旧文「唯一红项是 `Rr4`」**作废**（as-of：批 R 收口时点曾红）；批 K 的崩溃现场读数已在真机取出 |
 
 ---
 
@@ -102,7 +102,7 @@
 
 **判据终态（2026-10-18 更正：`Rr4` 已绿，旧登记作废但保留为 as-of）**
 
-★ **现行读数：`Rr4`（模块图无环）现读绿，环 = `[]`** —— `fdfc832` 把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` / `fmtWindowRest` 从 `lib/rotation.js` 下沉到 `lib/shared.js` 之后，`lib/shared.js` 已无任何 `from "./rotation.js"` 行，`lib/rotation.js` 只剩**单向** `import … from "./shared.js"`；`host` 在批 Q 时点为 **`1738 (failed: 0)`**，批 S 新增 15 条后为 **1753**，批 S 分歧修复轮再新增 5 条后为 **1758 (`failed: 0`)**，批 T 新增 13 条（`Tr1`–`Tr13`）后为 **1771 (`failed: 0`)**，批 U 新增 12 条后为 **1783 (`failed: 0`)**，批 V 新增 10 条（`V1`–`V10`）后为 **1793 (`failed: 0`)**，批 W 新增 4 条（`W1`–`W4`）后为 **1797 (`failed: 0`)**，批 X 新增 6 条（`X1`–`X6`）后为 **1803 (`failed: 0`)**，批 Y 新增 3 条（`X7`–`X9`）后为 **1806**（两次实测均已落 [`docs/verification-log.md`](verification-log.md) 的「批 S（整队换届）红相与绿相」节与其后的「批 S 分歧审计修复轮」节；[README](../README.md) §十 为同一读数）。
+★ **现行读数：`Rr4`（模块图无环）现读绿，环 = `[]`** —— `fdfc832` 把 `ROTATION_TTL_MS` / `ROTATION_RATE_LIMIT_MS` / `ROTATION_TOKEN_LABEL` / `pairKey` / `fmtWindowRest` 从 `lib/rotation.js` 下沉到 `lib/shared.js` 之后，`lib/shared.js` 已无任何 `from "./rotation.js"` 行，`lib/rotation.js` 只剩**单向** `import … from "./shared.js"`；`host` 在批 Q 时点为 **`1738 (failed: 0)`**，批 S 新增 15 条后为 **1753**，批 S 分歧修复轮再新增 5 条后为 **1758 (`failed: 0`)**，批 T 新增 13 条（`Tr1`–`Tr13`）后为 **1771 (`failed: 0`)**，批 U 新增 12 条后为 **1783 (`failed: 0`)**，批 V 新增 10 条（`V1`–`V10`）后为 **1793 (`failed: 0`)**，批 W 新增 4 条（`W1`–`W4`）后为 **1797 (`failed: 0`)**，批 X 新增 6 条（`X1`–`X6`）后为 **1803 (`failed: 0`)**，批 Y 新增 3 条（`X7`–`X9`）按源码计数为 **1806**（套件待跑）（两次实测均已落 [`docs/verification-log.md`](verification-log.md) 的「批 S（整队换届）红相与绿相」节与其后的「批 S 分歧审计修复轮」节；[README](../README.md) §十 为同一读数）。
 
 **as-of（批 R 收口时点，曾经为真，勿再当现状引用）**：当时 `lib/shared.js` 与 `lib/rotation.js` **互导**、静态导入图里有一个**真实的 2 环**（自 `R-5` 起就在），收口单写域不含 `lib/**` ⇒ 判据按设计原口径保持严格、当时为红；修法即上面的下沉，已由 `fdfc832` 完成。**在这一处修掉之前，本档不宣称「模块图无环」。**
 
