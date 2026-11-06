@@ -14336,12 +14336,29 @@ const aw5Roster = aw5Env.tool("team_link_roster");
 await aw5Store.update({ teams: [teamRow({ name: "aw5-before" })] });
 const aw5BeforeBytes = await readFile(aw5File, "utf8");
 const aw5WarnFloor = aw5Env.log.lines.warn.length;
+// ★ t-5（2026-11-06 测试债收口）：把「计数」钉在**每次 update 自己的窗口**里 —— 旧写法断言总数 6，
+//   而真机两次偶发 `seamCalls=9`（一段计时抖动，见 verification-log 批 V / 批 X 节）：多余的第三段
+//   尝试（后台写）会把总数抬到 9 ⇒ 判据红，但它与「重试上限 3」这条不变式无关。
+//   现在：窗口内计数（`aw5Windows`）**逐窗口断言恰 3**（＝每次 update 最多 3 次尝试、含首次），
+//   窗口外的调用只进 DIAG（`outside`），不参与判定 —— 不变式因此被显式钉住且不再被计时抖动误伤。
 let aw5SeamCalls = 0;
-const aw5SeamInstalled = awSetSeam(async () => { aw5SeamCalls += 1; throw awInjectedError("EBUSY", "批 L Aw5 注入的恒失败"); });
+let aw5OutsideCalls = 0;
+let aw5Counting = false;
+const aw5Windows = [];
+const aw5SeamInstalled = awSetSeam(async () => {
+	if (aw5Counting) aw5SeamCalls += 1; else aw5OutsideCalls += 1;
+	throw awInjectedError("EBUSY", "批 L Aw5 注入的恒失败");
+});
+const aw5Window = async (write) => {
+	aw5Counting = true;
+	const before = aw5SeamCalls;
+	try { await write(); } finally { aw5Counting = false; }
+	aw5Windows.push(aw5SeamCalls - before);
+};
 try {
 	// 两次写**同属一段失败**（中间没有成功）⇒ 两道门各自只准放一行出来。
-	await aw5Store.update({ teams: [teamRow({ name: "aw5-after" })] });
-	await aw5Store.update({ teams: [teamRow({ name: "aw5-after-2" })] });
+	await aw5Window(() => aw5Store.update({ teams: [teamRow({ name: "aw5-after" })] }));
+	await aw5Window(() => aw5Store.update({ teams: [teamRow({ name: "aw5-after-2" })] }));
 } finally { awSetSeam(null); }
 const aw5AfterBytes = await readFile(aw5File, "utf8");
 const aw5ReadLines = (await aw5Roster.execute({ action: "get" }, execFor(aw5Env.senderAgent))).split("\n");
@@ -14349,15 +14366,15 @@ const aw5SegmentWarns = aw5Env.log.lines.warn.slice(aw5WarnFloor);
 const aw5RetryWarns = aw5SegmentWarns.filter((line) => line.includes("原子改名失败"));
 const aw5DowngradeWarns = aw5SegmentWarns.filter((line) => line.includes("policy file write failed"));
 const aw5Leftovers = readdirSync(aw5Dir).filter((name) => name.includes(".tmp"));
-console.log(`[AW5-DIAG] ${JSON.stringify({ seamCalls: aw5SeamCalls, retryWarns: aw5RetryWarns.length, downgradeWarns: aw5DowngradeWarns.length, leftovers: aw5Leftovers, placement: at(aw5ReadLines, 0, ""), seamRestored: awSeamIsDefault() })}`);
-check("批 L · Aw5 重试耗尽后的失败方向（红相①＝去掉临时文件清理 ⇒ ③ 红；红相②＝把错误吞成 `undefined` / 换成新错误 ⇒ ④ 红（留痕里读不到注入的那个 errno 与原句）；红相③＝同一段里重复告警 ⇒ ⑤ 红）: 注入「改名恒抛 `EBUSY`」并**连写两次**（同一失败段，各 3 次尝试 ⇒ 接缝恰被调用 **6** 次）⇒ ① 状态**没有被假装写成功**：落点行降级为 `⚠ … 文件不可写`（＝ `persistPolicyFile` 回 `false` 的可核后果之一，返回值本身不在对外面上），内存态照常可读（该队仍在名册里）② 磁盘上那份文件**逐字节未动**（rename 从未成功 ⇒ 目标从未被碰）③ 目录里**零** `.tmp-*` 残留（best-effort 清理生效）④ 留痕里读得到**原始** errno 与**注入时的原句**（`EBUSY` + 那句 message ⇒ 错误对象是原样传下来的，没有被吞掉或替换）⑤ 两行**各受自己的门**：重试那一行恰 1（两次写同段）、落点降级那一行恰 1；重试行**三要素齐**（路径 + errno + 写入者函数名）；另自证接缝**已还原**（否则后面的判据会在一个坏掉的接缝上跑出假绿）",
+console.log(`[AW5-DIAG] ${JSON.stringify({ seamCalls: aw5SeamCalls, windows: aw5Windows, outside: aw5OutsideCalls, retryWarns: aw5RetryWarns.length, downgradeWarns: aw5DowngradeWarns.length, leftovers: aw5Leftovers, placement: at(aw5ReadLines, 0, ""), seamRestored: awSeamIsDefault() })}`);
+check("批 L · Aw5 重试耗尽后的失败方向（红相①＝去掉临时文件清理 ⇒ ③ 红；红相②＝把错误吞成 `undefined` / 换成新错误 ⇒ ④ 红（留痕里读不到注入的那个 errno 与原句）；红相③＝同一段里重复告警 ⇒ ⑤ 红）: 注入「改名恒抛 `EBUSY`」并**连写两次**（同一失败段；★ t-5：判据钉在**每次 update 自己的窗口**里恰 3 次尝试，窗口外的后台写只进 DIAG、不参与判定）⇒ ① 状态**没有被假装写成功**：落点行降级为 `⚠ … 文件不可写`（＝ `persistPolicyFile` 回 `false` 的可核后果之一，返回值本身不在对外面上），内存态照常可读（该队仍在名册里）② 磁盘上那份文件**逐字节未动**（rename 从未成功 ⇒ 目标从未被碰）③ 目录里**零** `.tmp-*` 残留（best-effort 清理生效）④ 留痕里读得到**原始** errno 与**注入时的原句**（`EBUSY` + 那句 message ⇒ 错误对象是原样传下来的，没有被吞掉或替换）⑤ 两行**各受自己的门**：重试那一行恰 1（两次写同段）、落点降级那一行恰 1；重试行**三要素齐**（路径 + errno + 写入者函数名）；另自证接缝**已还原**（否则后面的判据会在一个坏掉的接缝上跑出假绿）",
 	aw5SeamInstalled
 		&& at(aw5ReadLines, 0, "") === "⚠ 存储：仅进程内存（重启即失）—— 原因：文件不可写"
 		&& aw5ReadLines.some((line) => line.startsWith("- aw5-after-2 "))
 		&& sameJson((aw5Store.get().teams ?? []).map((team) => team.name), ["aw5-after-2"])
 		&& aw5AfterBytes === aw5BeforeBytes
 		&& aw5Leftovers.length === 0
-		&& aw5SeamCalls === 6
+		&& aw5Windows.length === 2 && aw5Windows[0] === 3 && aw5Windows[1] === 3
 		&& aw5RetryWarns.length === 1 && aw5DowngradeWarns.length === 1
 		&& at(aw5RetryWarns, 0, "").includes(aw5File) && at(aw5RetryWarns, 0, "").includes("EBUSY") && at(aw5RetryWarns, 0, "").includes("writePolicyFileAtomic")
 		&& at(aw5RetryWarns, 0, "").includes("批 L Aw5 注入的恒失败")
@@ -15586,6 +15603,38 @@ check("批 Q · Qr11 ★ 那一份不存在 ⇒ 具名拒绝、绝不回退（�
 		&& JSON.stringify(qr11After.rotationBackups) === JSON.stringify([qr11Other])
 		&& qr11bOut.includes("换届完成（claim）") && qr11bOut.includes("本次换届的快照不在集合里"));
 
+// --- Qr12–Qr14（t-11 测试债，2026-11-06 补）：升级窗口的三格覆盖 ----------------
+// 债单：批 Q 交付时的测试债 —— ① claim 时旧槽**仍在**（不经第二次 prepare 实体化）的独立夹具；
+// ② 旧槽缺 `at` ⇒ `legacy:at-unknown`；③ roster get 详情对旧槽折叠**可见**（读面）。
+// ★ 本组均为**覆盖缺口**（实现本轮零改动，Qr10 已覆盖「经第二次 prepare 实体化」的路径）。
+
+// Qr12（债①）：旧槽仍在、恰一个升级前 pending、**不做第二次 prepare** ⇒ 直接 claim。
+const qr12Slot = qSlot({ pairs: [{ a: ROT_SELF, b: "session-worker-b", createdAt: 7, provisional: false, expiresAt: 0 }], trustedSenders: ["ts-qr12"], rememberTargets: ["rt-qr12"], roster: { name: "q-team", roles: [{ role: "coordinator", current: "legacy-qr12", pending: null }, { role: "worker-a", current: "session-worker-a", pending: null }] } });
+const qr12Pending = { session: SUCCESSOR, token: "qr12-token", team: "q-team", role: "coordinator", expiresAt: Date.now() + 600000, createdAt: Date.now(), migratedPairs: [] };
+const qr12Env = rotateEnv({ askScript: [], pairs: [], extraAgents: qAgents, teams: [qRow([qRole("coordinator", ROT_SELF, qr12Pending), qRole("worker-a", "session-worker-a")], { rotationBackup: qr12Slot })] });
+const qr12Out = String(await qr12Env.rotate.execute({ action: "claim", team: "q-team", role: "coordinator", token: "qr12-token" }, qr12Env.exec(SUCCESSOR)));
+const qr12After = qr12Env.team();
+const qr12Ok = qr12Out.includes("rid=legacy:coordinator") && qr12Out.includes("旧任 legacy-qr12 → 新任 " + SUCCESSOR) && qr12Out.includes("pairs 1 条") && qr12Out.includes("trustedSenders 1 项") && qr12After.rotationBackup === null && qEntryOf(qr12After, "legacy:coordinator") === null && qEntriesOf(qr12After).length === 0;
+check("批 Q · Qr12（t-11 债①，覆盖缺口）: 旧槽**仍在**且**不经第二次 prepare 实体化** ⇒ claim 仍按 `legacy:<角色>` 取到那一份折叠快照（回执点名 rid、快照读数来自折叠值），收尾后旧槽 null、该条消失"
+	+ (qr12Ok ? "" : "（实测：" + show(qr12Out.slice(0, 240)) + "）"),
+	qr12Ok);
+
+// Qr13（债②）：旧槽缺 `at` ⇒ 确定性键 `legacy:at-unknown`（真机 2026-10-13 审计修复的同一口径）。
+const qr13NoAt = qRotation.rotationEntriesOf({ name: "q-team", roles: [], rotationBackup: { pairs: [], trustedSenders: [] } });
+const qr13BadAt = qRotation.rotationEntriesOf({ name: "q-team", roles: [], rotationBackup: { at: 1e20, pairs: [] } });
+const qr13Ok = qr13NoAt.length === 1 && qr13NoAt[0].rid === "legacy:at-unknown" && qr13NoAt[0].at === 0 && qr13BadAt.length === 1 && qr13BadAt[0].rid === "legacy:at-unknown";
+check("批 Q · Qr13（t-11 债②，覆盖缺口）: 旧槽缺 `at` ⇒ 折叠条目 rid 是确定性键 `legacy:at-unknown`（不抛错、不编造时间）；`at` 有限但越界（1e20）同样落到该键（`toISOString` 的 RangeError 不得外泄）"
+	+ (qr13Ok ? "" : "（实测：" + show(qr13NoAt.map((entry) => entry.rid)) + " / " + show(qr13BadAt.map((entry) => entry.rid)) + "）"),
+	qr13Ok);
+
+// Qr14（债③）：roster get 的详情读面对旧槽折叠**可见**（不是只有 claim 回执看得见）。
+const qr14Env = rotateEnv({ askScript: [], pairs: [], extraAgents: qAgents, teams: [qRow([qRole("coordinator", ROT_SELF, null), qRole("worker-a", "session-worker-a")], { rotationBackup: qr12Slot })] });
+const qr14Out = String(await qr14Env.tool("team_link_roster").execute({ action: "get", team: "q-team" }, qr14Env.exec(ROT_SELF)));
+const qr14Ok = qr14Out.includes("换届撤销快照（留存/撤销依据 1 条") && /rid legacy:/.test(qr14Out);
+check("批 Q · Qr14（t-11 债③，覆盖缺口）: `team_link_roster action=get` 的详情列出旧槽折叠条目（`换届撤销快照…1 条` + 该条以 `legacy:` 为键可见 —— 0 个 pending 时键是 `legacy:<at ISO>`，1 个 pending 时是 `legacy:<角色>`）—— 读面而不是只有回执"
+	+ (qr14Ok ? "" : "（实测：" + show(qr14Out.slice(0, 240)) + "）"),
+	qr14Ok);
+
 // ===========================================================================
 // 批 S · 整队换届（批量准备 ＋ 各自认领）—— Sr1–Sr20
 // ===========================================================================
@@ -15963,6 +16012,21 @@ check("批 S · Sr18 执行期失败回执点名**失败角色自己**的已建�
 		&& sr18Pend.length === 0 && (sr18Team.rotationBackups ?? []).length === 0 && sr18TeamsPatches === 0
 		&& (sr18Env.ns.data.pendingCreates ?? []).length === 2);
 
+// --- Sr21（t-13 / 批 S 交付评审 🔵#4，2026-11-06）：successors 里的 vacant 角色键具名拒绝 ---
+// 旧实现：vacant 角色不在 `ordered`（只有 seated 角色）里 ⇒ 调用方给的 `worker-vacant=<id>` 被**静默忽略**，
+// 调用方以为「整队」都换过了。现在与「未知角色键」同口径 —— 预检 failures 一条，整批拒绝、零副作用。
+const sr21Env = await sNewEnv({ askScript: [S_CONFIRM], extraAgents: sAgents, teams: [sRow([...sRoles(), sRole("worker-vacant", null)])] });
+const sr21Up = sr21Env.ns.updates.length;
+const sr21Out = String(await sr21Env.rotate.execute({ action: "prepare-batch", team: S_TEAM, successors: `${sMap()}, worker-vacant=${S_NEXT2}` }, execFor(sr21Env.senderAgent)));
+const sr21Team = sr21Env.team();
+const sr21Pend = sr21Team.roles.filter((entry) => entry.pending !== null && entry.pending !== undefined);
+const sr21TeamsPatches = sr21Env.ns.updates.slice(sr21Up).filter((patch) => patch.teams !== undefined).length;
+const sr21Created = (sr21Env.created ?? []).length;
+const sr21Ok = sr21Out.includes("整队换届被拒绝（预检 all-or-nothing") && sr21Out.includes("worker-vacant") && sr21Out.includes("当前空缺（current=null）") && sr21Out.includes("你给的继任者被忽略") && sr21Pend.length === 0 && (sr21Team.rotationBackups ?? []).length === 0 && sr21TeamsPatches === 0 && sr21Created === 0;
+check("批 S · Sr21（t-13 / 交付评审 🔵#4，覆盖缺口）: `successors` 里的 **vacant 角色键**具名拒绝（点名该角色 + 明说「你给的继任者被忽略」），预检 all-or-nothing ⇒ 零令牌、零撤销依据、零建会话、零笔写 teams —— 旧实现静默忽略该键（本条会红）"
+	+ (sr21Ok ? "" : "（实测：" + show(String(sr21Out).slice(0, 300)) + " / pend=" + sr21Pend.length + " / created=" + sr21Created + "）"),
+	sr21Ok);
+
 // ===========================================================================
 // 批 T（黑板归档 / 回收）—— Tr1…Tr13（需求档 §四；设计档 §8 防偏离）
 // ===========================================================================
@@ -16105,7 +16169,7 @@ const t7Family = assertionRecords.filter((record) => !record.label.startsWith("�
 const t7Red = t7Family.filter((record) => !record.ok).map((record) => record.label);
 check("批 T · Tr7 既有 append / read / set-mode / block 判据族**全绿**（红相＝顺手改既有读写语义 ⇒ 本条红；**回归锁：修复前绿**，如实标注负相）: 批 T 块之前的 " + t7Family.length + " 条既有判据现读**全部绿**（红项 " + show(t7Red) + "）—— 归档是**新动词**，team_link_team_append / team_link_team_read / set-mode / block 的既有行为与判据族一条都没动；读数同时给出「本批之前的总数仍 = 1758」这一半"
 	+ (t7Red.length === 0 ? "" : "（实测：红项 " + show(t7Red) + "）"),
-	t7Family.length === 1758 && t7Red.length === 0);
+	t7Family.length === 1762 && t7Red.length === 0);
 
 // --- Tr8：边界（空档 / 单行 / 恰好 500）＋ 无确认服务即零写入 ＋ keepTail 参数校验 -----
 const t8 = tNewEnv("t8-ws", []);
@@ -16483,12 +16547,12 @@ async function xRotateWorker(env) {
 const xPairsOf = (env) => (env.ns.data.pairs ?? []).map((pair) => [pair.a, pair.b].sort().join("+")).sort();
 const xPairRows = (env) => (env.ns.data.pairs ?? []);
 
-// --- X5（先跑：它读的是**本块之前**那 1797 条的全绿与总数） ----------------------
+// --- X5（先跑：它读的是**本块之前**那 1801 条的全绿与总数） ----------------------
 // 为什么放在本块最前：`assertions` 在 `check()` 的实参求值那一刻仍是「本块之前」的累计数，
-// 于是「既有 1797 条全绿、一条不差」这句话可以被机器核对（而不是靠记性）。
-check("批 X · X5 既有判据全绿（as-of 批 W cc166e7；红相＝任何既有判据红、或既有条数漂移 ⇒ 本条红）: 本块之前的既有断言总数恰为 1797，且此刻 0 条失败（既有判据的文本/期望值本批一字未改）"
-	+ (failures === 0 && assertions === 1797 ? "" : "（实测：assertions=" + assertions + " failed=" + failures + "）"),
-	failures === 0 && assertions === 1797);
+// 于是「既有 1801 条全绿、一条不差」这句话可以被机器核对（而不是靠记性）。
+check("批 X · X5 既有判据全绿（as-of 批 W cc166e7；红相＝任何既有判据红、或既有条数漂移 ⇒ 本条红）: 本块之前的既有断言总数恰为 1801，且此刻 0 条失败（既有判据的文本/期望值本批一字未改）"
+	+ (failures === 0 && assertions === 1801 ? "" : "（实测：assertions=" + assertions + " failed=" + failures + "）"),
+	failures === 0 && assertions === 1801);
 
 // --- X1：两个 claim 交错（A 的框开着时执行 B 的完整 claim，再回答 A） --------------
 let x1B = null;
@@ -16626,14 +16690,14 @@ const yRoleRow = (role, current, historySessions) => ({
 // --- X7：同一旧会话出现在两个角色的版本史 ⇒ 归属有歧义，跳过（不猜） ------------------
 const y7Team = { name: "y-team", roles: [yRoleRow("r1", "s-new-1", ["s-old"]), yRoleRow("r2", "s-new-2", ["s-old", "s-other"])] };
 const y7 = qRotation.mapRotationSelection({ selectedOthers: ["s-old"], candidates: [], team: y7Team });
-check("批 Y · X7 歧义跳过（红相＝去歧义分支没有判据（批 X 交付评审 Deferred）⇒ 本条红）: 同一旧会话出现在两个角色的版本史里 ⇒ 不建通道、回执写明「归属有歧义」",
+check("批 Y · X7 歧义跳过（红相＝去歧义分支没有判据（批 X 交付评审 Deferred）⇒ 本条红）: 同一旧会话出现在两个角色的版本史里 ⇒ 不建通道、回执写明「归属有歧义」"
 	+ (y7.chosen.length === 0 && y7.skipped.length === 1 && y7.skipped[0].reason.includes("归属有歧义") ? "" : "（实测：chosen=" + show(y7.chosen) + " skipped=" + show(y7.skipped) + "）"),
 	y7.chosen.length === 0 && y7.skipped.length === 1 && y7.skipped[0].reason.includes("归属有歧义"));
 
 // --- X8：映射目标不在复读后的候选里 ⇒ 跳过并写明原因 --------------------------------
 const y8Team = { name: "y-team", roles: [yRoleRow("r1", "s-new", ["s-old"])] };
 const y8 = qRotation.mapRotationSelection({ selectedOthers: ["s-old"], candidates: [], team: y8Team });
-check("批 Y · X8 映射目标缺失（红相＝该分支无判据 ⇒ 本条红）: 对端已换届但复读后的候选里没有与它相关的通道 ⇒ 不建通道、回执写明「没有与它相关的待迁移通道」",
+check("批 Y · X8 映射目标缺失（红相＝该分支无判据 ⇒ 本条红）: 对端已换届但复读后的候选里没有与它相关的通道 ⇒ 不建通道、回执写明「没有与它相关的待迁移通道」"
 	+ (y8.chosen.length === 0 && y8.skipped.length === 1 && y8.skipped[0].reason.includes("没有与它相关的待迁移通道") ? "" : "（实测：chosen=" + show(y8.chosen) + " skipped=" + show(y8.skipped) + "）"),
 	y8.chosen.length === 0 && y8.skipped.length === 1 && y8.skipped[0].reason.includes("没有与它相关的待迁移通道"));
 
@@ -16641,7 +16705,7 @@ check("批 Y · X8 映射目标缺失（红相＝该分支无判据 ⇒ 本条�
 const y9Team = { name: "y-team", roles: [yRoleRow("r1", "s-new", ["s-old"])] };
 const y9Candidates = [{ other: "s-new", pair: { a: "s-self", b: "s-new" } }];
 const y9 = qRotation.mapRotationSelection({ selectedOthers: ["s-new", "s-old"], candidates: y9Candidates, team: y9Team });
-check("批 Y · X9 去重回执（红相＝撞车时静默 continue（批 X 现状）⇒ skipped 里看不到这条 ⇒ 本条红）: 同时勾旧会话与新现任 ⇒ 只建一条通道（chosen 长度 1），且回执含「去重」",
+check("批 Y · X9 去重回执（红相＝撞车时静默 continue（批 X 现状）⇒ skipped 里看不到这条 ⇒ 本条红）: 同时勾旧会话与新现任 ⇒ 只建一条通道（chosen 长度 1），且回执含「去重」"
 	+ (y9.chosen.length === 1 && y9.chosen[0].other === "s-new" && y9.skipped.some((item) => item.reason.includes("去重")) ? "" : "（实测：chosen=" + show(y9.chosen) + " skipped=" + show(y9.skipped) + "）"),
 	y9.chosen.length === 1 && y9.chosen[0].other === "s-new" && y9.skipped.some((item) => item.reason.includes("去重")));
 
@@ -16656,7 +16720,7 @@ const zTeam = {
 	rotationBackups: [{ rid: "rid-live", at: 1, backup: { pairs: [] } }, { rid: "rid-done", at: 2, backup: { pairs: [] } }],
 };
 const zClass = qRotation.classifyRotationBackups(zTeam);
-check("批 Z · Z1 撤销依据的在飞/留存区分（红相＝把两档混在一起（批 Q 现状）⇒ 本条红）: 有 pending 指向的条目进「在飞」、其余进「留存」；两档都保留、顺序不变（不丢快照）",
+check("批 Z · Z1 撤销依据的在飞/留存区分（红相＝把两档混在一起（批 Q 现状）⇒ 本条红）: 有 pending 指向的条目进「在飞」、其余进「留存」；两档都保留、顺序不变（不丢快照）"
 	+ (zClass.inFlight.length === 1 && zClass.inFlight[0].rid === "rid-live" && zClass.retained.length === 1 && zClass.retained[0].rid === "rid-done" ? "" : "（实测：" + show(zClass) + "）"),
 	zClass.inFlight.length === 1 && zClass.inFlight[0].rid === "rid-live" && zClass.retained.length === 1 && zClass.retained[0].rid === "rid-done");
 

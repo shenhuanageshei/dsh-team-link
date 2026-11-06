@@ -5357,3 +5357,37 @@ assertion total: 1803 (failed: 0)
 
 **仍未实测**：套件全量（t-19）—— 源码推算 1810 + 310；最近一次全量实测为 2026-11-04 的 1803/0。
 
+## 2026-11-06 · 商城复检读数（t-10）
+
+`gh issue view 1380 --repo AI-Scarlett/DSH-Store --json state,labels,updatedAt,comments`（2026-11-06 22:5x）：
+
+- `state: OPEN` · `labels: author-action-required, catalog-blocked` · `updatedAt: 2026-10-11T04:42:22Z` · **`comments: []`（零评论）**。
+- issue 正文（自动生成）明确：「修改并推送到默认分支即可；DSH STORE 每八小时自动复检，**无需人工回复**」；「同一位作者跨所有项目只主动联系一次」。
+- 当时的发现（基线 **0.5.2**）：Node.js 兼容范围未显式声明 · 运行文件超自动审查字节上限（largest file **893,284 B** > 262,144）· `files` 未含运行文件 · 固定源码扫描不完整。
+
+**对照今日已推送的 0.6.0**：`engines.node = ">=22"`（批 R）· 领域拆分后最大文件 **262,118 B**（`lib/index.js`，≤ 262,144；批 R 起）· `files` 已含 `lib` / `cordis.patch.yml` / `LICENSE` / `README.md` / `CHANGELOG.md` / `docs` · 契约检查面见 `docs/2026-10-15-store-compliance.md`。⇒ 下一次 8 小时自动复检应读取 0.6.0 的固定 commit；**按 issue 明文不主动回帖**，等商城侧结果。
+
+## 2026-11-06 · 批 AC：测试债收口（t-5 / t-11 / t-13）＋ 批 AA 纠正 ＋ t-19 全量绿
+
+**授权**：用户 2026-11-06 明确「t-19 跑、t-5 / t-11 / t-13 做」（一次性放开禁跑全量）。
+
+**最终读数（实测，只读日志尾两行）**：
+
+- `node host-half.test.mjs` ⇒ `ALL PASS / assertion total: 1814 (failed: 0)`，`EXIT:0`（`t19-host8.log`）。
+- `node client-half.test.mjs` ⇒ `ALL PASS / assertion total: 310 (failed: 0)`，`EXIT:0`（`t19-client.log`）。
+
+**迭代过程（如实；红 6 次 → 绿）**：
+
+1. `t19-host.log`：`EXIT:1` 且在 16324 行崩（`Cannot read properties of undefined (reading 'intervalMinutes')`）—— 批 AA 的**过期行清扫口径过宽**（团队不在 `teams` 夹具里 / watcher 非现任就删）把夹具行删了。
+2. `t19-host2.log`：`1814 (failed: 38)`，`[M4DIAG] 换届操作失败：cleanedPairs is not defined` —— `cleanedPairs` 声明在 claim 的 `withPolicyLock` 闭包内、回执在闭包外读取（与批 AB 同一类作用域错误）。
+3. `t19-host3.log`：`(failed: 14)`，M4 恢复；余下 `批 J · U1/U3`（ensure 实时改写 targets 覆盖夹具自定义 targets）＋ 8 条我新写判据的**调用形状错**（`check(label, 后缀, cond)` 三参 ⇒ cond 变成字符串）。
+4. `t19-host4.log`：同 11 红（清扫收窄后 U1/U3 仍红：确认是 ensure 改写 targets 所致；另 8 条三参判据待改）。
+5. `t19-host5.log`：`(failed: 11)` —— 移除 ensure 实时改写后 U1/U3 转绿；8 条三参判据的逗号仍没删对（正则漏了逗号）。
+6. `t19-host6.log`：`(failed: 4)` —— 三参改为两参后 Y/Z/Qr12/Qr13/Sr21 全绿；余 Qr14 期望写错（0 个 pending 时 rid 是 `legacy:<at ISO>` 而非 `legacy:<角色>`）＋ 三条级联。
+7. `t19-host7.log`：`(failed: 2)` —— Qr14 改对后，仅剩 `批 T · Tr7` 的条数锁（1758 → 新增 4 条判据后应为 1762）与 `X5` 级联。
+8. `t19-host8.log` / `t19-client.log`：**双套件全绿**（1814/0、310/0，两个 EXIT:0）。
+
+**改了什么（与 CHANGELOG 批 AC 同口径）**：t-5 Aw5 计数钉到每次 update 的窗口；t-11 补 Qr12–Qr14；t-13补 vacant 角色键具名拒绝 + Sr21；批 AA 的 ensure 实时改写**移除**、过期清扫**收窄**（保留 claim 落定时的整队 targets 重算）；X5 条数锁 1797→1801、Tr7 条数锁 1758→1762（新增判据所致，属判据链的结构性更新，不是放过）。
+
+**边界**：批 AA 的「ensure 实时校正」被移除后，同类陈旧 targets 只能由下一次换届落定或续期窗口纠正（无独立工具入口）——已写进设计档与 CHANGELOG 的残余声明。
+

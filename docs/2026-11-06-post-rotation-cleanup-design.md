@@ -34,7 +34,8 @@
 ## 五、方案（FR）
 
 - **FR-AA1**：`transferAutoWatchdogs` 扩展为「退役者行移交 + 同队现任观察者行 targets 重算」（租约只对移交行顺延）。
-- **FR-AA2**：`ensureTeamAutoWatchdogs` 入口清扫「过期 ∧ 观察者已非现任 / 团队已删」的 auto 行，写一条 `swept` 报告。
+- **FR-AA2（★ 2026-11-06 批 AC 修正）**：`ensureTeamAutoWatchdogs` 入口**清扫**「过期 ∧ 团队在册 ∧ watcher 是该团队**历史成员**（已退役、又不在任何角色现任）」的 auto 行，写一条 `swept` 报告。**不做 targets 实时改写**：该改写（初版）会按名册覆盖掉自定义 targets（判据 `批 J · U1/U3` 当场红）。
+- **FR-AA2b（批 AC 补写，如实标注）**：初版的「团队缺失 / watcher 非现任即删」口径过宽，会把夹具（以及来历不明的行）一起删掉；已收窄为上面的「历史成员」口径。当前陈旧 targets 由**换届落定时**的 `transferAutoWatchdogs`（整队重算）或续期窗口纠正，**没有**独立的立即纠正入口。
 - **FR-AA3**：`lib/messaging.js` 配对分支加名册守卫（`retiredMemberOf`），拒绝时在投递结果前加一行「未配对：…已从团队 X 的角色 Y 退役」。
 - **FR-AA4**：`lib/rotation.js` 新增 `retiredMemberOf` / `cleanRetiredPairs`；claim 落定写盘时用 `cleanRetiredPairs` 清算存量，回执加「配对清理（批 AA）：N 条」。
 - **FR-AA5**：claim 的确认框把「本轮也在换届的对端」标注到 description。
