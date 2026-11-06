@@ -4,6 +4,21 @@
 
 格式：每个版本按 **修了什么 → 为什么 → 怎么验证** 组织。凡涉及行为修复的条目都附**变异验证**证据（修复前必红 / 修复后全绿），这是本仓库的验收文化。
 
+## 未发布 — 批 AB：已配对通道投递回执的 ReferenceError（2026-11-06 下游实测事故）
+
+**一句话**：`team_link_send` 往**已配对/已信任**的目标投递时，消息其实已发出，工具却回「❌ 未投递」（`pairingRefusal is not defined`）—— 修法是把变量声明从门 2 的 if 块内上移到函数作用域，1 行。
+
+**根因（下游报告已定位到行，父侧复现确认）**：批 AA 加 `pairingRefusal` 时把 `let` 写在 `if (!paired && !trustedSenders...)` 块内（`lib/messaging.js`），而回执文案在块外读取。已配对时整个块被跳过 ⇒ 变量未声明 ⇒ 在消息**已投出**（`target.steer/followup` 之后）抛 `ReferenceError`，工具把异常包装成「投递到该目标时异常」⇒ 调用方误判失败并重发（真机已发生重复投递）。
+
+**影响面**：所有已配对/受信任通道（该插件多团队共用）。未配对、被拒、ask 路径不受影响（反直觉：坏在健康路径）。
+
+**验证（先红后绿）**：定向脚本 `.investigations/rotation-hallucination-2026-11-04/ab-pairing-receipt.mjs` —— 红：`FAIL 配对通道发送抛错：ReferenceError: pairingRefusal is not defined / 消息是否已投出：已投出（回执撒谎）`；绿：`PASS outcome=delivered delivered=true 已投递到 t（已配对通道，免确认自动投递）…`。套件侧既有判据 `M4: a delivery over the migrated channel is a plain paired delivery`（`host-half.test.mjs:4054` 区域）即覆盖此路径，待放开全量后复核。
+
+### 残余声明（如实）
+
+- 本条是批 AA 引入的**回归**；AA 交付时只跑了看门狗/配对纯函数定向脚本，**没覆盖发送回执路径** ⇒ 已补进定向脚本（本批）。
+- 修复需重启 DSH 才在真机生效。
+
 ## 未发布 — 批 AA：换届后的看门狗/配对清算（2026-11-06 真机）
 
 **一句话**：换届落定后，同队**所有**自动工作台看门狗的盯人名单按新名册重算；与「已退役成员」的新配对被拒、存量配对在下次换届时清算；过期的看门狗行也会被扫掉。

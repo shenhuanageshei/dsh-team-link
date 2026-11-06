@@ -5322,3 +5322,19 @@ assertion total: 1803 (failed: 0)
 
 **验证（用户禁跑全量）**：定向脚本 `.investigations/rotation-hallucination-2026-11-04/aa-check.mjs` ⇒ `ALL PASS`（AA1 退役判定 / AA2 配对清理 / AA3 看门狗重算）；`node --check` 三个改动档通过；入口 `lib/index.js` 未动（262,118）。套件新增 `批 AA · AA1–AA3`（总数 **1810 = 1807 + 3**，源码推算），**尚未执行** —— 待用户放开禁跑全量后补跑。
 
+## 2026-11-06 · 批 AB：已配对通道投递回执的 ReferenceError（下游实测事故，批 AA 回归）
+
+**下游报告（cli-1028 现任协调者，含完整复现/影响/验证要求）**：`team_link_send` 向已配对成员投递返回「❌ 未投递」，但目标实际收到并执行（worker-2 收到两条几乎相同的探测消息、回了两遍）。报告已定位到行：`lib/messaging.js` 的 `let pairingRefusal = ""` 声明在门 2 的 `if` 块内、回执在块外读取；已配对时块被跳过 ⇒ 投出后抛 `ReferenceError`。
+
+**父侧复现（红）**：定向脚本 `.investigations/rotation-hallucination-2026-11-04/ab-pairing-receipt.mjs`（桩：paired 通道 + idle 目标）⇒ `FAIL 配对通道发送抛错：ReferenceError: pairingRefusal is not defined`，且 `消息是否已投出：已投出（回执撒谎）`。
+
+**修法（1 行）**：声明上移到 `deliverToTarget` 函数作用域（门 2 之前），赋值点留在块内不动。
+
+**修复后（绿）**：同脚本 ⇒ `PASS outcome=delivered delivered=true 已投递到 t（已配对通道，免确认自动投递）：目标空闲，已唤醒目标会话并作为新回合处理…`。
+
+**不得回归的语义**：未配对 + `receiveMode=ask` + 用户选「配对」而对方已退役时，投递结果仍须带「未配对：…已从团队…的角色…退役——不再自动建立免确认通道（本次投递照常）。」前缀（该赋值分支未改动，由 `host-half.test.mjs` 既有判据覆盖）。
+
+**过程教训**：批 AA 的定向脚本只覆盖纯函数（看门狗/配对表），没覆盖**发送回执**路径；套件里其实已有 `M4: a delivery over the migrated channel is a plain paired delivery` 判据能抓住它，但按禁令未跑全量 ⇒ 回归漏到下游。已把发送回执补进定向脚本。
+
+**另**：同日 14:30–14:42 多个 `deepseek-official` 路由会话报 `TRANSPORT`（含一次 `pi-ai stream idle timeout 300000ms`），跨会话同窗口出现，与投递内容无关（目标会话内容检查：无孤立代理项、无框定 token、最大文本 2191 字符）⇒ 判为供应商/网络侧，非本插件。
+
