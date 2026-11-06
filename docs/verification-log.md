@@ -5314,3 +5314,11 @@ assertion total: 1803 (failed: 0)
 - **静态**：`node --check lib/rotation.js` / `lib/registration.js` / `host-half.test.mjs` 通过；入口 `lib/index.js` 未动（262,118）。
 - **未做（如实）**：套件尚未执行 `批 Z · Z1`；红/绿待用户放开禁跑全量后补跑。
 
+## 2026-11-06 · 批 AA：换届后的看门狗/配对清算（真机 server-line-1021 复盘）
+
+**触发（用户）**：「我测试了 server-line-1021 这个团队的整体换届，好像还是配对乱，你看看」。父侧实查 policy.json 与两个继任者会话日志后确认：**最终配对是对的**（只剩 `worker-1-87f540b6 ↔ coordinator-5f7a1688`；worker 回执明确记录勾选的老协调者已按版本史映射到新协调者 —— 批 X 生效），但另有三个真问题：① 新协调者看门狗仍盯已退役的旧 worker（12:05:42 建、12:06:05 worker 才换，续期才重算 ≈10h）；② 全局 23 条配对指向退役会话、22 条是退役**之后**才配上的（配对路径不校验名册）；③ 2 条过期 auto 行无定时器、无人清扫。
+
+**裁定与做法**（用户选定四项全做）：① `transferAutoWatchdogs` 扩展为「退役者行移交 + 同队现任行 targets 重算」；② `ensureTeamAutoWatchdogs` 入口清扫「过期 ∧ 观察者已非现任/团队已删」的 auto 行；③ 配对分支加 `retiredMemberOf` 守卫（拒绝时结果行说明）+ claim 落定用 `cleanRetiredPairs` 清算本队退役成员名下存量配对（回执计数）；④ 确认框对端若也在本轮换届，描述标注「认领后映射到新会话」。
+
+**验证（用户禁跑全量）**：定向脚本 `.investigations/rotation-hallucination-2026-11-04/aa-check.mjs` ⇒ `ALL PASS`（AA1 退役判定 / AA2 配对清理 / AA3 看门狗重算）；`node --check` 三个改动档通过；入口 `lib/index.js` 未动（262,118）。套件新增 `批 AA · AA1–AA3`（总数 **1810 = 1807 + 3**，源码推算），**尚未执行** —— 待用户放开禁跑全量后补跑。
+

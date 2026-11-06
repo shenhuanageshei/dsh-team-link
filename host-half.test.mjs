@@ -16660,6 +16660,41 @@ check("批 Z · Z1 撤销依据的在飞/留存区分（红相＝把两档混在
 	+ (zClass.inFlight.length === 1 && zClass.inFlight[0].rid === "rid-live" && zClass.retained.length === 1 && zClass.retained[0].rid === "rid-done" ? "" : "（实测：" + show(zClass) + "）"),
 	zClass.inFlight.length === 1 && zClass.inFlight[0].rid === "rid-live" && zClass.retained.length === 1 && zClass.retained[0].rid === "rid-done");
 
+
+// ===========================================================================
+// 批 AA（2026-11-06 真机）· 换届后的看门狗/配对清算（AA1–AA4）
+// 归属：docs/2026-11-06-post-rotation-cleanup-design.md §八。
+// ===========================================================================
+const aaTeam = {
+	name: "aa-team",
+	roles: [
+		{ role: "coordinator", current: "s-c2", pending: null, history: [{ session: "s-c1", from: 1, until: 2 }, { session: "s-c2", from: 2, until: null }] },
+		{ role: "worker", current: "s-w2", pending: null, history: [{ session: "s-w1", from: 1, until: 3 }, { session: "s-w2", from: 3, until: null }] },
+	],
+};
+const aaDefaults = { originAuto: "auto", ttlMs: 1000 };
+// AA1：退役成员判定
+const aaRetired = qRotation.retiredMemberOf([aaTeam], "s-w1");
+check("批 AA · AA1 退役成员判定（红相＝新加函数缺失或恒 null ⇒ 本条红）: 历史成员（非现任）⇒ 命中团队与角色；现任 ⇒ null",
+	aaRetired !== null && aaRetired.team === "aa-team" && aaRetired.role === "worker" && qRotation.retiredMemberOf([aaTeam], "s-w2") === null);
+// AA2：清洗指向退役成员的配对
+const aaClean = qRotation.cleanRetiredPairs([{ a: "s-c2", b: "s-w1" }, { a: "s-c2", b: "s-w2" }, { a: "out", b: "s-c1" }], aaTeam, "s-c1");
+check("批 AA · AA2 退役成员配对清理（红相＝不清洗 ⇒ 旧会话的通道一直留着 ⇒ 本条红）: 指向 s-w1（worker 退役成员）的配对被移除；现任之间与退役者本人的配对不在本函数处理",
+	aaClean.removed.length === 1 && aaClean.removed[0].b === "s-w1" && aaClean.pairs.length === 2);
+// AA3：退役者那行移交 + 同队其它行重算 targets（真机「新协调者盯着退役 worker」）
+const aaView = { watchdogs: [
+	{ id: "wd-old", team: "aa-team", origin: "auto", watcherSession: "s-c1", targets: ["s-w1"], expiresAt: 10, createdAt: 1 },
+	{ id: "wd-cur", team: "aa-team", origin: "auto", watcherSession: "s-c2", targets: ["s-w1"], expiresAt: 5000, createdAt: 2 },
+	{ id: "wd-other", team: "other-team", origin: "auto", watcherSession: "x", targets: ["y"], expiresAt: 10, createdAt: 3 },
+] };
+const aaNext = qRotation.transferAutoWatchdogs(aaView, aaDefaults, { teamName: "aa-team", settledTeam: aaTeam, retiree: "s-c1", successor: "s-c2", now: 500 });
+const aaOld = aaNext.find((row) => row.id === "wd-old");
+const aaCur = aaNext.find((row) => row.id === "wd-cur");
+check("批 AA · AA3 换届后看门狗 targets 重算（红相＝只移交退役者那行、其它行 targets 留在旧 worker（真机现象）⇒ 本条红）: 退役者行移交到新协调者（targets 重算、租约顺延）；同队现任行 targets 也重算（s-w1 → s-w2）、到期不变；别的队的行不动",
+	aaOld !== undefined && aaOld.watcherSession === "s-c2" && JSON.stringify(aaOld.targets) === JSON.stringify(["s-w2"]) && aaOld.expiresAt === 1500
+		&& aaCur !== undefined && JSON.stringify(aaCur.targets) === JSON.stringify(["s-w2"]) && aaCur.expiresAt === 5000
+		&& aaNext.find((row) => row.id === "wd-other").targets[0] === "y");
+
 rmTestRoot();
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
